@@ -132,6 +132,8 @@ _TRUSTEE_IS_SID = 0
 _GRANT_ACCESS, _REVOKE_ACCESS = 1, 4
 _CONTAINER_INHERIT_ACE, _OBJECT_INHERIT_ACE = 0x2, 0x1
 _FILE_GENERIC_MODIFY = 0x1301BF  # icacls "M": read, write, execute, delete
+_FILE_GENERIC_READ_EXECUTE = 0x1200A9  # icacls "RX"
+_LOGON_WITH_PROFILE = 0x1
 _INFINITE = 0xFFFFFFFF
 _WAIT_OBJECT_0 = 0
 
@@ -390,9 +392,56 @@ def spawn(
     return Process(info, job)
 
 
-def _explicit(sid: _Sid, mode: int) -> "EXPLICIT_ACCESS_W":
+def spawn_as_account(
+    argv: Sequence[str],
+    *,
+    account: str,
+    password: str,
+    desktop: Desktop,
+    cwd: str,
+    stderr_path: Optional[str] = None,
+) -> Process:
+    """Start `argv` logged on as another local account (CreateProcessWithLogonW, which is
+    the secondary logon service: no privilege needed), on our desktop, in a job that ends
+    with the Process. The environment is the account's own; a provider passes what it
+    needs through the daemon's `--env`. stdin is closed; stdout and stderr go to
+    `stderr_path` when given."""
+    import subprocess
+
+    _adv.CreateProcessWithLogonW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPWSTR,
+        wintypes.DWORD, ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(STARTUPINFOW), ctypes.POINTER(PROCESS_INFORMATION),
+    ]  # fmt: skip
+    job = _k32.CreateJobObjectW(None, None)
+    if not job:
+        raise _fail("CreateJobObject")
+    limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not _k32.SetInformationJobObject(job, _JobObjectExtendedLimitInformation, ctypes.byref(limits), ctypes.sizeof(limits)):
+        raise _fail("SetInformationJobObject")
+    startup = STARTUPINFOW()
+    startup.cb = ctypes.sizeof(startup)
+    startup.lpDesktop = desktop.name
+    # Handles cannot be inherited across a logon, so the daemon's stderr is a file it opens
+    # itself: the command line names it through a redirect done by cmd.
+    command = subprocess.list2cmdline(argv)
+    if stderr_path:
+        command = f'cmd.exe /d /c "{command} > "{stderr_path}" 2>&1"'
+    buffer = ctypes.create_unicode_buffer(command)
+    info = PROCESS_INFORMATION()
+    flags = CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
+    if not _adv.CreateProcessWithLogonW(account, ".", password, _LOGON_WITH_PROFILE, None, buffer, flags, None, cwd, ctypes.byref(startup), ctypes.byref(info)):
+        raise _fail("CreateProcessWithLogonW")
+    if not _k32.AssignProcessToJobObject(job, info.hProcess):
+        _k32.TerminateProcess(info.hProcess, 1)
+        raise _fail("AssignProcessToJobObject")
+    _k32.ResumeThread(info.hThread)
+    return Process(info, job)
+
+
+def _explicit(sid: _Sid, mode: int, permissions: int = 0) -> "EXPLICIT_ACCESS_W":
     entry = EXPLICIT_ACCESS_W()
-    entry.grfAccessPermissions = _FILE_GENERIC_MODIFY
+    entry.grfAccessPermissions = permissions or _FILE_GENERIC_MODIFY
     entry.grfAccessMode = mode
     entry.grfInheritance = _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE
     entry.Trustee.TrusteeForm = _TRUSTEE_IS_SID
@@ -401,7 +450,7 @@ def _explicit(sid: _Sid, mode: int) -> "EXPLICIT_ACCESS_W":
     return entry
 
 
-def _change_dacl(folder: str, sid_text: str, mode: int) -> None:
+def _change_dacl(folder: str, sid_text: str, mode: int, permissions: int = 0) -> None:
     sid = _Sid(sid_text)
     old = ctypes.c_void_p()
     descriptor = ctypes.c_void_p()
@@ -410,7 +459,7 @@ def _change_dacl(folder: str, sid_text: str, mode: int) -> None:
         raise OSError(status, f"GetNamedSecurityInfo {folder}: {ctypes.FormatError(status).strip()}")
     try:
         new = ctypes.c_void_p()
-        entry = _explicit(sid, mode)
+        entry = _explicit(sid, mode, permissions)
         status = _adv.SetEntriesInAclW(1, ctypes.byref(entry), old, ctypes.byref(new))
         if status:
             raise OSError(status, f"SetEntriesInAcl {folder}: {ctypes.FormatError(status).strip()}")
@@ -428,6 +477,11 @@ def grant_write(folder: str, sid_text: str) -> None:
     """One inheritable Modify entry for the SID on the folder (what `icacls /grant
     *SID:(OI)(CI)M` would do, without the account lookup that icacls insists on)."""
     _change_dacl(folder, sid_text, _GRANT_ACCESS)
+
+
+def grant_read(folder: str, sid_text: str) -> None:
+    """One inheritable Read-and-execute entry (icacls "RX") for the SID on the folder."""
+    _change_dacl(folder, sid_text, _GRANT_ACCESS, _FILE_GENERIC_READ_EXECUTE)
 
 
 def revoke(folder: str, sid_text: str) -> None:

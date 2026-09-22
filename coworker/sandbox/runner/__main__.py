@@ -24,11 +24,16 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--exit-with-parent", action="store_true", help="stop when the starting process is gone (local use)")
     serve.add_argument("--dir", default=None, help="this runner's own folder, removed at shutdown (default: the socket's folder)")
     serve.add_argument("--allow-sid", action="append", default=[], help="Windows: an account that may connect to the pipe (repeatable)")
+    serve.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="set a variable for the shells (repeatable; for a provider that cannot pass an environment)")
     attach = sub.add_parser("attach", help="connect this process's stdin/stdout to the daemon")
     attach.add_argument("--socket", required=True)
     attach.add_argument("--silence-seconds", type=float, default=None, help="leave after this much client silence (0 = never)")
     args = parser.parse_args(argv)
     if args.command == "serve":
+        for item in args.env:
+            name, sep, value = item.partition("=")
+            if sep and name:
+                os.environ[name] = value
         # A provider may put a folder of its own first on PATH (the ssh wrapper that points
         # at a copied credential, section 11b) without knowing the sandbox's own PATH.
         prepend = os.environ.pop("OPENWORKER_PATH_PREPEND", "")

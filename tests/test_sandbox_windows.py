@@ -1,8 +1,9 @@
 """The Windows sandbox provider (design doc `sandbox-windows-design.md`, section 7).
 
-Live tests: they run only on Windows, as the current user, with no setup. What they prove
-is the write-restricted mode: a write outside the session's folders fails, one inside
-works, the entries the provider adds are gone when it closes.
+Live tests, Windows only. The same-user mode needs nothing; the full mode needs setup to
+have run on the machine (`openworker machine sandbox setup`) and skips otherwise. Setup
+itself is only exercised with OPENWORKER_TEST_WINDOWS_SETUP=1, because it changes the
+machine (an account, a firewall rule, a folder under ProgramData).
 """
 
 from __future__ import annotations
@@ -18,24 +19,44 @@ from coworker.sandbox.bundle import build_runner_zipapp  # noqa: E402
 from coworker.sandbox.workspace import RunnerWorkspace  # noqa: E402
 
 
-@pytest.fixture
-def sandbox(tmp_path):
+def _has_setup() -> bool:
+    if sys.platform != "win32":
+        return False
+    from coworker.sandbox.providers import windows_setup
+
+    return windows_setup.account() is not None
+
+
+full = pytest.mark.skipif(not _has_setup(), reason="needs `openworker machine sandbox setup` on this machine")
+
+
+def _open(tmp_path, *, mode, extra_roots=()):
     from coworker.sandbox.providers.windows import WindowsProvider
 
     project = tmp_path / "project"
-    project.mkdir()
+    project.mkdir(exist_ok=True)
     (project / "a.txt").write_text("hello\n")
     zipapp = build_runner_zipapp(tmp_path / "dist")
-    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False)
+    roots = [{"path": str(project), "writable": True}, *extra_roots]
+    provider = WindowsProvider(roots=roots, cwd=project, runner_path=zipapp, network=False, force_mode=mode)
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 60
+    return ws, provider, project
+
+
+@pytest.fixture
+def sandbox(tmp_path):
+    ws, provider, project = _open(tmp_path, mode="partial")
     yield ws, provider, project
     ws.close()
 
 
+# -- same-user mode ------------------------------------------------------------------------
+
+
 def test_writes_are_limited_to_the_sessions_folders(sandbox, tmp_path):
     ws, provider, project = sandbox
-    assert ws.describe()["enforcement"] == "partial"
+    assert ws.describe()["mode"] == "partial"
     inside = ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")
     assert inside["exit_code"] == 0 and "made" in inside["output"]
     beside = ws.executor.run(f"Set-Content -Path '{tmp_path / 'beside.txt'}' -Value x")  # the parent, never granted
@@ -95,3 +116,76 @@ def test_the_provider_is_known_to_selection_and_settings(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENWORKER_SANDBOX_PROVIDER")
     names = {p["name"]: p for p in settings.snapshot()["providers"]}
     assert names["windows"]["usable"] and "seatbelt" not in names
+
+
+# -- setup and the full mode ---------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("OPENWORKER_TEST_WINDOWS_SETUP") != "1", reason="changes the machine; OPENWORKER_TEST_WINDOWS_SETUP=1 to run")
+def test_setup_creates_the_hidden_account_and_status_reports_it():
+    import subprocess
+
+    from coworker.sandbox import setup_cmd
+    from coworker.sandbox.providers import windows_setup
+
+    said: list[str] = []
+    assert setup_cmd.setup(ask=lambda q: True, print_fn=said.append) == 0, "\n".join(said)
+    name, sid, password = windows_setup.account()
+    assert name == windows_setup.ACCOUNT and sid.startswith("S-1-5-21-") and len(password) > 40
+    users = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-LocalUser {name}).Enabled"], capture_output=True, text=True).stdout
+    assert "True" in users
+    rule = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-NetFirewallRule -DisplayName '{windows_setup.FIREWALL_RULE}').Enabled"], capture_output=True, text=True).stdout
+    assert "True" in rule
+    assert any("setup has run" in line for line in said)
+
+
+@full
+def test_full_mode_hides_the_profile_and_gives_the_sessions_folders(tmp_path):
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "ref.txt").write_text("read me\n")
+    ws, provider, project = _open(tmp_path, mode="full", extra_roots=[{"path": str(reference), "writable": False}])
+    try:
+        assert ws.describe()["mode"] == "full"
+        who = ws.executor.run("$env:USERNAME")["output"].strip()
+        assert who.lower() == "openworkersandbox"
+        assert "made" in ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")["output"]
+        assert "read me" in ws.executor.run(f"Get-Content '{reference / 'ref.txt'}'")["output"]
+        assert ws.executor.run(f"Set-Content -Path '{reference / 'no.txt'}' -Value x")["exit_code"] != 0
+        assert ws.executor.run("Get-ChildItem $env:USERPROFILE\\..\\Administrator")["exit_code"] != 0  # another account's profile
+        listing = ws.executor.run(f"Get-ChildItem '{os.path.expanduser('~')}'")
+        assert listing["exit_code"] != 0  # the person's profile: denied
+        assert ws.executor.run(f"Set-Content -Path '{tmp_path / 'beside.txt'}' -Value x")["exit_code"] != 0
+    finally:
+        ws.close()
+    from coworker.sandbox import winsec
+
+    assert not winsec.entries_for(str(project), provider.session_sid)
+    assert not winsec.entries_for(str(reference), provider.session_sid)
+    assert not os.path.exists(provider._dir)
+
+
+@full
+def test_full_mode_blocks_the_network_except_the_proxy(tmp_path):
+    from coworker.sandbox.providers.windows import WindowsProvider
+
+    project = tmp_path / "project"
+    project.mkdir()
+    zipapp = build_runner_zipapp(tmp_path / "dist")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True, force_mode="full")
+    ws = RunnerWorkspace(provider, cwd=project)
+    ws.executor.default_timeout = 90
+    # curl.exe (shipped with Windows) follows the proxy variables; PowerShell 5's
+    # Invoke-WebRequest does not, it uses the system proxy, so it simply sees no network.
+    # Windows' own TLS (schannel) checks certificate revocation over plain HTTP, which the
+    # firewall blocks: curl needs --ssl-revoke-best-effort; OpenSSL clients (git, Python,
+    # Node) do not check that way and are unaffected.
+    try:
+        direct = ws.executor.run("curl.exe -sS --noproxy '*' -m 8 -o NUL -w '%{http_code}' https://example.com; 'exit ' + $LASTEXITCODE")
+        assert "200" not in direct["output"] and "exit 0" not in direct["output"], direct["output"]
+        via = ws.executor.run("curl.exe -sS --ssl-revoke-best-effort -m 30 -o NUL -w '%{http_code}' https://api.github.com")
+        assert "200" in via["output"], via["output"]
+        refused = ws.executor.run("curl.exe -sS --ssl-revoke-best-effort -m 30 -o NUL -w '%{http_code}' https://example.com")
+        assert "403" in refused["output"], refused["output"]
+    finally:
+        ws.close()
