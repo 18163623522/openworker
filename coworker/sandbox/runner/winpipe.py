@@ -170,8 +170,10 @@ def process_is_gone(pid: int) -> bool:
 
     try:
         handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
-    except OSError:
-        return True  # no such process any more (or nothing we may look at: treat as gone)
+    except OSError as exc:
+        # 87 (invalid parameter) is "no such process". Anything else (access denied from
+        # inside a restricted token, say) means the process is there but not ours to open.
+        return getattr(exc, "winerror", None) == 87
     try:
         return _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_OBJECT_0
     finally:

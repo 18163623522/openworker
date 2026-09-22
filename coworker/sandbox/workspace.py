@@ -24,7 +24,9 @@ DIRECT = "direct"
 RUNNER_LOCAL = "runner-local"
 OPENSHELL = "openshell"
 SEATBELT = "seatbelt"
+WINDOWS = "windows"
 
+REGRANT_NOTICE = "The session's folders changed; the sandbox now covers the current list. Shells and variables were kept."
 RESTART_NOTICE = (
     "The sandbox was restarted because the session's folders changed. The shell started again: "
     "variables and background tasks from before are gone, files are untouched."
@@ -131,14 +133,17 @@ class RunnerWorkspace(Workspace):
         wanted = [{"path": str(r.path), "writable": bool(r.writable)} for r in self._live_roots]
         if not wanted or _same_roots(wanted, getattr(self.provider, "roots", [])):
             return None
-        self.client.detach()
+        restarts = getattr(self.provider, "restarts_on_regrant", True)
+        if restarts:
+            self.client.detach()
         regrant(wanted)
-        self.client.connect()  # a new runner: the client notes the restart
+        if restarts:
+            self.client.connect()  # a new runner: the client notes the restart
         verify = getattr(self.provider, "verify", None)
         if verify is not None:
             verify(self.client)
         self._record()
-        return RESTART_NOTICE
+        return RESTART_NOTICE if restarts else REGRANT_NOTICE
 
     @property
     def executor(self) -> Executor:
@@ -230,4 +235,16 @@ def open_workspace(
             agent=agent,
             live_roots=roots,
         )
-    raise ValueError(f"unknown sandbox provider: {name!r} (known: {DIRECT}, {SEATBELT}, {OPENSHELL}, {RUNNER_LOCAL})")
+    if name == WINDOWS:
+        from .providers.windows import WindowsProvider
+        from .registry import SandboxRegistry
+
+        return RunnerWorkspace(
+            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile),
+            cwd=cwd,
+            registry=SandboxRegistry(),
+            session_id=session_id,
+            agent=agent,
+            live_roots=roots,
+        )
+    raise ValueError(f"unknown sandbox provider: {name!r} (known: {DIRECT}, {SEATBELT}, {WINDOWS}, {OPENSHELL}, {RUNNER_LOCAL})")

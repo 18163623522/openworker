@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from .runner import winpipe
 
@@ -57,13 +57,16 @@ def runner_dir(base: Optional[str] = None) -> tuple[str, str]:
     return folder, os.path.join(folder, "r.sock")
 
 
-def serve_arguments(address: str, folder: str) -> list[str]:
-    """The `serve` options that tell the daemon where it lives and who may connect."""
+def serve_arguments(address: str, folder: str, *, also_sids: Sequence[str] = ()) -> list[str]:
+    """The `serve` options that tell the daemon where it lives and who may connect: this
+    user (the server), plus `also_sids` (a sandbox's own session SID, so that a daemon
+    under a write-restricted token may open further instances of its own pipe)."""
     args = ["--socket", address, "--dir", folder]
     if winpipe.is_pipe(address):
         from . import winsec
 
-        args += ["--allow-sid", winsec.current_user_sid()]
+        for sid in (winsec.current_user_sid(), *also_sids):
+            args += ["--allow-sid", sid]
     return args
 
 

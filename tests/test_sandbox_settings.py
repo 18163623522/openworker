@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,8 @@ def config_file(tmp_path, monkeypatch):
 def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     snap = settings.snapshot()
     assert snap["provider"] == "" and snap["effective_provider"] == "direct" and snap["refused"] == ""
-    assert [p["name"] for p in snap["providers"]] == ["direct", "seatbelt", "openshell"]
+    native = "windows" if sys.platform == "win32" else "seatbelt"  # the operating system's own sandbox
+    assert [p["name"] for p in snap["providers"]] == ["direct", native, "openshell"]
     assert next(p for p in snap["providers"] if p["name"] == "direct")["usable"]
     assert snap["network_profile"] == "strict" and [n["name"] for n in snap["network_profiles"]] == ["strict", "standard"]
     assert [(e["name"], e["enabled"]) for e in snap["credentials"]] == [("ssh", False), ("gh", False), ("aws", False), ("kube", False)]

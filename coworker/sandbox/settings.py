@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from .. import config as app_config
 from . import credentials, network_profiles
-from .workspace import DIRECT, OPENSHELL, SEATBELT
+from .workspace import DIRECT, OPENSHELL, SEATBELT, WINDOWS
 
 
 def _availability(name: str) -> tuple[bool, str]:
@@ -32,7 +32,22 @@ def _availability(name: str) -> tuple[bool, str]:
 
         problem = openshell_problem()
         return (problem is None), (problem or "")
+    if name == WINDOWS:
+        if sys.platform != "win32":
+            return False, "Windows only"
+        from .providers import windows
+
+        try:
+            windows.preflight()
+            return True, ""
+        except windows.WindowsUnavailable as exc:
+            return False, str(exc)
     return False, "unknown"
+
+
+def native_sandbox() -> str:
+    """The operating system's own sandbox provider: the middle option on the page."""
+    return WINDOWS if sys.platform == "win32" else SEATBELT
 
 
 def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
@@ -45,7 +60,7 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
     except Exception as exc:  # an explicit choice that cannot be used: sessions are refused
         effective, refused = "", str(exc)
     providers = []
-    for name in (DIRECT, SEATBELT, OPENSHELL):
+    for name in (DIRECT, native_sandbox(), OPENSHELL):
         usable, why = _availability(name)
         providers.append({"name": name, "usable": usable, "why": why})
     return {
@@ -84,7 +99,7 @@ def update(body: dict[str, Any]) -> dict[str, Any]:
     body = body or {}
     if "provider" in body:
         provider = str(body.get("provider") or "").strip().lower()
-        if provider and provider not in (DIRECT, SEATBELT, OPENSHELL):
+        if provider and provider not in (DIRECT, SEATBELT, WINDOWS, OPENSHELL):
             return {"ok": False, "error": f"unknown sandbox provider: {provider}"}
         app_config.set_global_value("sandbox_provider", provider) if provider else _unset("sandbox_provider")
         from .selection import openshell_problem
