@@ -93,9 +93,7 @@ class RunnerWorkspace(Workspace):
         try:
             self.client = RunnerClient(provider.open_runner)
             self.hello = self.client.connect()
-            verify = getattr(provider, "verify", None)
-            if verify is not None:
-                verify(self.client)  # e.g. every folder is really reachable inside
+            self._after_connect()
         except Exception:
             provider.destroy()
             raise
@@ -139,11 +137,24 @@ class RunnerWorkspace(Workspace):
         regrant(wanted)
         if restarts:
             self.client.connect()  # a new runner: the client notes the restart
-        verify = getattr(self.provider, "verify", None)
-        if verify is not None:
-            verify(self.client)
+            self._after_connect()
+        else:
+            verify = getattr(self.provider, "verify", None)
+            if verify is not None:
+                verify(self.client)
         self._record()
         return RESTART_NOTICE if restarts else REGRANT_NOTICE
+
+    def _after_connect(self) -> None:
+        """What a provider does once it can talk to its runner: prove the wall is up, then
+        put in what it could not put in before the runner existed (copies that must be
+        owned by the sandbox's own account)."""
+        verify = getattr(self.provider, "verify", None)
+        if verify is not None:
+            verify(self.client)  # e.g. every folder is really reachable inside
+        provision = getattr(self.provider, "provision", None)
+        if provision is not None:
+            provision(self.client)
 
     @property
     def executor(self) -> Executor:
@@ -153,7 +164,9 @@ class RunnerWorkspace(Workspace):
         """What the agent is told about this sandbox each turn (ruling 21)."""
         from .credentials import context_lines
 
-        return context_lines(getattr(self.provider, "copied", None))
+        text = context_lines(getattr(self.provider, "copied", None))
+        notes = getattr(self.provider, "notes", None) or []
+        return "\n".join(part for part in [text, *notes] if part)
 
     def describe(self) -> dict[str, Any]:
         return {**self.provider.describe(), "runner": {k: self.hello.get(k) for k in ("runner_version", "os", "machine", "instance_id")}}
@@ -162,6 +175,13 @@ class RunnerWorkspace(Workspace):
         try:
             self._executor.close()
         finally:
+            try:
+                # Ask the daemon to leave by itself first: it ends its shells and removes
+                # what only it can (its folder, copies it was handed). The provider's
+                # destroy() is the hard stop behind it.
+                self.client.call("runner.shutdown", timeout=5)
+            except Exception:
+                pass
             self.client.close()
             self.provider.destroy()
             if self.registry is not None and self._registered:

@@ -118,6 +118,109 @@ def test_the_provider_is_known_to_selection_and_settings(monkeypatch, tmp_path):
     assert names["windows"]["usable"] and "seatbelt" not in names
 
 
+# -- credential grants ---------------------------------------------------------------------
+
+
+def _fake_home(tmp_path):
+    """A home with a real (throwaway) ssh key, made by Windows' own ssh-keygen."""
+    import subprocess
+
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    subprocess.run([r"C:\Windows\System32\OpenSSH\ssh-keygen.exe", "-q", "-t", "ed25519", "-N", "", "-f", str(home / ".ssh" / "id_ed25519")], check=True, capture_output=True)
+    (home / ".gitconfig").write_text("[user]\n\tname = Sam\n\temail = sam@example.com\n")
+    return home
+
+
+def _ssh_probe(ws) -> str:
+    """Reaches GitHub over SSH through whatever the sandbox provides. A throwaway key gets
+    "Permission denied (publickey)": the tunnel, the config and the key all worked. Through
+    cmd, because PowerShell 5 turns a native command's first stderr line into an error
+    record and drops the rest of its output."""
+    return ws.executor.run('cmd.exe /d /c "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1"')["output"]
+
+
+@full
+def test_a_granted_ssh_key_reaches_github_through_the_proxy(tmp_path):
+    from coworker.sandbox import credentials as creds
+    from coworker.sandbox.providers.windows import WindowsProvider
+
+    home = _fake_home(tmp_path)
+    grants = creds.granted([{"name": "ssh", "enabled": True}], home=str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    zipapp = build_runner_zipapp(tmp_path / "dist")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True, credentials=grants, force_mode="full")
+    ws = RunnerWorkspace(provider, cwd=project)
+    ws.executor.default_timeout = 90
+    try:
+        assert ws.describe()["credentials"][0]["name"] == "ssh"
+        config = ws.executor.run("Get-Content (Join-Path $env:USERPROFILE '.ssh\\config')")["output"]
+        assert "ProxyCommand" in config and "connect 127.0.0.1" in config and "IdentityFile" in config
+        said = _ssh_probe(ws)
+        assert "Permission denied (publickey)" in said, said
+        inside = ws.executor.run("Join-Path $env:USERPROFILE '.ssh'")["output"].strip()
+        assert inside.lower().startswith(r"c:\users\openworkersandbox")
+    finally:
+        ws.close()
+
+
+def test_the_same_user_mode_refuses_an_ssh_grant_and_says_so(tmp_path):
+    """Windows OpenSSH does not exit under a write-restricted token and git's MSYS shell
+    cannot start there, so the same-user mode keeps the other grants and tells the agent."""
+    from coworker.sandbox import credentials as creds
+    from coworker.sandbox.providers.windows import WindowsProvider
+
+    home = _fake_home(tmp_path)
+    (home / ".config" / "gh").mkdir(parents=True)
+    (home / ".config" / "gh" / "hosts.yml").write_text("github.com:\n  oauth_token: gho_x\n")
+    grants = creds.granted([{"name": "ssh", "enabled": True}, {"name": "gh", "enabled": True}], home=str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    zipapp = build_runner_zipapp(tmp_path / "dist")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, credentials=grants, force_mode="partial")
+    ws = RunnerWorkspace(provider, cwd=project)
+    ws.executor.default_timeout = 60
+    try:
+        assert [c["name"] for c in ws.describe()["credentials"]] == ["gh"]
+        assert "needs the full sandbox" in ws.context()
+        assert "gho_x" in ws.executor.run("Get-Content (Join-Path $env:GH_CONFIG_DIR 'hosts.yml')")["output"]
+        assert ws.executor.run("Test-Path (Join-Path $env:HOME '.ssh')")["output"].strip() == "False"
+    finally:
+        ws.close()
+    assert not os.path.exists(provider._dir)  # the copy went with the private folder
+
+
+@full
+def test_full_mode_removes_the_copies_when_the_sandbox_ends(tmp_path):
+    """The account's profile persists between sandboxes; the copies must not."""
+    from coworker.sandbox import credentials as creds
+    from coworker.sandbox.providers.windows import WindowsProvider
+
+    home = _fake_home(tmp_path)
+    grants = creds.granted([{"name": "ssh", "enabled": True}], home=str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    zipapp = build_runner_zipapp(tmp_path / "dist")
+
+    def open_one(with_grants):
+        provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, credentials=grants if with_grants else (), force_mode="full")
+        ws = RunnerWorkspace(provider, cwd=project)
+        ws.executor.default_timeout = 60
+        return ws
+
+    ws = open_one(True)
+    try:
+        assert ws.executor.run("Test-Path (Join-Path $env:USERPROFILE '.ssh\\id_ed25519')")["output"].strip() == "True"
+    finally:
+        ws.close()
+    ws = open_one(False)
+    try:
+        assert ws.executor.run("Test-Path (Join-Path $env:USERPROFILE '.ssh')")["output"].strip() == "False"
+    finally:
+        ws.close()
+
+
 # -- setup and the full mode ---------------------------------------------------------------
 
 

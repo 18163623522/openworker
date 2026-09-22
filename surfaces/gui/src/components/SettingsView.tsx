@@ -748,6 +748,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
   const providerNames: Record<string, [string, string]> = {
     direct: [t("settingsx.sandbox.provider_direct"), t("settingsx.sandbox.provider_direct_desc")],
     seatbelt: [t("settingsx.sandbox.provider_seatbelt"), t("settingsx.sandbox.provider_seatbelt_desc")],
+    windows: [t("settingsx.sandbox.provider_windows"), t("settingsx.sandbox.provider_windows_desc")],
     openshell: [t("settingsx.sandbox.provider_openshell"), t("settingsx.sandbox.provider_openshell_desc")],
   };
   const chosen = cfg.provider || cfg.effective_provider || "direct";
@@ -769,7 +770,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
       <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.run_in")}</div>
       <div className={CARD + " mb-1 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.run_in")}>
         {cfg.providers
-          .filter((p) => p.name !== "seatbelt" || cfg.platform === "darwin")
+          .filter((p) => (p.name !== "seatbelt" || cfg.platform === "darwin") && (p.name !== "windows" || cfg.platform === "win32"))
           .map((p) => {
             const [label, desc] = providerNames[p.name] ?? [p.name, ""];
             const active = chosen === p.name;

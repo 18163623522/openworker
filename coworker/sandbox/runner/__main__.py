@@ -28,7 +28,16 @@ def main(argv: list[str] | None = None) -> int:
     attach = sub.add_parser("attach", help="connect this process's stdin/stdout to the daemon")
     attach.add_argument("--socket", required=True)
     attach.add_argument("--silence-seconds", type=float, default=None, help="leave after this much client silence (0 = never)")
+    connect = sub.add_parser("connect", help="a tunnel through the allow-list proxy on stdin/stdout (ssh ProxyCommand)")
+    connect.add_argument("proxy_host")
+    connect.add_argument("proxy_port", type=int)
+    connect.add_argument("host")
+    connect.add_argument("port", type=int)
     args = parser.parse_args(argv)
+    if args.command == "connect":
+        from .connect import run as run_connect
+
+        return run_connect(args.proxy_host, args.proxy_port, args.host, args.port)
     if args.command == "serve":
         for item in args.env:
             name, sep, value = item.partition("=")

@@ -2276,6 +2276,8 @@
       "provider_direct_desc": "Commands run as you, with no limits. Fastest. The default until you choose otherwise.",
       "provider_seatbelt": "macOS sandbox",
       "provider_seatbelt_desc": "Commands can read and write only the session's folders and reach only the network hosts on the allow list. Your other files and logins are hidden.",
+      "provider_windows": "Windows sandbox",
+      "provider_windows_desc": "Commands run as a hidden local account that cannot see your profile, and reach only the network hosts on the allow list. Without the one-time setup (openworker machine sandbox setup), writes are limited to the session's folders and nothing else is.",
       "provider_openshell": "OpenShell (NVIDIA)",
       "provider_openshell_desc": "One Linux container per agent, with the session's folders mounted. Needs OpenShell and Docker on this machine.",
       "status_default": "default",

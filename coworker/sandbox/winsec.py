@@ -439,18 +439,18 @@ def spawn_as_account(
     return Process(info, job)
 
 
-def _explicit(sid: _Sid, mode: int, permissions: int = 0) -> "EXPLICIT_ACCESS_W":
+def _explicit(sid: _Sid, mode: int, permissions: int = 0, inherit: bool = True) -> "EXPLICIT_ACCESS_W":
     entry = EXPLICIT_ACCESS_W()
     entry.grfAccessPermissions = permissions or _FILE_GENERIC_MODIFY
     entry.grfAccessMode = mode
-    entry.grfInheritance = _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE
+    entry.grfInheritance = (_CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE) if inherit else 0
     entry.Trustee.TrusteeForm = _TRUSTEE_IS_SID
     entry.Trustee.TrusteeType = 0  # TRUSTEE_IS_UNKNOWN: it is no account
     entry.Trustee.ptstrName = sid.pointer.value
     return entry
 
 
-def _change_dacl(folder: str, sid_text: str, mode: int, permissions: int = 0) -> None:
+def _change_dacl(folder: str, sid_text: str, mode: int, permissions: int = 0, inherit: bool = True) -> None:
     sid = _Sid(sid_text)
     old = ctypes.c_void_p()
     descriptor = ctypes.c_void_p()
@@ -459,7 +459,7 @@ def _change_dacl(folder: str, sid_text: str, mode: int, permissions: int = 0) ->
         raise OSError(status, f"GetNamedSecurityInfo {folder}: {ctypes.FormatError(status).strip()}")
     try:
         new = ctypes.c_void_p()
-        entry = _explicit(sid, mode, permissions)
+        entry = _explicit(sid, mode, permissions, inherit)
         status = _adv.SetEntriesInAclW(1, ctypes.byref(entry), old, ctypes.byref(new))
         if status:
             raise OSError(status, f"SetEntriesInAcl {folder}: {ctypes.FormatError(status).strip()}")
@@ -473,10 +473,11 @@ def _change_dacl(folder: str, sid_text: str, mode: int, permissions: int = 0) ->
         _k32.LocalFree(descriptor)
 
 
-def grant_write(folder: str, sid_text: str) -> None:
+def grant_write(folder: str, sid_text: str, *, inherit: bool = True) -> None:
     """One inheritable Modify entry for the SID on the folder (what `icacls /grant
-    *SID:(OI)(CI)M` would do, without the account lookup that icacls insists on)."""
-    _change_dacl(folder, sid_text, _GRANT_ACCESS)
+    *SID:(OI)(CI)M` would do, without the account lookup that icacls insists on).
+    `inherit=False` for one file."""
+    _change_dacl(folder, sid_text, _GRANT_ACCESS, inherit=inherit)
 
 
 def grant_read(folder: str, sid_text: str) -> None:
@@ -487,6 +488,24 @@ def grant_read(folder: str, sid_text: str) -> None:
 def revoke(folder: str, sid_text: str) -> None:
     """Remove every entry for the SID from the folder (the children inherit the removal)."""
     _change_dacl(folder, sid_text, _REVOKE_ACCESS)
+
+
+def private_acl(path: str) -> None:
+    """Make a folder (and what is under it) readable by this user, administrators and
+    SYSTEM only, with no inheritance: what Windows OpenSSH demands of a key file."""
+    import subprocess
+
+    # The folder gets the three entries and stops inheriting; everything under it is then
+    # reset to inherit from the folder. (One `/T` pass instead would leave the files with
+    # an EMPTY list: the inheritable flags are not valid on a file and the grant is dropped.)
+    steps = [
+        ["icacls", path, "/inheritance:r", "/grant:r", f"*{current_user_sid()}:(OI)(CI)F", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "/Q"],
+        ["icacls", os.path.join(path, "*"), "/reset", "/T", "/Q"],
+    ]  # fmt: skip
+    for argv in steps:
+        done = subprocess.run(argv, capture_output=True, text=True)
+        if done.returncode != 0:
+            raise OSError(done.returncode, f"{' '.join(argv[:2])}: {(done.stderr or done.stdout).strip()}")
 
 
 def entries_for(folder: str, sid_text: str) -> bool:

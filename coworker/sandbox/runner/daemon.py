@@ -125,6 +125,7 @@ class Daemon:
         self._gap = False  # a result fell off the log before it was acknowledged
         self._requests: "collections.OrderedDict[str, Optional[bytes]]" = collections.OrderedDict()
         self._conn: Optional[_Conn] = None
+        self._cleanup: list[str] = []
         self._stop = threading.Event()
 
     # -- outgoing ---------------------------------------------------------------------
@@ -199,8 +200,32 @@ class Daemon:
             "python": platform.python_version(),
             "shell": "powershell.exe" if sys.platform == "win32" else "/bin/bash",
             "cwd": self.default_cwd,
+            "home": os.path.expanduser("~"),
             "shells": sorted(self._shells),
         }
+
+    def _env_set(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Variables for the shells started from now on (a provider that could not pass an
+        environment at start, or learned a path only after connecting). `OPENWORKER_PATH_PREPEND`
+        goes first on PATH, as at start."""
+        variables = params.get("vars")
+        if not isinstance(variables, dict):
+            raise ValueError("'vars' must be an object")
+        for name, value in variables.items():
+            if name == "OPENWORKER_PATH_PREPEND":
+                os.environ["PATH"] = str(value) + os.pathsep + os.environ.get("PATH", "")
+            else:
+                os.environ[str(name)] = str(value)
+        return {"set": sorted(str(k) for k in variables)}
+
+    def _cleanup_at_exit(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Paths this daemon removes when it shuts down (copies it was given that live where
+        the server cannot delete them)."""
+        paths = params.get("paths")
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            raise ValueError("'paths' must be a list of strings")
+        self._cleanup.extend(paths)
+        return {"paths": list(self._cleanup)}
 
     def _resume(self, params: dict[str, Any]) -> dict[str, Any]:
         last = int(params.get("last_seq") or 0)
@@ -271,6 +296,10 @@ class Daemon:
     def _dispatch(self, req_id: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if method == "runner.hello":
             return self._hello(params)
+        if method == "env.set":
+            return self._env_set(params)
+        if method == "runner.cleanup_at_exit":
+            return self._cleanup_at_exit(params)
         if method == "session.resume":
             return self._resume(params)
         if method == "shell.open":
@@ -408,6 +437,14 @@ class Daemon:
             for task_id in list(shell.executor._bg_tasks):
                 shell.executor.background_kill(task_id)
             shell.executor.close()
+        for path in self._cleanup:
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                elif os.path.lexists(path):
+                    os.remove(path)
+            except OSError:
+                pass
         if not self.is_pipe:
             try:
                 os.unlink(self.socket_path)

@@ -33,6 +33,7 @@ nothing.
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import subprocess
@@ -131,6 +132,8 @@ class WindowsProvider:
         self._token: Any = None
         self._desktop: Any = None
         self._granted: list[tuple[str, str]] = []  # (folder, "write" | "read") entries that exist right now
+        self._runner_inside: Path = self._runner  # where the sandbox sees the runner file
+        self.notes: list[str] = []  # what the agent must be told beyond the credentials list
 
     # -- what it is ---------------------------------------------------------------------
     def describe(self) -> dict[str, Any]:
@@ -147,6 +150,7 @@ class WindowsProvider:
             "mode": self.mode,
             "reason": reason,
             "credentials": self.copied.describe() if self.copied is not None else [],
+            "notes": list(self.notes),
         }
 
     # -- start ------------------------------------------------------------------------
@@ -161,8 +165,9 @@ class WindowsProvider:
         preflight()
         from .. import winsec
 
+        hosts = sorted({h for g in self.grants for h in g.hosts})
         if self.network:
-            self._proxy = netproxy.shared(self.profile)
+            self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
         for root in self.roots:
             self._grant(root["path"], "write" if root["writable"] else "read")
         self._grant(self._dir, "write")
@@ -172,17 +177,30 @@ class WindowsProvider:
             assert self._account is not None
             name, sid, password = self._account
             # The runner file lives in the user's state folder, which the account cannot see.
-            runner = Path(self._dir) / self._runner.name
-            shutil.copy2(self._runner, runner)
+            self._runner_inside = Path(self._dir) / self._runner.name
+            shutil.copy2(self._runner, self._runner_inside)
             env_args = [arg for k, v in self._environment(full=True).items() for arg in ("--env", f"{k}={v}")]
             serve = serve_arguments(self.socket_path, self._dir, also_sids=[sid])
-            argv = [*runner_command(runner), "serve", *serve, *env_args, "--cwd", self.cwd, "--exit-with-parent"]
+            argv = [*runner_command(self._runner_inside), "serve", *serve, *env_args, "--cwd", self.cwd, "--exit-with-parent"]
             self._daemon = winsec.spawn_as_account(argv, account=name, password=password, desktop=self._desktop, cwd=self.cwd, stderr_path=log)
         else:
+            self._runner_inside = self._runner
+            env = self._environment(full=False)
+            # Same user: Windows OpenSSH does its work under a write-restricted token but
+            # never exits, and git's MSYS shell cannot start at all (no signal pipe), so an
+            # ssh grant cannot be honoured here; the agent is told. The other grants are
+            # files plus environment variables and work.
+            usable = [g for g in self.grants if g.name != "ssh"]
+            if len(usable) != len(self.grants):
+                self.notes.append("The shared SSH key is not available in this sandbox: on Windows it needs the full sandbox (`openworker machine sandbox setup`).")
+            if usable:
+                self.copied = creds.copy_in(usable, self._dir, proxy_port=self._proxy.port if self._proxy else None)
+                winsec.private_acl(self.copied.home)  # the copy is this user's alone
+                env.update(self.copied.env)
             self._token = winsec.RestrictedToken(self.session_sid)
             serve = serve_arguments(self.socket_path, self._dir, also_sids=[self.session_sid])
             argv = [*runner_command(self._runner), "serve", *serve, "--cwd", self.cwd, "--exit-with-parent"]
-            self._daemon = winsec.spawn(argv, token=self._token, desktop=self._desktop, cwd=self.cwd, env=self._environment(full=False), stderr_path=log)
+            self._daemon = winsec.spawn(argv, token=self._token, desktop=self._desktop, cwd=self.cwd, env=env, stderr_path=log)
         try:
             wait_for_runner(self.socket_path, self._daemon)
         except RuntimeError as exc:
@@ -203,6 +221,48 @@ class WindowsProvider:
         if self._proxy is not None:
             env.update(netproxy.environment(self._proxy))
         return env
+
+    def _ssh_proxy_command(self) -> Optional[str]:
+        if self._proxy is None:
+            return None
+        return creds.windows_ssh_proxy_command(sys.executable, str(self._runner_inside), self._proxy.port)
+
+    _CLEARED = (".ssh", ".config/gh", ".aws", ".kube", "bin")
+
+    def provision(self, client: Any) -> None:
+        """Full mode: the copies of granted credentials go into the ACCOUNT's own profile,
+        written by the daemon so that the account owns them (Windows OpenSSH refuses a key
+        file owned by someone else). Whatever an earlier sandbox left there is removed
+        first; the daemon removes them again when it leaves."""
+        if self.mode != FULL:
+            return
+        from ..runner.protocol import RunnerError
+
+        home_inside = str(client.hello.get("home") or "")
+        if not home_inside:
+            raise WindowsUnavailable("the sandboxed runner did not report its home folder")
+        for rel in self._CLEARED:
+            try:
+                client.call("fs.remove", {"path": os.path.join(home_inside, rel), "recursive": True}, timeout=30)
+            except RunnerError:
+                pass  # nothing there
+        if not self.grants:
+            return
+        staging = tempfile.mkdtemp(prefix="owc-")
+        try:
+            self.copied = creds.copy_in(self.grants, staging, inside_home=home_inside, ssh_proxy_command=self._ssh_proxy_command(), windows=True)
+            shipped: list[str] = []
+            for folder, _dirs, files in os.walk(self.copied.home):
+                rel_folder = os.path.relpath(folder, self.copied.home)
+                for name in files:
+                    rel = name if rel_folder == "." else os.path.join(rel_folder, name)
+                    data = Path(folder, name).read_bytes()
+                    client.call("fs.write", {"path": os.path.join(home_inside, rel), "data_b64": base64.b64encode(data).decode(), "make_parents": True}, timeout=30)
+                    shipped.append(rel.split(os.sep)[0])
+            client.call("runner.cleanup_at_exit", {"paths": sorted({os.path.join(home_inside, top) for top in shipped})}, timeout=15)
+            client.call("env.set", {"vars": self.copied.env}, timeout=15)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def open_runner(self) -> Transport:
         argv = [*runner_command(self._runner), "attach", "--socket", self.socket_path]
@@ -301,6 +361,9 @@ class WindowsProvider:
             if thing is not None:
                 thing.close()
         self._token = self._desktop = None
+        if self._proxy is not None and self._proxy is not netproxy._proxies.get(self.profile):
+            self._proxy.close()  # this session's own proxy; the shared one stays
+        self._proxy = None
         # The job's last processes (cmd holding the log) may still be going; give them a moment.
         for _ in range(20):
             shutil.rmtree(self._dir, ignore_errors=True)

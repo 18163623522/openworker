@@ -93,10 +93,14 @@ def test_copy_in_makes_a_private_home_and_the_tools_environment(tmp_path):
     assert not (sb / "Documents").exists()  # nothing that was not granted
     config = (sb / ".ssh" / "config").read_text()
     assert config.startswith("# Added by OpenWorker") and "ProxyCommand /usr/bin/nc -X connect -x 127.0.0.1:4545 %h %p" in config
-    assert f"IdentityFile {sb / '.ssh' / 'id_ed25519'}" in config and "IdentityAgent none" in config
+    key_path = str(sb / ".ssh" / "id_ed25519").replace("\\", "/") if sys.platform == "win32" else str(sb / ".ssh" / "id_ed25519")
+    assert f"IdentityFile {key_path}" in config and "IdentityAgent none" in config
+    ssh_exe = r'"C:\Windows\System32\OpenSSH\ssh.exe"' if sys.platform == "win32" else "/usr/bin/ssh"
     assert config.endswith("Host work\n  HostName git.example.com\n")  # the user's own config still there, after ours
-    assert copied.env["GIT_SSH_COMMAND"] == f'/usr/bin/ssh -F "{sb / ".ssh" / "config"}"'
-    assert (sb / "bin" / "ssh").read_text().startswith("#!/bin/sh") and copied.env["OPENWORKER_PATH_PREPEND"] == str(sb / "bin")
+    assert copied.env["GIT_SSH_COMMAND"] == f'{ssh_exe} -F "{sb / ".ssh" / "config"}"'
+    wrapper = (sb / "bin" / "ssh.cmd") if sys.platform == "win32" else (sb / "bin" / "ssh")
+    assert wrapper.read_text().startswith("@" if sys.platform == "win32" else "#!/bin/sh")
+    assert copied.env["OPENWORKER_PATH_PREPEND"] == str(sb / "bin")
     assert copied.env["HOME"] == str(sb)
     assert copied.env["GH_CONFIG_DIR"] == str(sb / ".config" / "gh")
     assert copied.env["AWS_SHARED_CREDENTIALS_FILE"] == str(sb / ".aws" / "credentials")
