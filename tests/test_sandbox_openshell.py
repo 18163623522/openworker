@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -121,7 +122,7 @@ def test_registry_reaps_rows_of_a_server_that_is_gone(tmp_path, monkeypatch):
     reg = registry_mod.SandboxRegistry(tmp_path / "registry.db")
     reg.record("owr-local-1", provider="runner-local", session_id="s1")
     reg.record("owr-local-2", provider="runner-local", session_id="s2")
-    gone = subprocess.Popen(["true"])
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     with reg._connect() as db:
         db.execute("UPDATE sandboxes SET server_pid = ? WHERE name = ?", (gone.pid, "owr-local-1"))

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import sqlite3
 import threading
 import time
@@ -48,6 +49,11 @@ class SandboxLimitReached(RuntimeError):
 
 
 def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # `os.kill(pid, 0)` is TerminateProcess on Windows, not a probe.
+        from .runner import winpipe
+
+        return not winpipe.process_is_gone(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

@@ -24,6 +24,10 @@ from coworker.sandbox.selection import select
 
 
 # -- the profile ----------------------------------------------------------------------
+posix_paths = pytest.mark.skipif(sys.platform == "win32", reason="the profile is written for macOS paths")
+
+
+@posix_paths
 def test_profile_lists_the_folders_and_nothing_else_under_home(tmp_path):
     home = tmp_path / "home"
     (home / ".nvm").mkdir(parents=True)
@@ -48,6 +52,7 @@ def test_profile_lists_the_folders_and_nothing_else_under_home(tmp_path):
     assert "remote tcp" not in text  # no proxy port given: no network at all
 
 
+@posix_paths
 def test_profile_allows_only_the_proxy_port_and_quotes_paths(tmp_path):
     odd = tmp_path / 'has "quotes" and spaces'
     odd.mkdir()

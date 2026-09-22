@@ -31,9 +31,9 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional, Sequence
 
-from . import fsops, protocol as P, toolcalls
+from . import fsops, protocol as P, toolcalls, winpipe
 from .executor import LocalExecutor
 
 RUNNER_VERSION = "0.1.0"
@@ -41,27 +41,19 @@ _RESULT_LOG_MAX = 5000
 _REQUEST_MEMORY_MAX = 5000
 
 
-class _Conn:
-    """One attached client (through a relay). Writes are serialized."""
+class _SocketStream:
+    """A connected Unix socket, in the shape `_Conn` needs (winpipe.PipeStream is the other)."""
 
     def __init__(self, sock: socket.socket) -> None:
         self.sock = sock
-        self._lock = threading.Lock()
-        self.alive = True
 
-    def send(self, frame: bytes) -> bool:
-        if not self.alive:
-            return False
-        try:
-            with self._lock:
-                self.sock.sendall(frame)
-            return True
-        except OSError:
-            self.alive = False
-            return False
+    def sendall(self, data: bytes) -> None:
+        self.sock.sendall(data)
+
+    def lines(self) -> Iterator[bytes]:
+        return iter(self.sock.makefile("rb"))
 
     def close(self) -> None:
-        self.alive = False
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -72,6 +64,30 @@ class _Conn:
             pass
 
 
+class _Conn:
+    """One attached client (through a relay). Writes are serialized."""
+
+    def __init__(self, stream: Any) -> None:
+        self.stream = stream
+        self._lock = threading.Lock()
+        self.alive = True
+
+    def send(self, frame: bytes) -> bool:
+        if not self.alive:
+            return False
+        try:
+            with self._lock:
+                self.stream.sendall(frame)
+            return True
+        except OSError:
+            self.alive = False
+            return False
+
+    def close(self) -> None:
+        self.alive = False
+        self.stream.close()
+
+
 class _Shell:
     def __init__(self, name: str, executor: LocalExecutor) -> None:
         self.name = name
@@ -80,8 +96,23 @@ class _Shell:
 
 
 class Daemon:
-    def __init__(self, socket_path: str, default_cwd: Optional[str] = None, exit_with_parent: bool = False) -> None:
+    def __init__(
+        self,
+        socket_path: str,
+        default_cwd: Optional[str] = None,
+        exit_with_parent: bool = False,
+        *,
+        runtime_dir: Optional[str] = None,
+        allow_sids: Sequence[str] = (),
+    ) -> None:
+        """`socket_path` is a Unix socket file, or on Windows a `\\\\.\\pipe\\` name.
+        `runtime_dir` is this runner's own folder (temporary files, the log), removed at
+        shutdown; for a socket it defaults to the socket's folder. `allow_sids` (Windows)
+        are the accounts that may connect to the pipe."""
         self.socket_path = socket_path
+        self.is_pipe = winpipe.is_pipe(socket_path)
+        self.runtime_dir = runtime_dir if runtime_dir is not None else (None if self.is_pipe else os.path.dirname(socket_path))
+        self.allow_sids = list(allow_sids)
         # Outside a sandbox nothing else ends this process when its server goes away.
         self._parent = os.getppid() if exit_with_parent else None
         self.default_cwd = str(Path(default_cwd or os.getcwd()).expanduser().resolve())
@@ -332,9 +363,8 @@ class Daemon:
             old, self._conn = self._conn, conn
         if old is not None:
             old.close()  # the newest connection wins
-        reader = conn.sock.makefile("rb")
         try:
-            for line in reader:
+            for line in conn.stream.lines():
                 frame = P.decode(line)
                 if frame is None:
                     continue
@@ -378,11 +408,14 @@ class Daemon:
             for task_id in list(shell.executor._bg_tasks):
                 shell.executor.background_kill(task_id)
             shell.executor.close()
-        try:
-            os.unlink(self.socket_path)
-        except OSError:
-            pass
-        folder = os.path.dirname(self.socket_path)
+        if not self.is_pipe:
+            try:
+                os.unlink(self.socket_path)
+            except OSError:
+                pass
+        folder = self.runtime_dir
+        if not folder:
+            return
         try:
             if os.path.basename(folder).startswith("owr-"):
                 # A folder a provider made for this one runner (socket, temporary files, log).
@@ -393,8 +426,21 @@ class Daemon:
         except OSError:
             pass
 
-    def serve_forever(self) -> None:
+    def _parent_is_gone(self) -> bool:
+        if self._parent is None:
+            return False
+        if sys.platform == "win32":
+            return winpipe.process_is_gone(self._parent)
+        return os.getppid() != self._parent
+
+    def _listen(self) -> Callable[[float], Optional[Any]]:
+        """Start listening; the result takes a timeout and gives the next client's stream,
+        or None when nobody came in time. Closing is `self._close_listener`."""
         path = self.socket_path
+        if self.is_pipe:
+            listener = winpipe.Listener(path, self.allow_sids)
+            self._close_listener = listener.close
+            return listener.accept
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         try:
             os.unlink(path)
@@ -407,21 +453,34 @@ class Daemon:
         finally:
             os.umask(old_mask)
         server.listen(16)
-        server.settimeout(0.5)
-        print(f"openworker tool runner {RUNNER_VERSION} ready on {path} (instance {self.instance_id})", file=sys.stderr, flush=True)
+        self._close_listener = server.close
+
+        def accept(timeout: float) -> Optional[_SocketStream]:
+            server.settimeout(timeout)
+            try:
+                sock, _ = server.accept()
+            except socket.timeout:
+                return None
+            return _SocketStream(sock)
+
+        return accept
+
+    def serve_forever(self) -> None:
+        accept = self._listen()
+        print(f"openworker tool runner {RUNNER_VERSION} ready on {self.socket_path} (instance {self.instance_id})", file=sys.stderr, flush=True)
         try:
             while not self._stop.is_set():
                 try:
-                    sock, _ = server.accept()
-                except socket.timeout:
-                    if self._parent is not None and os.getppid() != self._parent:
-                        break  # the server that started us is gone
-                    continue
+                    stream = accept(0.5)
                 except OSError:
                     break
-                threading.Thread(target=self._serve_conn, args=(_Conn(sock),), daemon=True).start()
+                if stream is None:
+                    if self._parent_is_gone():
+                        break  # the server that started us is gone
+                    continue
+                threading.Thread(target=self._serve_conn, args=(_Conn(stream),), daemon=True).start()
         finally:
-            server.close()
+            self._close_listener()
             self._shutdown()
 
 

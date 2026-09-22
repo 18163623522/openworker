@@ -86,8 +86,9 @@ def test_copy_in_makes_a_private_home_and_the_tools_environment(tmp_path):
     sb = Path(copied.home)
     assert sb == run / "home"
     assert (sb / ".ssh" / "id_ed25519").read_text() == "PRIVATE KEY\n"
-    assert stat.S_IMODE((sb / ".ssh" / "id_ed25519").stat().st_mode) == 0o600
-    assert stat.S_IMODE((sb / ".ssh").stat().st_mode) == 0o700
+    if sys.platform != "win32":  # Windows has no mode bits; the copy's ACL is the Windows provider's job
+        assert stat.S_IMODE((sb / ".ssh" / "id_ed25519").stat().st_mode) == 0o600
+        assert stat.S_IMODE((sb / ".ssh").stat().st_mode) == 0o700
     assert (sb / ".gitconfig").exists()  # git's settings always come along
     assert not (sb / "Documents").exists()  # nothing that was not granted
     config = (sb / ".ssh" / "config").read_text()
@@ -207,6 +208,7 @@ def test_ssh_and_gh_copies_work_inside_seatbelt_and_ssh_goes_through_the_proxy(t
     assert not Path(provider.copied.home).exists()  # the copies died with the sandbox
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the Seatbelt provider keeps its folder under /tmp")
 def test_a_failed_creation_leaves_no_copied_credential_behind(tmp_path, monkeypatch):
     from coworker.sandbox.providers import seatbelt
 
