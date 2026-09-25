@@ -367,6 +367,15 @@ class Daemon:
                     return fsops.search(path, str(params.get("pattern") or ""), **_pick(params, "max_matches", "ignore_case"))
             except fsops.FsError as exc:
                 raise P.RunnerError(P.FS_ERROR, str(exc)) from exc
+        if method == "net.probe":
+            # Can this sandbox open a TCP connection to host:port? A provider proves its
+            # network wall with it before the session starts (the Windows loopback filters).
+            host, port = str(params.get("host") or "127.0.0.1"), int(params.get("port") or 0)
+            try:
+                socket.create_connection((host, port), timeout=float(params.get("timeout") or 5)).close()
+            except OSError as exc:
+                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {"ok": True}
         if method == "runner.shutdown":
             self._stop.set()
             return {"stopping": True}

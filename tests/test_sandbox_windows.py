@@ -24,13 +24,13 @@ def _has_setup() -> bool:
         return False
     from coworker.sandbox.providers import windows_setup
 
-    return windows_setup.account() is not None
+    return windows_setup.account("open") is not None and windows_setup.account("closed") is not None
 
 
 full = pytest.mark.skipif(not _has_setup(), reason="needs `openworker machine sandbox setup` on this machine")
 
 
-def _open(tmp_path, *, mode, extra_roots=()):
+def _open(tmp_path, *, mode, extra_roots=(), network=False, profile="strict"):
     from coworker.sandbox.providers.windows import WindowsProvider
 
     project = tmp_path / "project"
@@ -38,7 +38,7 @@ def _open(tmp_path, *, mode, extra_roots=()):
     (project / "a.txt").write_text("hello\n")
     zipapp = build_runner_zipapp(tmp_path / "dist")
     roots = [{"path": str(project), "writable": True}, *extra_roots]
-    provider = WindowsProvider(roots=roots, cwd=project, runner_path=zipapp, network=False, force_mode=mode)
+    provider = WindowsProvider(roots=roots, cwd=project, runner_path=zipapp, network=network, profile=profile, force_mode=mode)
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 60
     return ws, provider, project
@@ -97,12 +97,14 @@ def test_a_session_workspace_goes_through_the_registry(tmp_path, monkeypatch):
     from coworker.sandbox.workspace import open_workspace
 
     monkeypatch.setenv("OPENWORKER_SANDBOX_PROVIDER", "windows")
+    expected = "full" if _has_setup() else "partial"  # the default rule: full mode once setup has run
     ws = open_workspace(cwd=tmp_path, session_id="s-win", agent="cowork")
     try:
-        assert ws.describe()["provider"] == "windows" and ws.describe()["enforcement"] == "partial"
+        assert ws.describe()["provider"] == "windows" and ws.describe()["enforcement"] == expected
         assert ws.executor.run("echo via-sandbox")["output"].strip() == "via-sandbox"
         rows = SandboxRegistry().list()
-        assert [r["session_id"] for r in rows] == ["s-win"] and rows[0]["enforcement"] == "partial"
+        assert [r["session_id"] for r in rows] == ["s-win"] and rows[0]["enforcement"] == expected
+        assert rows[0]["profile"] == "open"  # the Windows default
     finally:
         ws.close()
     assert SandboxRegistry().list() == []
@@ -160,7 +162,7 @@ def test_a_granted_ssh_key_reaches_github_through_the_proxy(tmp_path):
         said = _ssh_probe(ws)
         assert "Permission denied (publickey)" in said, said
         inside = ws.executor.run("Join-Path $env:USERPROFILE '.ssh'")["output"].strip()
-        assert inside.lower().startswith(r"c:\users\openworkersandbox")
+        assert inside.lower().startswith(r"c:\users\owsandboxclosednet")
     finally:
         ws.close()
 
@@ -225,21 +227,26 @@ def test_full_mode_removes_the_copies_when_the_sandbox_ends(tmp_path):
 
 
 @pytest.mark.skipif(os.environ.get("OPENWORKER_TEST_WINDOWS_SETUP") != "1", reason="changes the machine; OPENWORKER_TEST_WINDOWS_SETUP=1 to run")
-def test_setup_creates_the_hidden_account_and_status_reports_it():
+def test_setup_creates_the_two_hidden_accounts_and_status_reports_it():
     import subprocess
 
-    from coworker.sandbox import setup_cmd
+    from coworker.sandbox import setup_cmd, windows_wfp
     from coworker.sandbox.providers import windows_setup
 
     said: list[str] = []
     assert setup_cmd.setup(ask=lambda q: True, print_fn=said.append) == 0, "\n".join(said)
-    name, sid, password = windows_setup.account()
-    assert name == windows_setup.ACCOUNT and sid.startswith("S-1-5-21-") and len(password) > 40
-    users = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-LocalUser {name}).Enabled"], capture_output=True, text=True).stdout
-    assert "True" in users
+    for kind in ("open", "closed"):
+        name, sid, password = windows_setup.account(kind)
+        assert name == windows_setup.ACCOUNTS[kind] and sid.startswith("S-1-5-21-") and len(password) > 40
+        users = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-LocalUser {name}).Enabled"], capture_output=True, text=True).stdout
+        assert "True" in users
+    for legacy in windows_setup.LEGACY_ACCOUNTS:  # the first build's account is gone
+        gone = subprocess.run(["powershell", "-NoProfile", "-Command", f"Get-LocalUser {legacy} -ErrorAction SilentlyContinue; 'end'"], capture_output=True, text=True).stdout
+        assert legacy not in gone
     rule = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-NetFirewallRule -DisplayName '{windows_setup.FIREWALL_RULE}').Enabled"], capture_output=True, text=True).stdout
     assert "True" in rule
-    assert any("setup has run" in line for line in said)
+    assert windows_setup.filters_recorded() and windows_wfp.present() in (True, None)
+    assert any("setup has run" in line for line in said) and all("[--]" not in line for line in said if "Windows" not in line and "OpenShell" not in line)
 
 
 @full
@@ -251,7 +258,7 @@ def test_full_mode_hides_the_profile_and_gives_the_sessions_folders(tmp_path):
     try:
         assert ws.describe()["mode"] == "full"
         who = ws.executor.run("$env:USERNAME")["output"].strip()
-        assert who.lower() == "openworkersandbox"
+        assert who.lower() == "owsandboxclosednet"
         assert "made" in ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")["output"]
         assert "read me" in ws.executor.run(f"Get-Content '{reference / 'ref.txt'}'")["output"]
         assert ws.executor.run(f"Set-Content -Path '{reference / 'no.txt'}' -Value x")["exit_code"] != 0
@@ -290,5 +297,31 @@ def test_full_mode_blocks_the_network_except_the_proxy(tmp_path):
         assert "200" in via["output"], via["output"]
         refused = ws.executor.run("curl.exe -sS --ssl-revoke-best-effort -m 30 -o NUL -w '%{http_code}' https://example.com")
         assert "403" in refused["output"], refused["output"]
+        # loopback: the proxy's port range and nothing else (the WFP filters from setup)
+        from coworker.sandbox import netproxy
+
+        assert provider._proxy is not None and provider._proxy.port in netproxy.WINDOWS_PORTS
+        assert ws.client.call("net.probe", {"host": "127.0.0.1", "port": provider._proxy.port}, timeout=15)["ok"]
+        other = ws.client.call("net.probe", {"host": "127.0.0.1", "port": 22}, timeout=15)  # sshd listens on the VM
+        assert not other["ok"], other
+        assert ws.describe()["enforcement"] == "full"
+    finally:
+        ws.close()
+
+
+@full
+def test_the_open_profile_runs_as_the_open_account_with_the_network_open(tmp_path):
+    ws, provider, project = _open(tmp_path, mode="full", network=True, profile="open")
+    ws.executor.default_timeout = 90
+    try:
+        assert provider.kind == "open" and provider._proxy is None
+        who = ws.executor.run("$env:USERNAME")["output"].strip()
+        assert who.lower() == "owsandboxopennet"
+        direct = ws.executor.run("curl.exe -sS --ssl-revoke-best-effort -m 20 -o NUL -w '%{http_code}' https://example.com")
+        assert "200" in direct["output"], direct["output"]
+        assert ws.client.call("net.probe", {"host": "127.0.0.1", "port": 22}, timeout=15)["ok"]  # any local port
+        listing = ws.executor.run(f"Get-ChildItem '{os.path.expanduser('~')}'")
+        assert listing["exit_code"] != 0  # the files are still the wall
+        assert ws.describe()["enforcement"] == "full" and "open" in ws.describe()["reason"]
     finally:
         ws.close()

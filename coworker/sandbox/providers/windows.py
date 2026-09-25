@@ -3,17 +3,19 @@
 Same runner, same protocol. Two modes, chosen by whether `openworker machine sandbox
 setup` has run (windows_setup.py):
 
-FULL (after setup): the daemon is logged on as the hidden local account
-`OpenWorkerSandbox` (CreateProcessWithLogonW, the secondary logon service; no privilege
-needed). Windows keeps that account out of the person's profile: `.ssh`, `.aws`, documents,
-OpenWorker's own state and keys cannot be read. The session's folders get one inheritable
-entry each for the account (Modify for writable, Read for read-only); the sandbox's private
-folder lives under `C:\\ProgramData\\OpenWorker\\sandbox\\sandboxes`. A firewall rule from
-setup blocks every outbound connection for the account, so the internet is reachable only
-through our allow-list proxy on loopback. Windows Firewall does not filter loopback, so
-other local ports stay reachable until the WFP filters are built; `describe()` says so and
-reports `partial` until then. Folders outside the profile (`C:\\work`) are readable by any
-local account by default (spike finding A); that too is stated, not hidden.
+FULL (after setup): the daemon is logged on as a hidden local account
+(CreateProcessWithLogonW, the secondary logon service; no privilege needed), chosen by the
+network profile: `OWSandboxClosedNet` for the allow-list profiles, `OWSandboxOpenNet` for
+`open` (ruling 3d.2). Windows keeps both out of the person's profile: `.ssh`, `.aws`,
+documents, OpenWorker's own state and keys cannot be read. The session's folders get one
+inheritable entry each for the account (Modify for writable, Read for read-only); the
+sandbox's private folder lives under `C:\\ProgramData\\OpenWorker\\sandbox\\sandboxes`. For the
+closed account a firewall rule from setup blocks every outbound connection and WFP filters
+close loopback except the proxy's port range (netproxy.WINDOWS_PORTS), so the internet is
+reachable only through our allow-list proxy; `verify()` proves both from inside before the
+session starts. The open account has no rules: any host, any local port, files still
+confined. Folders outside the profile (`C:\\work`) are readable by any local account by
+default (spike finding A); that is stated, not hidden (ruling 3d.5).
 
 SAME-USER (no setup): the daemon runs as the current user under a write-restricted token
 whose restricting SID is a made-up session SID; writes are allowed only where that SID has
@@ -56,13 +58,12 @@ from .seatbelt import _CACHE_VARIABLES, clean_environment
 FULL, PARTIAL = "full", "partial"
 _EVERYONE_WRITABLE = ("the drive root (new folders only)", r"C:\Users\Public", r"C:\Windows\Temp")
 _PARTIAL_REASON = (
-    "Windows write-restricted token: writes limited to the session's folders; reads and the network are NOT limited"
-    " (run `openworker machine sandbox setup` for the full sandbox)"
+    "Windows write-restricted token (setup not run): writes limited to the session's folders; reads and the network are"
+    " NOT limited (run `openworker machine sandbox setup` for the full sandbox)"
 )
 _FULL_REASON = (
     "Windows sandbox account: the user's profile (keys, documents, OpenWorker's state) is out of reach; files limited to"
-    " the session's folders plus what any local account may read outside profiles; outbound network blocked except the"
-    " allow-list proxy; other local ports still reachable (loopback filters not built yet)"
+    " the session's folders plus what any local account may read outside profiles"
 )
 
 
@@ -83,8 +84,8 @@ def preflight() -> None:
 
 
 def mode() -> str:
-    """`full` when setup has run and this user can read the account's credential."""
-    return FULL if windows_setup.account() is not None else PARTIAL
+    """`full` when setup has run and this user can read the accounts' credentials."""
+    return FULL if windows_setup.account(windows_setup.OPEN) and windows_setup.account(windows_setup.CLOSED) else PARTIAL
 
 
 class WindowsProvider:
@@ -116,9 +117,12 @@ class WindowsProvider:
         self._relay_silence = relay_silence_seconds
         self.sandbox = f"sb-{uuid.uuid4().hex[:12]}"
         self.mode = force_mode or mode()
-        self._account = windows_setup.account() if self.mode == FULL else None
+        self.open_network = network and network_profiles.is_open(self.profile)
+        # The account is the network mode: closed (allow list through the proxy) or open.
+        self.kind = windows_setup.OPEN if self.open_network else windows_setup.CLOSED
+        self._account = windows_setup.account(self.kind) if self.mode == FULL else None
         if self.mode == FULL and self._account is None:
-            raise WindowsUnavailable("the full Windows sandbox needs `openworker machine sandbox setup` first")
+            raise WindowsUnavailable("the full Windows sandbox needs `openworker machine sandbox setup` first (or again: the accounts changed)")
         # Who the entries and the pipe name: the hidden account, or the made-up session SID.
         self.session_sid = self._account[1] if self._account else winsec.session_sid()
         if self.mode == FULL:
@@ -138,15 +142,25 @@ class WindowsProvider:
     # -- what it is ---------------------------------------------------------------------
     def describe(self) -> dict[str, Any]:
         if self.mode == FULL:
-            network = f"the '{self.profile}' profile through the allow-list proxy; the rest is blocked by the firewall" if self.network else "blocked"
+            if not self.network:
+                network = "blocked"
+            elif self.open_network:
+                network = "open (any host, any local port; the 'open' profile)"
+            else:
+                network = f"the '{self.profile}' profile through the allow-list proxy; the rest is blocked by the firewall and the loopback filters"
             reason = f"{_FULL_REASON}. Network: {network}"
         else:
-            network = f"advisory: the '{self.profile}' profile through the proxy variables only" if self.network else "the user's own"
+            if not self.network:
+                network = "the user's own"
+            elif self.open_network:
+                network = "the user's own (the 'open' profile)"
+            else:
+                network = f"advisory: the '{self.profile}' profile through the proxy variables only"
             reason = f"{_PARTIAL_REASON}. Network: {network}. Still writable by anyone: {', '.join(_EVERYONE_WRITABLE)}"
         return {
             "provider": self.name,
             "sandbox": self.sandbox,
-            "enforcement": PARTIAL,  # `full` once the loopback filters exist; the mode says how far it goes
+            "enforcement": FULL if self.mode == FULL else PARTIAL,
             "mode": self.mode,
             "reason": reason,
             "credentials": self.copied.describe() if self.copied is not None else [],
@@ -166,7 +180,7 @@ class WindowsProvider:
         from .. import winsec
 
         hosts = sorted({h for g in self.grants for h in g.hosts})
-        if self.network:
+        if self.network and not self.open_network:
             self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
         for root in self.roots:
             self._grant(root["path"], "write" if root["writable"] else "read")
@@ -286,6 +300,7 @@ class WindowsProvider:
             try:
                 client.call("fs.list", {"path": home, "limit": 1}, timeout=15)
             except RunnerError:
+                self._verify_loopback(client)
                 return
             raise WindowsUnavailable("the sandbox did not take effect: the home folder can be listed from inside")
         probe = os.path.join(home, f"owr-verify-{uuid.uuid4().hex[:8]}.txt")
@@ -298,6 +313,33 @@ class WindowsProvider:
         except OSError:
             pass
         raise WindowsUnavailable("the sandbox did not take effect: a file could be written into the home folder from inside")
+
+    def _verify_loopback(self, client: Any) -> None:
+        """The closed account may reach the proxy on loopback and nothing else there
+        (ruling 3d.2). A listener of ours outside the proxy's range must be unreachable;
+        the proxy must be reachable. Anything else means setup is stale: refuse."""
+        if self.open_network or not self.network or self._proxy is None:
+            return
+        import socket
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", 0))
+            probe.listen(1)
+            port = probe.getsockname()[1]
+            if port in netproxy.WINDOWS_PORTS:
+                return  # the kernel picked a port inside the proxy's range; nothing to prove
+            reached = client.call("net.probe", {"host": "127.0.0.1", "port": port}, timeout=15)
+        finally:
+            probe.close()
+        if reached.get("ok"):
+            raise WindowsUnavailable(
+                "the sandbox did not take effect: a local port outside the proxy's range can be reached from inside"
+                " (the loopback filters are missing; run `openworker machine sandbox setup` again)"
+            )
+        via = client.call("net.probe", {"host": "127.0.0.1", "port": self._proxy.port}, timeout=15)
+        if not via.get("ok"):
+            raise WindowsUnavailable(f"the sandbox cannot reach the allow-list proxy on port {self._proxy.port}: {via.get('error')}")
 
     # -- the entries ----------------------------------------------------------------------
     def _grant(self, folder: str, kind: str) -> None:

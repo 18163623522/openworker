@@ -100,6 +100,10 @@ def maybe_run_runner(argv: list[str]) -> bool:
     """`openworker-server sandbox-runner <serve|attach> ...`: run the runner and exit.
     Returns False when argv is anything else. Imports only the runner package, so the
     daemon inside a sandbox stays small and starts fast."""
+    if argv[:1] == ["sandbox-wfp"]:  # the elevated setup step on Windows (windows_setup.py)
+        from . import windows_wfp
+
+        raise SystemExit(windows_wfp.main(argv[1:]))
     if argv[:1] != ["sandbox-runner"]:
         return False
     from .runner.__main__ import main as runner_main
