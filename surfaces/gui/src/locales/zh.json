@@ -2249,6 +2249,8 @@
       "profile_strict_desc": "GitHub、GitLab 和软件包源（PyPI、npm、crates、Go）。",
       "profile_standard": "标准",
       "profile_standard_desc": "严格模式加上搜索 API。",
+      "profile_open": "开放",
+      "profile_open_desc": "任意主机。文件仍然隔离。Windows 上的默认值。",
       "network_help": "下方共享的凭据会加入其工具所需的主机。",
       "credentials": "可提供给同事的凭据",
       "add": "添加文件或文件夹…",

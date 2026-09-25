@@ -846,7 +846,9 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
               </span>
               <span className="block text-meta text-muted">
                 {c.does ? c.does : shipped(c.name, "does")}{" "}
-                {c.hosts && c.hosts.length ? <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span> : null}
+                {c.hosts && c.hosts.length && cfg.network_profile !== "open" ? (
+                  <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span>
+                ) : null}
               </span>
             </span>
             <span className="text-meta text-muted shrink-0 whitespace-nowrap">

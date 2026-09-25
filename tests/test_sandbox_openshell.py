@@ -48,6 +48,8 @@ def test_network_profiles():
     assert {"github.com", "pypi.org", "registry.npmjs.org"} <= hosts(strict)
     assert "api.tavily.com" not in hosts(strict) and "api.tavily.com" in hosts(standard)
     assert all(entry["binaries"] for entry in strict.values())  # OpenShell requires the field
+    opened = policy.render(ROOTS, profile="open")["network_policies"]
+    assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
     with pytest.raises(ValueError):
         policy.render(ROOTS, profile="wide-open")
 

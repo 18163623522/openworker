@@ -112,10 +112,12 @@ def render(
     read_only: Sequence[str] = (),
     proxy_port: Optional[int] = None,
     home: Optional[str] = None,
+    open_network: bool = False,
 ) -> str:
     """`roots`: [{"path": absolute path, "writable": bool}]. `runtime_dir`: this sandbox's
     own folder (socket and temporary files). `read_only`: more paths to read, e.g. the
-    runner file and the Python that runs it."""
+    runner file and the Python that runs it. `open_network`: the `open` profile, any host
+    and any local port, no proxy; the files stay confined."""
     writable = [real(r["path"]) for r in roots if r.get("writable")]
     readable = [real(r["path"]) for r in roots if not r.get("writable")]
     readable += [real(p) for p in read_only] + home_read_only(home)
@@ -148,7 +150,9 @@ def render(
         f"(allow network-bind network-inbound network-outbound (local unix-socket (subpath {_quote(runtime)})))",
         f"(allow network-bind network-inbound network-outbound (remote unix-socket (subpath {_quote(runtime)})))",
     ]
-    if proxy_port:
+    if open_network:
+        lines += ["; the network: open (the 'open' profile); the files above are still the wall", "(allow network*)"]
+    elif proxy_port:
         lines += [
             "; the network: only the allow-list proxy on this machine",
             f'(allow network-outbound (remote tcp "localhost:{int(proxy_port)}"))',

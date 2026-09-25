@@ -25,7 +25,10 @@ def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     native = "windows" if sys.platform == "win32" else "seatbelt"  # the operating system's own sandbox
     assert [p["name"] for p in snap["providers"]] == ["direct", native, "openshell"]
     assert next(p for p in snap["providers"] if p["name"] == "direct")["usable"]
-    assert snap["network_profile"] == "strict" and [n["name"] for n in snap["network_profiles"]] == ["strict", "standard"]
+    from coworker.sandbox import network_profiles
+
+    assert snap["network_profile"] == network_profiles.default_profile()  # strict; `open` on Windows
+    assert [n["name"] for n in snap["network_profiles"]] == ["strict", "standard", "open"]
     assert [(e["name"], e["enabled"]) for e in snap["credentials"]] == [("ssh", False), ("gh", False), ("aws", False), ("kube", False)]
     assert snap["config_path"] == str(config_file)
 

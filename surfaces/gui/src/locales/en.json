@@ -2289,6 +2289,8 @@
       "profile_strict_desc": "GitHub, GitLab and the package registries (PyPI, npm, crates, Go).",
       "profile_standard": "Standard",
       "profile_standard_desc": "Strict plus the search APIs.",
+      "profile_open": "Open",
+      "profile_open_desc": "Any host. Files stay isolated. The default on Windows.",
       "network_help": "Shared credentials below add the hosts their tools need.",
       "credentials": "Credentials an agent may be given",
       "add": "Add a file or folder…",

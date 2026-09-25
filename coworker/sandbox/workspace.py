@@ -227,9 +227,9 @@ def open_workspace(
     from .credentials import granted
 
     grants = granted(credentials)
-    from .network_profiles import DEFAULT_PROFILE, check
+    from .network_profiles import check, default_profile
 
-    profile = check((network_profile or "").strip().lower() or DEFAULT_PROFILE)
+    profile = check((network_profile or "").strip().lower() or default_profile())
     if name == SEATBELT:
         from .providers.seatbelt import SeatbeltProvider
         from .registry import SandboxRegistry

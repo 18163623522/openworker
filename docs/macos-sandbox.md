@@ -31,7 +31,7 @@ Settings ▸ Sandbox ▸ "macOS sandbox", or in `config.toml`:
 
 ```toml
 sandbox_provider = "seatbelt"       # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "strict"  # or "standard"
+sandbox_network_profile = "strict"  # or "standard", or "open" (any host; files still confined)
 ```
 
 The setting is per machine; a project's own config cannot change it.
@@ -59,11 +59,12 @@ follow the proxy variables; a program that ignores them has no network at all.
 
 ## The network allow list
 
-Two profiles, shared with the OpenShell sandbox:
+Three profiles, shared with the OpenShell and Windows sandboxes:
 
 - **strict** (default): GitHub, GitLab, and the package registries — PyPI, npm, crates.io,
   the Go proxy.
 - **standard**: strict plus the search APIs (Brave, Tavily, DuckDuckGo).
+- **open**: any host, no proxy. The files are still the wall.
 
 Credentials shared on purpose (below) add the hosts their tools need.
 

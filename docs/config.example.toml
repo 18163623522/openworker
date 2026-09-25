@@ -36,8 +36,9 @@ port = 8765
 # the default), "openshell" (one NVIDIA OpenShell container per agent) or "seatbelt"
 # (the sandbox built into macOS). See docs/openshell.md and docs/macos-sandbox.md.
 # sandbox_provider = "openshell"
-# Network allow list inside a sandbox: "strict" (code hosts and package registries) or
-# "standard" (plus the search APIs).
+# Network allow list inside a sandbox: "strict" (code hosts and package registries),
+# "standard" (plus the search APIs) or "open" (any host; the files are still confined).
+# The default is "strict", or "open" on Windows.
 # sandbox_network_profile = "strict"
 # Credentials an agent may be given, copied into the sandbox for the session and deleted
 # with it. All off unless enabled here or in Settings ▸ Sandbox.

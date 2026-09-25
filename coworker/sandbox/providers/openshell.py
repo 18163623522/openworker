@@ -121,7 +121,7 @@ class OpenShellProvider:
         return {
             "provider": self.name,
             "enforcement": "full",
-            "reason": f"OpenShell {PINNED_VERSION}: Landlock and seccomp on every process, network profile '{self.profile}', no keys inside",
+            "reason": f"OpenShell {PINNED_VERSION}: Landlock and seccomp on every process, network {'open (any host)' if self.profile == 'open' else 'profile ' + repr(self.profile)}, no keys inside",
             "sandbox": self.sandbox_name,
             "image": self.image,
             "credentials": self.copied.describe() if self.copied is not None else [],

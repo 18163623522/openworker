@@ -69,7 +69,7 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         "effective_provider": effective,
         "refused": refused,
         "providers": providers,
-        "network_profile": (cfg.sandbox_network_profile or network_profiles.DEFAULT_PROFILE),
+        "network_profile": (cfg.sandbox_network_profile or network_profiles.default_profile()),
         "network_profiles": [
             {"name": name, "hosts": network_profiles.hosts(name)} for name in network_profiles.PROFILES
         ],

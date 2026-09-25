@@ -157,6 +157,15 @@ def test_every_profile_has_hosts_and_an_unknown_one_is_refused():
         netproxy.AllowListProxy("wide-open")
 
 
+def test_the_open_profile_has_no_list_and_is_the_default_on_windows_only(tmp_path):
+    assert network_profiles.hosts("open") == [] and network_profiles.is_open("open")
+    assert network_profiles.default_profile("win32") == "open"
+    assert network_profiles.default_profile("darwin") == "strict" and network_profiles.default_profile("linux") == "strict"
+    # Seatbelt: the files stay confined, the network clause opens
+    text = seatbelt_profile.render([{"path": str(tmp_path), "writable": True}], runtime_dir=str(tmp_path), open_network=True, home=str(tmp_path))
+    assert "(allow network*)" in text and "localhost:" not in text and "(deny default)" in text
+
+
 # -- selection ------------------------------------------------------------------------
 def test_an_explicit_seatbelt_setting_refuses_when_it_cannot_be_used(monkeypatch):
     def broken() -> None:

@@ -78,7 +78,7 @@ The setting is per machine, in Settings ▸ Sandbox or in `config.toml`:
 
 ```toml
 sandbox_provider = "openshell"      # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "strict"  # or "standard"
+sandbox_network_profile = "strict"  # or "standard", or "open" (any host; files still confined)
 ```
 
 A project's own config cannot change it. When a machine is set to OpenShell and OpenShell
@@ -108,6 +108,7 @@ Two profiles:
 - **strict** (default): GitHub, GitLab, and the package registries — PyPI, npm, crates.io,
   the Go proxy.
 - **standard**: strict plus the search APIs (Brave, Tavily, DuckDuckGo).
+- **open**: any host, no allow list. The files are still the wall.
 
 OpenShell enforces the list in the container. Credentials shared on purpose (next
 section) add the hosts their tools need.
