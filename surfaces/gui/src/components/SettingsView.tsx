@@ -768,7 +768,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
     <section data-testid="sandbox-section">
       <PanelHead
         title={t("settingsx.sandbox.title")}
-        sub={machine ? t("settingsx.sandbox.sub_machine", { name: machine.name }) : t("settingsx.sandbox.sub")}
+        sub={machine ? t("settingsx.sandbox.sub_machine", { name: machine.name }) : cfg.platform === "win32" ? t("settingsx.sandbox.sub_windows") : t("settingsx.sandbox.sub")}
       />
       {error ? <div className="mb-3 text-meta text-danger">{error}</div> : null}
 
