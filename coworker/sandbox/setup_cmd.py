@@ -79,7 +79,10 @@ def windows_rows(print_fn: Callable[[str], None]) -> None:
 
     for what, ok, detail in windows_setup.checks():
         print_fn(f"  [{'ok' if ok else '--'}] {what}" + (f"  ({detail})" if detail and not ok else ""))
-    print_fn(f"       the Windows sandbox runs in its {windows.mode()} mode here; to use it: set `sandbox_provider = \"windows\"` in {app_config.global_config_path()}")
+    if app_config.load_config().sandbox_provider == "windows":
+        print_fn(f"       the Windows sandbox runs in its {windows.mode()} mode here, and this machine is set to use it")
+    else:
+        print_fn(f"       the Windows sandbox runs in its {windows.mode()} mode here; to use it: set `sandbox_provider = \"windows\"` in {app_config.global_config_path()}")
     print_fn("\nOpenShell on this machine:")
 
 
