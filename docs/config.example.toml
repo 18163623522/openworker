@@ -33,8 +33,8 @@ port = 8765
 
 # --- Sandbox (machine-level; a project's config cannot change it) ---------------------
 # Where a session's commands and file tools run: "direct" (in the OpenWorker process,
-# the default) or "openshell" (one NVIDIA OpenShell container per agent).
-# See docs/openshell.md.
+# the default), "openshell" (one NVIDIA OpenShell container per agent) or "seatbelt"
+# (the sandbox built into macOS). See docs/openshell.md and docs/macos-sandbox.md.
 # sandbox_provider = "openshell"
 # Network allow list inside a sandbox: "strict" (code hosts and package registries) or
 # "standard" (plus the search APIs).
