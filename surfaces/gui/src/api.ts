@@ -2097,6 +2097,14 @@ export interface SandboxCredentialEntry {
   does?: string;
   enabled: boolean;
 }
+export interface SandboxToolchainEntry {
+  name: string;
+  title?: string;
+  path: string;
+  enabled: boolean;
+  exists?: boolean; // on this machine
+  shipped?: boolean; // in the default list (cannot be removed, only switched off)
+}
 export interface SandboxSettings {
   platform: string;
   provider: string; // "" = the default rule
@@ -2106,6 +2114,7 @@ export interface SandboxSettings {
   network_profile: string;
   network_profiles: { name: string; hosts: string[] }[];
   credentials: SandboxCredentialEntry[];
+  toolchains: SandboxToolchainEntry[];
   config_path: string;
 }
 
@@ -2115,7 +2124,7 @@ export async function getSandboxSettings(machineId?: string | null): Promise<San
 }
 
 export async function setSandboxSettings(
-  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials">>,
+  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials" | "toolchains">>,
   machineId?: string | null,
 ): Promise<{ ok: boolean; error?: string } & Partial<SandboxSettings>> {
   const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox`, {

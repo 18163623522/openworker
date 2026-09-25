@@ -22,6 +22,10 @@ const snapshot = {
     { name: "ssh", path: "~/.ssh", hosts: ["github.com:22"], enabled: false },
     { name: "gh", path: "~/.config/gh", hosts: ["api.github.com:443"], enabled: true },
   ],
+  toolchains: [
+    { name: "nvm", title: "nvm (Node versions)", path: "~/.nvm", enabled: true, exists: true, shipped: true },
+    { name: "mytools", title: "My tools", path: "~/tools", enabled: true, exists: false, shipped: false },
+  ],
   config_path: "/Users/sam/.config/coworker/config.toml",
 };
 
@@ -102,6 +106,33 @@ describe("Settings ▸ Sandbox", () => {
       const calls = setSandboxSettings.mock.calls;
       const last = calls[calls.length - 1]?.[0];
       expect(last.credentials.map((c: any) => c.name)).toEqual(["gh", "npm-token"]);
+    });
+  });
+
+  it("switches a toolchain folder off and adds one, without the display-only fields", async () => {
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    expect(screen.getByText(/not on this machine/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("nvm (Node versions)"));
+    await waitFor(() =>
+      expect(setSandboxSettings).toHaveBeenLastCalledWith({
+        toolchains: [
+          { name: "nvm", title: "nvm (Node versions)", path: "~/.nvm", enabled: false },
+          { name: "mytools", title: "My tools", path: "~/tools", enabled: true },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByTestId("sandbox-toolchain-add"));
+    const editor = screen.getByTestId("sandbox-toolchain-editor");
+    const inputs = editor.querySelectorAll("input");
+    fireEvent.change(inputs[0], { target: { value: "Zig" } });
+    fireEvent.change(inputs[1], { target: { value: "~/.zig" } });
+    fireEvent.click(screen.getAllByText("Done")[0]);
+    await waitFor(() => {
+      const calls = setSandboxSettings.mock.calls;
+      const last = calls[calls.length - 1]?.[0];
+      expect(last.toolchains.map((c: any) => c.name)).toEqual(["nvm", "mytools", "zig"]);
+      expect(last.toolchains[2]).toEqual({ name: "zig", title: "Zig", path: "~/.zig", enabled: true });
     });
   });
 });

@@ -102,13 +102,17 @@ class WindowsProvider:
         relay_silence_seconds: Optional[float] = None,
         credentials: Sequence[creds.Grant] = (),
         force_mode: Optional[str] = None,
+        tool_dirs: Sequence[str] = (),
     ) -> None:
         """`credentials`: the grants (credentials.granted) to copy into the sandbox.
-        `force_mode`: tests only; `partial` on a machine where setup has run."""
+        `tool_dirs`: developer tool folders under the profile the account may read (the
+        full mode; the same-user mode reads them anyway). `force_mode`: tests only;
+        `partial` on a machine where setup has run."""
         from .. import winsec
 
         self.roots = _clean_roots(roots)
         self.grants = list(credentials)
+        self.tool_dirs = [os.path.realpath(p) for p in tool_dirs]
         self.copied: Optional[creds.CopiedCredentials] = None
         self.cwd = os.path.realpath(str(cwd))
         self.profile = network_profiles.check(profile)
@@ -185,6 +189,10 @@ class WindowsProvider:
         for root in self.roots:
             self._grant(root["path"], "write" if root["writable"] else "read")
         self._grant(self._dir, "write")
+        if self.mode == FULL:
+            for folder in self.tool_dirs:  # readable to the account, never writable
+                if os.path.isdir(folder):
+                    self._grant(folder, "read")
         self._desktop = winsec.Desktop(self.session_sid)
         log = os.path.join(self._dir, "daemon.log")
         if self.mode == FULL:
@@ -193,9 +201,15 @@ class WindowsProvider:
             # The runner file lives in the user's state folder, which the account cannot see.
             self._runner_inside = Path(self._dir) / self._runner.name
             shutil.copy2(self._runner, self._runner_inside)
-            env_args = [arg for k, v in self._environment(full=True).items() for arg in ("--env", f"{k}={v}")]
+            # The environment goes through a file in the private folder (the account reads
+            # it): CreateProcessWithLogonW allows 1024 characters of command line, and PATH
+            # alone can be longer than that.
+            import json
+
+            env_file = os.path.join(self._dir, "env.json")
+            Path(env_file).write_text(json.dumps(self._environment(full=True)), encoding="utf-8")
             serve = serve_arguments(self.socket_path, self._dir, also_sids=[sid])
-            argv = [*runner_command(self._runner_inside), "serve", *serve, *env_args, "--cwd", self.cwd, "--exit-with-parent"]
+            argv = [*runner_command(self._runner_inside), "serve", *serve, "--env-file", env_file, "--cwd", self.cwd, "--exit-with-parent"]
             self._daemon = winsec.spawn_as_account(argv, account=name, password=password, desktop=self._desktop, cwd=self.cwd, stderr_path=log)
         else:
             self._runner_inside = self._runner
@@ -226,6 +240,9 @@ class WindowsProvider:
         into the private folder. Full mode: only what the account's own environment lacks
         (the proxy), because the account has a profile, temp and caches of its own."""
         env: dict[str, str] = {} if full else clean_environment()
+        if full:
+            # The account's own PATH knows nothing of the person's tools; the person's does.
+            env["PATH"] = os.environ.get("PATH", "")
         if not full:
             temp = os.path.join(self._dir, "tmp")
             os.makedirs(temp, exist_ok=True)
@@ -366,6 +383,8 @@ class WindowsProvider:
         one is closed at once."""
         self.roots = _clean_roots(roots)
         wanted = [(r["path"], "write" if r["writable"] else "read") for r in self.roots] + [(self._dir, "write")]
+        if self.mode == FULL:
+            wanted += [(folder, "read") for folder in self.tool_dirs if os.path.isdir(folder)]
         for entry in list(self._granted):
             if entry not in wanted:
                 self._revoke(*entry)

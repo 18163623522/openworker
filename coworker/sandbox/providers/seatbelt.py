@@ -87,6 +87,7 @@ class SeatbeltProvider:
         roots: Sequence[dict[str, Any]],
         cwd: str | Path,
         profile: str = network_profiles.DEFAULT_PROFILE,
+        tool_dirs: Optional[Sequence[str]] = None,
         network: bool = True,
         runner_path: Optional[Path] = None,
         relay_silence_seconds: Optional[float] = None,
@@ -98,6 +99,7 @@ class SeatbeltProvider:
         self.copied: Optional[creds.CopiedCredentials] = None
         self.cwd = seatbelt_profile.real(cwd)
         self.profile = network_profiles.check(profile)
+        self.tool_dirs = list(tool_dirs) if tool_dirs is not None else None  # None: the shipped list
         self.network = network
         self._runner = Path(runner_path) if runner_path is not None else build_runner_zipapp()
         self._relay_silence = relay_silence_seconds
@@ -133,6 +135,7 @@ class SeatbeltProvider:
             read_only=[str(self._runner), *read_paths(), str(toolchain.bin_dir())],
             proxy_port=self._proxy.port if self._proxy is not None else None,
             open_network=self.network and network_profiles.is_open(self.profile),
+            tool_dirs=self.tool_dirs,
         )
 
     def _environment(self) -> dict[str, str]:

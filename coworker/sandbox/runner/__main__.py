@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--dir", default=None, help="this runner's own folder, removed at shutdown (default: the socket's folder)")
     serve.add_argument("--allow-sid", action="append", default=[], help="Windows: an account that may connect to the pipe (repeatable)")
     serve.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="set a variable for the shells (repeatable; for a provider that cannot pass an environment)")
+    serve.add_argument("--env-file", default=None, help="a JSON object of variables for the shells (a command line that must stay short: Windows' logon call allows 1024 characters)")
     attach = sub.add_parser("attach", help="connect this process's stdin/stdout to the daemon")
     attach.add_argument("--socket", required=True)
     attach.add_argument("--silence-seconds", type=float, default=None, help="leave after this much client silence (0 = never)")
@@ -39,6 +40,12 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_connect(args.proxy_host, args.proxy_port, args.host, args.port)
     if args.command == "serve":
+        if args.env_file:
+            import json
+
+            with open(args.env_file, encoding="utf-8") as fh:
+                for name, value in json.load(fh).items():
+                    os.environ[str(name)] = str(value)
         for item in args.env:
             name, sep, value = item.partition("=")
             if sep and name:

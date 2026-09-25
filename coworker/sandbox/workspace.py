@@ -208,10 +208,13 @@ def open_workspace(
     agent: str = "",
     credentials: Optional[list] = None,
     network_profile: Optional[str] = None,
+    toolchains: Optional[list] = None,
 ) -> Workspace:
     """The session's workspace for the configured provider. `credentials`: the machine's
     `sandbox_credentials` setting; the enabled entries are copied into the sandbox
     (design doc, section 11b). Ignored in `direct` mode, where nothing is hidden anyway. `direct` unless told otherwise.
+    `toolchains`: the machine's `sandbox_toolchains` setting; the switched-on folders that
+    exist are readable inside (Seatbelt, Windows full mode).
     `roots`: the session's RootDir list (primary first); without it the workspace folder is
     the only, writable, root. `session_id` and `agent` say who the sandbox is for; they go
     into the registry and onto the sandbox as a label."""
@@ -230,12 +233,15 @@ def open_workspace(
     from .network_profiles import check, default_profile
 
     profile = check((network_profile or "").strip().lower() or default_profile())
+    from . import toolchains as toolchain_list
+
+    tool_dirs = toolchain_list.granted(toolchains)
     if name == SEATBELT:
         from .providers.seatbelt import SeatbeltProvider
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile),
+            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
@@ -260,7 +266,7 @@ def open_workspace(
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile),
+            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,

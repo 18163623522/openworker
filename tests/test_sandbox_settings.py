@@ -31,6 +31,29 @@ def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     assert [n["name"] for n in snap["network_profiles"]] == ["strict", "standard", "open"]
     assert [(e["name"], e["enabled"]) for e in snap["credentials"]] == [("ssh", False), ("gh", False), ("aws", False), ("kube", False)]
     assert snap["config_path"] == str(config_file)
+    from coworker.sandbox import toolchains
+
+    assert [e["name"] for e in snap["toolchains"]] == [e["name"] for e in toolchains.defaults()]
+    assert all(e["shipped"] and e["enabled"] and "exists" in e for e in snap["toolchains"])
+
+
+def test_toolchain_switches_and_additions_are_written_slim(config_file):
+    from coworker.sandbox import toolchains
+
+    rows = [dict(e) for e in toolchains.defaults()]
+    if rows:
+        rows[0]["enabled"] = False
+    rows.append({"name": "mytools", "title": "My tools", "path": "~/tools", "enabled": True})
+    out = settings.update({"toolchains": rows})
+    assert out["ok"], out
+    text = config_file.read_text()
+    assert text.count("[[sandbox_toolchains]]") == (2 if rows[:-1] else 1)  # one switch, one addition; nothing else
+    assert 'name = "mytools"' in text and 'path = "~/tools"' in text
+    by = {e["name"]: e for e in settings.snapshot()["toolchains"]}
+    assert by["mytools"]["enabled"] and not by["mytools"]["shipped"]
+    if rows[:-1]:
+        assert by[rows[0]["name"]]["enabled"] is False
+    assert settings.update({"toolchains": [{"name": "x", "path": "relative/path"}]})["ok"] is False
 
 
 def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):

@@ -310,6 +310,33 @@ def test_full_mode_blocks_the_network_except_the_proxy(tmp_path):
 
 
 @full
+def test_full_mode_reads_the_toolchain_folders_it_is_given(tmp_path):
+    """A folder under the person's profile (invisible to the account) becomes readable,
+    never writable, when it is on the machine's toolchain list."""
+    from coworker.sandbox.providers.windows import WindowsProvider
+
+    tools = tmp_path / "AppData" / "Roaming" / "npm"  # tmp_path is under the Administrator's profile
+    tools.mkdir(parents=True)
+    (tools / "tool.cmd").write_text("@echo tool ran\r\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    zipapp = build_runner_zipapp(tmp_path / "dist")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, force_mode="full", tool_dirs=[str(tools)])
+    ws = RunnerWorkspace(provider, cwd=project)
+    ws.executor.default_timeout = 60
+    try:
+        assert "tool ran" in ws.executor.run(f"& '{tools / 'tool.cmd'}'")["output"]
+        assert ws.executor.run(f"Set-Content -Path '{tools / 'no.txt'}' -Value x")["exit_code"] != 0  # read only
+        assert ws.executor.run(f"Get-ChildItem '{tmp_path}'")["exit_code"] != 0  # the folder beside it stays hidden
+        assert "Administrator" in ws.executor.run("$env:PATH")["output"]  # the person's PATH came along
+    finally:
+        ws.close()
+    from coworker.sandbox import winsec
+
+    assert not winsec.entries_for(str(tools), provider.session_sid)
+
+
+@full
 def test_the_open_profile_runs_as_the_open_account_with_the_network_open(tmp_path):
     ws, provider, project = _open(tmp_path, mode="full", network=True, profile="open")
     ws.executor.default_timeout = 90

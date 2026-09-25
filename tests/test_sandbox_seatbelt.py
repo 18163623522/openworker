@@ -166,6 +166,18 @@ def test_the_open_profile_has_no_list_and_is_the_default_on_windows_only(tmp_pat
     assert "(allow network*)" in text and "localhost:" not in text and "(deny default)" in text
 
 
+@posix_paths
+def test_profile_reads_the_machines_toolchain_list_when_given(tmp_path):
+    home = tmp_path / "home"
+    (home / "tools").mkdir(parents=True)
+    (home / ".nvm").mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    text = seatbelt_profile.render([{"path": str(project), "writable": True}], runtime_dir=str(tmp_path / "rt"), home=str(home), tool_dirs=[str(home / "tools")])
+    assert seatbelt_profile.real(str(home / "tools")) in text
+    assert seatbelt_profile.real(str(home / ".nvm")) not in text  # the list given replaces the shipped one
+
+
 # -- selection ------------------------------------------------------------------------
 def test_an_explicit_seatbelt_setting_refuses_when_it_cannot_be_used(monkeypatch):
     def broken() -> None:

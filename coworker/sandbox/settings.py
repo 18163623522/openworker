@@ -9,7 +9,7 @@ import sys
 from typing import Any, Optional
 
 from .. import config as app_config
-from . import credentials, network_profiles
+from . import credentials, network_profiles, toolchains
 from .workspace import DIRECT, OPENSHELL, SEATBELT, WINDOWS
 
 
@@ -74,6 +74,7 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
             {"name": name, "hosts": network_profiles.hosts(name)} for name in network_profiles.PROFILES
         ],
         "credentials": _for_display(credentials.entries(cfg.sandbox_credentials)),
+        "toolchains": toolchains.for_display(cfg.sandbox_toolchains),
         "config_path": str(app_config.global_config_path()),
     }
 
@@ -147,6 +148,33 @@ def update(body: dict[str, Any]) -> dict[str, Any]:
             if len(diff) > 1:
                 slim.append(diff)
         app_config.set_global_tables("sandbox_credentials", slim)
+    if "toolchains" in body:
+        rows = body.get("toolchains")
+        if not isinstance(rows, list):
+            return {"ok": False, "error": "toolchains must be a list"}
+        cleaned = []
+        for raw in rows:
+            if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
+                return {"ok": False, "error": "every toolchain entry needs a name"}
+            path = str(raw.get("path") or "").strip()
+            if path and not (path.startswith("~/") or path.startswith("/") or path[1:3] == ":\\" or path[1:3] == ":/"):
+                return {"ok": False, "error": f"the path for '{raw['name']}' must start with ~/ or be absolute"}
+            row = {"name": str(raw["name"]).strip(), "enabled": bool(raw.get("enabled"))}
+            for key in ("title", "path"):
+                if raw.get(key) is not None:
+                    row[key] = str(raw[key])
+            cleaned.append(row)
+        shipped = {e["name"]: e for e in toolchains.defaults()}
+        slim = []
+        for row in cleaned:
+            base = shipped.get(row["name"])
+            if base is None:
+                slim.append(row)
+                continue
+            diff = {k: v for k, v in row.items() if k == "name" or base.get(k) != v}
+            if len(diff) > 1:
+                slim.append(diff)
+        app_config.set_global_tables("sandbox_toolchains", slim)
     return {"ok": True, **snapshot()}
 
 

@@ -151,13 +151,17 @@ Read only:
   account read those by default, and so can the sandbox. Keep what the agent must not see
   under your profile.
 
+Read only, from your profile, so the agent can run your tools:
+
+- developer tools installed per user, from a list you control in Settings ▸ Sandbox:
+  nvm for Windows and npm's global folder (`AppData\Roaming`), pyenv-win, per-user
+  Python installs, Scoop, Cargo, rustup, Go, pipx and uv. Each has a switch; you can add
+  a folder. The session also inherits your `PATH`, so those tools resolve. Nothing under
+  them is writable.
+
 Not readable:
 
-- your profile, `C:\Users\<you>`, and every other account's profile. This includes
-  developer tools installed per user (nvm for Windows, pyenv-win, Scoop, npm's global
-  folder, Cargo). A read-only list of those, with switches in Settings, is the next
-  change; until then, install the tools the agent needs machine-wide, or grant the folder
-  to the session.
+- the rest of your profile, `C:\Users\<you>`, and every other account's profile.
 
 ## Sharing a credential on purpose
 
@@ -211,6 +215,6 @@ expire on their own limit what that is worth.
 |---|---|---|---|
 | Mechanism | a second local account, permissions, firewall and kernel filters | the Seatbelt profile built into macOS | a Linux container with Landlock and seccomp |
 | Install | one administrator prompt | nothing | OpenShell and Docker |
-| Files | session folders; profile invisible; outside-profile folders readable | session folders; home invisible | session folders; nothing else |
+| Files | session folders; profile invisible except the tool list; outside-profile folders readable | session folders; home invisible except the tool list | session folders; nothing else |
 | Network | open (default), or the allow list through the proxy | the allow list through the proxy, or open | the allow list in the policy, or open |
 | Default | open | strict | strict |

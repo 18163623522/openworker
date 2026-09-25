@@ -36,6 +36,7 @@ import {
   type ModelSettings,
   type PdfSettings,
   type SandboxCredentialEntry,
+  type SandboxToolchainEntry,
   type SandboxSettings,
   type WorkspaceCommandTrust,
 } from "../api";
@@ -729,6 +730,9 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
   const [cfg, setCfg] = useState<SandboxSettings | null>(null);
   const [error, setError] = useState<string>("");
   const [editing, setEditing] = useState<string | null>(null); // credential name being edited, "" = new
+  const [addingTool, setAddingTool] = useState(false); // the "Add a folder" editor of the toolchain list
+  const [toolTitle, setToolTitle] = useState("");
+  const [toolPath, setToolPath] = useState("~/");
 
   useEffect(() => {
     getSandboxSettings(mid).then(setCfg).catch(() => setCfg(null));
@@ -758,6 +762,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
     return v === k ? fallback || "" : v;
   };
   const updateCredentials = (rows: SandboxCredentialEntry[]) => save({ credentials: rows });
+  const updateToolchains = (rows: SandboxToolchainEntry[]) => save({ toolchains: rows.map(({ exists: _e, shipped: _s, ...row }) => row) });
 
   return (
     <section data-testid="sandbox-section">
@@ -875,6 +880,68 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
             updateCredentials(rows);
           }}
         />
+      ) : null}
+
+      {cfg.platform !== "linux" && cfg.toolchains ? (
+        <>
+          <div className="flex items-center mb-2 mt-6">
+            <div className={FIELD_LABEL}>{t("settingsx.sandbox.toolchains")}</div>
+            <button className="ml-auto text-ui text-accent" onClick={() => setAddingTool(true)} data-testid="sandbox-toolchain-add">
+              {t("settingsx.sandbox.add_toolchain")}
+            </button>
+          </div>
+          <div className={CARD + " divide-y divide-line"}>
+            {cfg.toolchains.map((tc) => (
+              <div key={tc.name} className="flex items-start gap-3 px-4 py-2.5" data-testid={`sandbox-toolchain-${tc.name}`}>
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={tc.enabled}
+                  onChange={(e) => updateToolchains(cfg.toolchains.map((x) => (x.name === tc.name ? { ...x, enabled: e.target.checked } : x)))}
+                  aria-label={tc.title || tc.name}
+                />
+                <span className="flex-1 min-w-0">
+                  <span className={"block text-ui " + (tc.exists === false ? "text-muted" : "text-ink")}>
+                    {tc.title || tc.name} <code className="text-meta text-muted font-mono">{tc.path}</code>
+                    {tc.exists === false ? <span className="text-meta text-faint"> · {t("settingsx.sandbox.toolchain_missing")}</span> : null}
+                  </span>
+                </span>
+                {!tc.shipped ? (
+                  <button className="text-meta text-muted hover:text-ink shrink-0" onClick={() => updateToolchains(cfg.toolchains.filter((x) => x.name !== tc.name))}>
+                    {t("settingsx.sandbox.remove")}
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          <div className={FIELD_HELP}>{t("settingsx.sandbox.toolchains_help")}</div>
+          {addingTool ? (
+            <div className={CARD + " p-4 mt-3"} data-testid="sandbox-toolchain-editor">
+              <div className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-2 items-center">
+                <label className="text-ui text-muted">{t("settingsx.sandbox.field_title")}</label>
+                <input className={INPUT} value={toolTitle} onChange={(e) => setToolTitle(e.target.value)} />
+                <label className="text-ui text-muted">{t("settingsx.sandbox.field_toolchain_path")}</label>
+                <input className={INPUT + " font-mono"} value={toolPath} onChange={(e) => setToolPath(e.target.value)} />
+              </div>
+              <div className="flex justify-end gap-2 mt-3">
+                <button className={BTN_BORDERED} onClick={() => setAddingTool(false)}>{t("settingsx.sandbox.cancel")}</button>
+                <button
+                  className={BTN_ACCENT}
+                  disabled={!(toolPath.startsWith("~/") || toolPath.startsWith("/")) || toolPath.length < 3}
+                  onClick={() => {
+                    const slug = (toolTitle || toolPath).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+                    setAddingTool(false);
+                    setToolTitle("");
+                    setToolPath("~/");
+                    updateToolchains([...cfg.toolchains, { name: slug, title: toolTitle || undefined, path: toolPath, enabled: true }]);
+                  }}
+                >
+                  {t("settingsx.sandbox.done")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : null}
     </section>
   );
