@@ -310,6 +310,21 @@ def test_full_mode_blocks_the_network_except_the_proxy(tmp_path):
 
 
 @full
+def test_a_stale_private_folder_is_reaped_when_the_next_sandbox_starts(tmp_path):
+    from coworker.sandbox.providers import windows_setup
+
+    stale = windows_setup.SANDBOXES / "owr-stale0000"
+    stale.mkdir(parents=True, exist_ok=True)
+    (stale / "daemon.log").write_text("left behind\n")
+    ws, provider, project = _open(tmp_path, mode="full")
+    try:
+        assert not stale.exists()  # gone: no daemon listens on its pipe
+        assert os.path.isdir(provider._dir)  # the live one stays
+    finally:
+        ws.close()
+
+
+@full
 def test_full_mode_reads_the_toolchain_folders_it_is_given(tmp_path):
     """A folder under the person's profile (invisible to the account) becomes readable,
     never writable, when it is on the machine's toolchain list."""

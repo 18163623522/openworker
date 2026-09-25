@@ -42,8 +42,13 @@ ROOT = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "OpenWorker" / "
 SANDBOXES = ROOT / "sandboxes"
 CRED_FILE = ROOT / "account.cred"
 STATE_FILE = ROOT / "setup.json"
-FIREWALL_RULE = "OpenWorker sandbox: closed account, no outbound"
-LEGACY_RULES = ("OpenWorker sandbox: block outbound", "OpenWorker sandbox: no network", "OpenWorker sandbox: no other local port")
+FIREWALL_RULE = "OpenWorker sandbox: closed account has no outbound network"  # no comma: the scripts split lists on it
+LEGACY_RULES = (
+    "OpenWorker sandbox: block outbound",
+    "OpenWorker sandbox: no network",
+    "OpenWorker sandbox: no other local port",
+    # the first two-account build's rule had a comma in its name; the scripts remove it by wildcard
+)
 SETUP_VERSION = 2
 
 # The elevated script. `$UserSid` is the account that may read the passwords (the person
@@ -67,9 +72,10 @@ foreach ($name in ($Legacy -split ",")) {
     $changed += "removed-legacy-account:$name"
   }
 }
-foreach ($name in ($LegacyRules -split ",")) {
+foreach ($name in ($LegacyRules -split ";")) {
   if ($name -and (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) { Remove-NetFirewallRule -DisplayName $name; $changed += "removed-legacy-rule" }
 }
+Get-NetFirewallRule -DisplayName "OpenWorker sandbox: closed account*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -ne $Rule } | ForEach-Object { Remove-NetFirewallRule -DisplayName $_.DisplayName; $changed += "removed-legacy-rule" }
 
 # 1. The accounts, each with a password that exists only in this process and in the credential file.
 function New-Password {
@@ -146,7 +152,9 @@ Write-Output "ok $openSid $closedSid"
 REMOVE_SCRIPT = r'''
 param([string]$Root, [string]$Rule, [string]$Accounts, [string]$LegacyRules, [string]$WfpExe, [string]$WfpArg)
 $ErrorActionPreference = "Continue"
-foreach ($name in (($Rule + "," + $LegacyRules) -split ",")) { if ($name) { Remove-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue } }
+Remove-NetFirewallRule -DisplayName $Rule -ErrorAction SilentlyContinue
+foreach ($name in ($LegacyRules -split ";")) { if ($name) { Remove-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue } }
+Get-NetFirewallRule -DisplayName "OpenWorker sandbox: closed account*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 $wfpArgs = @(); if ($WfpArg) { $wfpArgs += $WfpArg }
 & $WfpExe @wfpArgs remove 2>&1 | Out-Null
 $userlist = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
@@ -197,6 +205,31 @@ def account(kind: str = CLOSED) -> Optional[tuple[str, str, str]]:
 def filters_recorded() -> bool:
     recorded = state() or {}
     return bool((recorded.get("wfp") or {}).get("filters"))
+
+
+def reap_private_folders() -> list[str]:
+    """Remove the private folders of sandboxes whose daemon is gone: a server killed hard
+    never ran destroy(), and its `owr-*` folder under SANDBOXES stayed behind. A folder
+    is alive while its named pipe exists. Best effort; returns what was removed."""
+    import shutil
+
+    from ..runner import winpipe
+
+    removed: list[str] = []
+    try:
+        names = os.listdir(SANDBOXES)
+    except OSError:
+        return removed
+    for name in names:
+        folder = SANDBOXES / name
+        if not name.startswith("owr-") or not folder.is_dir():
+            continue
+        if os.path.exists(winpipe.pipe_name(name)):
+            continue  # its daemon still listens
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            removed.append(str(folder))
+    return removed
 
 
 def _powershell(script: str, arguments: list[str], *, elevate: bool) -> subprocess.CompletedProcess:
@@ -258,7 +291,7 @@ def run_setup() -> tuple[bool, str]:
     arguments = [
         "-UserSid", winsec.current_user_sid(), "-Root", str(ROOT), "-Rule", FIREWALL_RULE, "-Version", str(SETUP_VERSION),
         "-OpenAccount", ACCOUNTS[OPEN], "-ClosedAccount", ACCOUNTS[CLOSED],
-        "-Legacy", ",".join(LEGACY_ACCOUNTS), "-LegacyRules", ",".join(LEGACY_RULES),
+        "-Legacy", ",".join(LEGACY_ACCOUNTS), "-LegacyRules", ";".join(LEGACY_RULES),
         *_wfp_arguments(), "-PortLow", str(ports.start), "-PortHigh", str(ports.stop - 1),
     ]  # fmt: skip
     done = _powershell(SETUP_SCRIPT, arguments, elevate=not is_elevated())
@@ -268,7 +301,7 @@ def run_setup() -> tuple[bool, str]:
 
 def run_remove() -> tuple[bool, str]:
     names = ",".join([*ACCOUNTS.values(), *LEGACY_ACCOUNTS])
-    arguments = ["-Root", str(ROOT), "-Rule", FIREWALL_RULE, "-Accounts", names, "-LegacyRules", ",".join(LEGACY_RULES), *_wfp_arguments()]
+    arguments = ["-Root", str(ROOT), "-Rule", FIREWALL_RULE, "-Accounts", names, "-LegacyRules", ";".join(LEGACY_RULES), *_wfp_arguments()]
     done = _powershell(REMOVE_SCRIPT, arguments, elevate=not is_elevated())
     said = (done.stdout or "").strip()
     return done.returncode == 0 and "removed" in said, said

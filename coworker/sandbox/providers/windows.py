@@ -131,6 +131,7 @@ class WindowsProvider:
         self.session_sid = self._account[1] if self._account else winsec.session_sid()
         if self.mode == FULL:
             windows_setup.SANDBOXES.mkdir(parents=True, exist_ok=True)
+            windows_setup.reap_private_folders()  # what a server killed hard left behind
             self._dir = tempfile.mkdtemp(prefix="owr-", dir=str(windows_setup.SANDBOXES))
             self.socket_path = winpipe.pipe_name(os.path.basename(self._dir))
         else:
