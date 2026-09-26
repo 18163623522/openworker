@@ -68,8 +68,8 @@ def checks() -> list[tuple[str, bool, str]]:
     out.append(("the `grpcio` package is installed", grpc_ok, "" if grpc_ok else "pip install 'openworker[openshell]'"))
     if gateway_ok and exe:
         present = openshell.image_present()
-        if present is not None:  # only the Docker driver can be asked; other drivers get no row
-            out.append((IMAGE_ROW, present, "" if present else f"docker pull {openshell.sandbox_image()}"))
+        if present is not None:  # only a local docker/podman driver can be asked; others get no row
+            out.append((IMAGE_ROW, present, "" if present else f"{openshell.image_tool() or 'docker'} pull {openshell.sandbox_image()}"))
     configured = app_config.load_config().sandbox_provider
     out.append(("this machine is set to use OpenShell", configured == "openshell", f"sandbox_provider = {configured!r} in {app_config.global_config_path()}"))
     return out
@@ -109,11 +109,11 @@ def _offer_image_download(rows: dict[str, bool], confirm: Callable[[str], bool],
     own progress and no time limit. Returns an exit code to stop with, or None to go on."""
     if rows.get(IMAGE_ROW, True):
         return None
-    image = openshell.sandbox_image()
-    print_fn(f"The sandbox base image is not on this machine. It is about 5 GB and is downloaded once;\nuntil then the first session cannot start:\n  docker pull {image}")
+    image, tool = openshell.sandbox_image(), openshell.image_tool() or "docker"
+    print_fn(f"The sandbox base image is not on this machine. It is about 5 GB and is downloaded once;\nuntil then the first session cannot start:\n  {tool} pull {image}")
     if not confirm("Download it now? (10 to 20 minutes on a slow connection)"):
         return 1
-    if subprocess.run(["docker", "pull", image], stdin=subprocess.DEVNULL).returncode != 0:
+    if subprocess.run([tool, "pull", image], stdin=subprocess.DEVNULL).returncode != 0:
         print_fn("the download failed; nothing else was changed")
         return 1
     return None

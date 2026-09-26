@@ -2795,7 +2795,14 @@ export type Handlers = {
    * should reload what it may have missed (transcript tail, parked prompts). */
   onOpen?: (reconnected: boolean) => void;
   onClose?: () => void;
+  /** The server refused to build this session (its sandbox cannot be used) and closed
+   * the socket for good (close code 4403). No reconnect follows: retrying would only
+   * repeat the refusal every few seconds. The reason arrived as an `error` event. */
+  onRefused?: () => void;
 };
+
+/** Close code the server uses for a session it refused to build (see app.py). */
+export const WS_CLOSE_SESSION_REFUSED = 4403;
 
 /** Reconnect backoff for a dropped session socket: 1s, 2s, 4s, 8s, then 15s. */
 export const SESSION_RECONNECT_MS = [1000, 2000, 4000, 8000, 15000];
@@ -2850,9 +2857,14 @@ export class Session {
       this.flush();
       this.handlers.onOpen?.(reconnected);
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       this.handlers.onClose?.();
       if (this.closed) return;
+      if (ev.code === WS_CLOSE_SESSION_REFUSED) {
+        this.closed = true; // final: the server said this session cannot be built as configured
+        this.handlers.onRefused?.();
+        return;
+      }
       const delay = SESSION_RECONNECT_MS[Math.min(this.attempts, SESSION_RECONNECT_MS.length - 1)];
       this.attempts += 1;
       this.timer = window.setTimeout(() => this.connect(), delay);

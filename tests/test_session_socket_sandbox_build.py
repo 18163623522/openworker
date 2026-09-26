@@ -69,11 +69,16 @@ def test_a_refused_sandbox_is_reported_on_the_socket_not_as_a_server_error(tmp_p
 
     monkeypatch.setattr(mgr, "get_engine", refuse)
     client = TestClient(create_app(mgr))
+    from starlette.websockets import WebSocketDisconnect
+
+    from coworker.server.app import WS_CLOSE_SESSION_REFUSED
+
     with client.websocket_connect("/ws/session/s-refused?agent=cowork") as ws:
         assert ws.receive_json()["type"] == "sandbox_preparing"
         assert ws.receive_json() == {"type": "error", "data": {"error": refusal}}
-        with pytest.raises(Exception):  # the server closed the socket cleanly
+        with pytest.raises(WebSocketDisconnect) as closed:  # closed cleanly, with the "final" code
             ws.receive_json()
+    assert closed.value.code == WS_CLOSE_SESSION_REFUSED  # so the client does not retry the refusal
 
 
 def test_pending_sandbox_build_reads_the_config_and_knows_an_existing_engine(tmp_path, monkeypatch):

@@ -48,6 +48,9 @@ def _origin_allowed(origin: str | None) -> bool:
 # process can reach it), so bound frames, messages, and per-connection request rate before
 # building model content or starting a turn.
 _WS_MAX_FRAME_BYTES = 16 * 1024 * 1024
+# Close code for a session socket whose engine could not be built (a refused sandbox, a
+# failed build). Private-use range; the client treats it as final and does not reconnect.
+WS_CLOSE_SESSION_REFUSED = 4403
 _WS_RATE_LIMIT_COUNT = 30
 _WS_RATE_LIMIT_WINDOW_SECONDS = 10.0
 _MAX_MESSAGE_TEXT_CHARS = 200_000
@@ -2840,9 +2843,11 @@ def create_app(manager: SessionManager) -> FastAPI:
         except Exception as exc:
             # A refused sandbox (OpenShell not usable, its image not downloaded, the
             # per-machine cap) or a failed build: the reason goes to the session's own
-            # view, and the socket closes cleanly instead of dying in the ASGI stack.
+            # view, and the socket closes cleanly instead of dying in the ASGI stack. The
+            # close code tells the client this is final: reconnecting would only repeat
+            # the refusal every few seconds (the client retries any other close).
             await ws.send_json({"type": "error", "data": {"error": str(exc)}})
-            await ws.close()
+            await ws.close(code=WS_CLOSE_SESSION_REFUSED, reason="session refused")
             return
         if sandbox_provider and engine is not None:
             info = getattr(getattr(engine, "sandbox_workspace", None), "describe", dict)()

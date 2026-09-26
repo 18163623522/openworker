@@ -251,6 +251,9 @@ export function App() {
   // OPE-206: the provider name while this session's sandbox is being built (the socket
   // is open, `ready` has not come yet); null otherwise. Drives the waiting row.
   const [preparingSandbox, setPreparingSandbox] = useState<string | null>(null);
+  // The server refused to build this session (its sandbox cannot be used) and closed the
+  // socket for good: no reconnect strip, the error notice in the transcript says why.
+  const [sessionRefused, setSessionRefused] = useState(false);
   const [running, setRunning] = useState(false);
   // Transient "Compacting context…" indicator (OPE-27): set by the `compacting` event,
   // cleared by whatever the engine emits next — the summarizer call is otherwise a
@@ -880,6 +883,7 @@ export function App() {
           break;
         case "ready":
           setPreparingSandbox(null);
+          setSessionRefused(false);
           setConnected(true);
           if (d.model) setModel(d.model);
           if (d.mode) setMode(d.mode);
@@ -1181,7 +1185,9 @@ export function App() {
         setConnected(false);
         setPreparingSandbox(null);
       },
+      onRefused: () => setSessionRefused(true),
     }, machine);
+    setSessionRefused(false); // a fresh socket: the previous refusal, if any, is history
     sessionRef.current = session;
     return () => session.close();
     // NOTE: `workspace` is intentionally NOT a dependency. Every real workspace change
@@ -2348,7 +2354,7 @@ export function App() {
                 }}
               />
             )}
-            {!connected && !booting && !currentRowOffline && !(isCloudMode() && !machine) && (
+            {!connected && !booting && !sessionRefused && !currentRowOffline && !(isCloudMode() && !machine) && (
               <div className="reconnecting-strip" data-testid="session-reconnecting" role="status">
                 {machine ? t("misc.app.machine_reconnecting") : t("misc.app.reconnecting")}
                 <span className="reconnecting-sub">

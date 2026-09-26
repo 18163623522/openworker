@@ -162,6 +162,7 @@ def test_setup_offers_the_base_image_download_and_runs_nothing_when_refused(tmp_
     monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
     monkeypatch.setattr(setup_cmd, "checks", lambda: _all_but_the_image(setup_cmd))
     monkeypatch.setattr(setup_cmd.openshell, "sandbox_image", lambda: "ghcr.io/example/base@sha256:abc")
+    monkeypatch.setattr(setup_cmd.openshell, "image_tool", lambda: "docker")
     ran: list[list[str]] = []
     monkeypatch.setattr(setup_cmd.subprocess, "run", lambda argv, **kw: ran.append(argv) or type("Done", (), {"returncode": 0})())
     asked: list[str] = []
@@ -184,6 +185,7 @@ def test_setup_on_a_mac_still_offers_the_download(tmp_path, monkeypatch):
     monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
     monkeypatch.setattr(setup_cmd, "checks", lambda: _all_but_the_image(setup_cmd))
+    monkeypatch.setattr(setup_cmd.openshell, "image_tool", lambda: "docker")
     ran: list[list[str]] = []
     monkeypatch.setattr(setup_cmd.subprocess, "run", lambda argv, **kw: ran.append(argv) or type("Done", (), {"returncode": 0})())
     said: list[str] = []
@@ -202,9 +204,10 @@ def test_status_shows_a_missing_image_as_its_own_row_not_as_a_gateway_problem(tm
     monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: f"{setup_cmd.openshell.IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `docker pull x`.")
     monkeypatch.setattr(setup_cmd.openshell, "image_present", lambda image=None: False)
     monkeypatch.setattr(setup_cmd.openshell, "sandbox_image", lambda: "x")
+    monkeypatch.setattr(setup_cmd.openshell, "image_tool", lambda: "podman")  # the hint names the driver's own tool
     rows = {what: (ok, detail) for what, ok, detail in setup_cmd.checks()}
     assert rows["the gateway is running"] == (True, "")  # the gateway is fine; only the image is missing
-    assert rows[setup_cmd.IMAGE_ROW] == (False, "docker pull x")
+    assert rows[setup_cmd.IMAGE_ROW] == (False, "podman pull x")
     # Another driver: Docker cannot be asked, so no row rather than a wrong one.
     monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: None)
     monkeypatch.setattr(setup_cmd.openshell, "image_present", lambda image=None: None)

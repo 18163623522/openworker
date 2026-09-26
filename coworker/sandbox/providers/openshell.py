@@ -99,7 +99,7 @@ def preflight() -> dict[str, Any]:
     if image_present() is False:
         raise OpenShellImageMissing(
             f"{IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `openworker machine sandbox setup`, "
-            f"or `docker pull {sandbox_image()}`, then start the session again."
+            f"or `{image_tool() or 'docker'} pull {sandbox_image()}`, then start the session again."
         )
     return {"version": version}
 
@@ -117,19 +117,41 @@ def active_driver() -> str:
         return ""
 
 
-def image_present(image: Optional[str] = None) -> Optional[bool]:
-    """Whether the base image is on this machine: True or False when the gateway uses the
-    Docker driver and the `docker` command is here to ask, None when it cannot be told
-    (another driver, such as the MicroVM one on a Mac, or no `docker` on PATH). The check is
-    keyed on the driver, not the operating system: the same image serves Linux, WSL and
-    macOS, and only the driver knows where images live."""
-    if active_driver() != "docker":
+# The command that holds a driver's images, for the drivers whose store is on this machine.
+_IMAGE_TOOLS = {"docker": "docker", "podman": "podman"}
+
+
+def image_tool() -> Optional[str]:
+    """The `docker`/`podman` command to ask about (and pull) images, or None when the
+    question cannot be answered here: the gateway is remote, its driver keeps images
+    elsewhere (Kubernetes, the MicroVM driver on a Mac), or the command is not on PATH."""
+    if _gateway_is_remote():
         return None
-    docker = shutil.which("docker")
-    if docker is None:
+    name = _IMAGE_TOOLS.get(active_driver())
+    return name if name and shutil.which(name) else None
+
+
+def _gateway_is_remote() -> bool:
+    try:
+        home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "openshell"
+        name = (home / "active_gateway").read_text(encoding="utf-8").strip()
+        meta = json.loads((home / "gateways" / name / "metadata.json").read_text(encoding="utf-8"))
+        return bool(meta.get("is_remote"))
+    except (OSError, ValueError):
+        return False
+
+
+def image_present(image: Optional[str] = None) -> Optional[bool]:
+    """Whether the base image is on this machine: True or False when the gateway's driver
+    keeps images here and can be asked (`docker`/`podman image inspect`), None when it
+    cannot be told. The check is keyed on the driver, not the operating system: the same
+    image serves Linux, WSL and macOS (amd64 and arm64), and only the driver knows where
+    images live. None never refuses anything: the first create then pulls as before."""
+    tool = image_tool()
+    if tool is None:
         return None
     done = subprocess.run(
-        [docker, "image", "inspect", image or sandbox_image()],
+        [tool, "image", "inspect", image or sandbox_image()],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
     )
     return done.returncode == 0

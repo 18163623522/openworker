@@ -112,6 +112,7 @@ def test_a_missing_base_image_is_refused_before_a_create_can_hang_on_it(monkeypa
     # OPE-205: the first `sandbox create` pulls about 5 GB; on a slow link that outlives the
     # create's timeout and the session hangs for ten minutes with no word about why. So the
     # image is checked up front, with a message that names the download.
+    monkeypatch.setattr(openshell, "_gateway_is_remote", lambda: False)
     monkeypatch.setattr(openshell.shutil, "which", lambda name: f"/usr/bin/{name}")
     missing = {"--version": _OK_VERSION, "status": _CONNECTED, "gateway": _DOCKER_GATEWAY, "image": ("Error: No such image", 1)}
     monkeypatch.setattr(openshell.subprocess, "run", _fake_cli(missing))
@@ -137,6 +138,26 @@ def test_a_missing_base_image_is_refused_before_a_create_can_hang_on_it(monkeypa
     monkeypatch.setattr(openshell.subprocess, "run", lambda argv, **kw: seen.append(argv[-1]) or _fake_cli({"gateway": _DOCKER_GATEWAY, "image": ("", 0)})(argv, **kw))
     monkeypatch.setenv("OPENWORKER_SANDBOX_IMAGE", "registry.example.com/team/agent:2")
     assert openshell.image_present() is True and seen[-1] == "registry.example.com/team/agent:2"
+
+
+def test_the_image_check_follows_the_driver_and_stays_out_of_remote_gateways(monkeypatch):
+    # Podman keeps its own image store, so it is asked with its own command; the same
+    # image serves both, and both hang the first session the same way when it is absent.
+    monkeypatch.setattr(openshell, "_gateway_is_remote", lambda: False)
+    monkeypatch.setattr(openshell.shutil, "which", lambda name: f"/usr/bin/{name}")
+    podman = ('{"compute_drivers": [{"name": "podman"}]}', 0)
+    seen: list[list[str]] = []
+    monkeypatch.setattr(openshell.subprocess, "run", lambda argv, **kw: seen.append(argv) or _fake_cli({"gateway": podman, "image": ("", 1)})(argv, **kw))
+    assert openshell.image_tool() == "podman"
+    assert openshell.image_present() is False and seen[-1][:3] == ["podman", "image", "inspect"]
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli({"--version": _OK_VERSION, "status": _CONNECTED, "gateway": podman, "image": ("", 1)}))
+    with pytest.raises(openshell.OpenShellImageMissing, match="podman pull"):
+        openshell.preflight()
+    # A remote gateway keeps its images on another machine: a local store says nothing
+    # about it, so the check answers "cannot tell" and never refuses.
+    monkeypatch.setattr(openshell, "_gateway_is_remote", lambda: True)
+    assert openshell.image_tool() is None and openshell.image_present() is None
+    assert openshell.preflight() == {"version": openshell.PINNED_VERSION}
 
 
 def test_registry_counts_caps_and_forgets(tmp_path, monkeypatch):
