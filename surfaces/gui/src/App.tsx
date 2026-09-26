@@ -248,6 +248,9 @@ export function App() {
   const [surfaces, setSurfaces] = useState<SurfaceVisibility>({ cowork: true, chat: false, code: false });
   const [mode, setMode] = useState("interactive");
   const [connected, setConnected] = useState(false);
+  // OPE-206: the provider name while this session's sandbox is being built (the socket
+  // is open, `ready` has not come yet); null otherwise. Drives the waiting row.
+  const [preparingSandbox, setPreparingSandbox] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   // Transient "Compacting context…" indicator (OPE-27): set by the `compacting` event,
   // cleared by whatever the engine emits next — the summarizer call is otherwise a
@@ -864,7 +867,19 @@ export function App() {
       // silent no-op / failure prompt) — the transient must never outlive it.
       if (ev.type !== "compacting") setCompacting(false);
       switch (ev.type) {
+        case "sandbox_preparing":
+          setPreparingSandbox(d.provider || "sandbox");
+          break;
+        case "sandbox_ready":
+          setPreparingSandbox(null);
+          // One quiet line in the transcript: which wall this session's commands are behind.
+          setItems((p) => [
+            ...p,
+            { kind: "notice", tone: "info", text: t("app.notice.sandbox_ready", { detail: d.reason || d.provider || "" }) },
+          ]);
+          break;
         case "ready":
+          setPreparingSandbox(null);
           setConnected(true);
           if (d.model) setModel(d.model);
           if (d.mode) setMode(d.mode);
@@ -1091,6 +1106,7 @@ export function App() {
           setItems((p) => [...p, { kind: "notice", tone: "warn", text: t("app.notice.interrupted") }]);
           break;
         case "error":
+          setPreparingSandbox(null); // a refused or failed sandbox build arrives here
           flushPartialStream();
           setItems((p) => [
             ...p,
@@ -1161,7 +1177,10 @@ export function App() {
           sessionRef.current?.userMessage(p.text, p.attachments, p.model, p.skill);
         }
       },
-      onClose: () => setConnected(false),
+      onClose: () => {
+        setConnected(false);
+        setPreparingSandbox(null);
+      },
     }, machine);
     sessionRef.current = session;
     return () => session.close();
@@ -2250,6 +2269,11 @@ export function App() {
                     <div className="transcript">
                       <ThinkingBlock text={reasoningStream} live />
                     </div>
+                  )}
+                  {/* OPE-206: the sandbox for this session is being built (a container, its
+                      runner, its mounts). Not a turn, so `running` is false; the row says so. */}
+                  {preparingSandbox && !connected && (
+                    <WaitingForAgent label={t("app.preparing_sandbox", { provider: preparingSandbox })} />
                   )}
                   {/* Compaction runs between provider turns (nothing streams during it), so
                       the transient takes over the waiting slot with a specific label. */}

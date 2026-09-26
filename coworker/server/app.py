@@ -2812,20 +2812,46 @@ def create_app(manager: SessionManager) -> FastAPI:
         mcp_tools = await manager.prepare_mcp_tools(
             session_id, workspace=workspace, agent=agent
         )
-        engine = manager.get_engine(
-            session_id,
-            workspace=workspace,
-            agent=agent,
-            approver=approver,
-            extra_tools=mcp_tools,
-            directory_requester=directory_requester,
-            plan_approver=plan_approver,
-            question_asker=question_asker,
-            tool_requester=tool_requester,
-            team_approver=team_approver,
-            items_approver=items_approver,
-            connector_requester=connector_requester,
-        )
+        # Building the engine can mean building a sandbox: with OpenShell, a container is
+        # created, its runner started and its mounts verified, which takes seconds (and on
+        # first use, minutes). Done on the event loop that wait froze the whole server, so
+        # the GUI saw its health checks fail and showed the app-wide "Starting OpenWorker…"
+        # screen instead of this session (OPE-206). So: say what is happening on THIS
+        # socket, build on a worker thread, and report the outcome here too.
+        sandbox_provider = manager.pending_sandbox_build(session_id)
+        if sandbox_provider:
+            await ws.send_json({"type": "sandbox_preparing", "data": {"provider": sandbox_provider}})
+        try:
+            engine = await asyncio.to_thread(
+                manager.get_engine,
+                session_id,
+                workspace=workspace,
+                agent=agent,
+                approver=approver,
+                extra_tools=mcp_tools,
+                directory_requester=directory_requester,
+                plan_approver=plan_approver,
+                question_asker=question_asker,
+                tool_requester=tool_requester,
+                team_approver=team_approver,
+                items_approver=items_approver,
+                connector_requester=connector_requester,
+            )
+        except Exception as exc:
+            # A refused sandbox (OpenShell not usable, its image not downloaded, the
+            # per-machine cap) or a failed build: the reason goes to the session's own
+            # view, and the socket closes cleanly instead of dying in the ASGI stack.
+            await ws.send_json({"type": "error", "data": {"error": str(exc)}})
+            await ws.close()
+            return
+        if sandbox_provider and engine is not None:
+            info = getattr(getattr(engine, "sandbox_workspace", None), "describe", dict)()
+            await ws.send_json(
+                {
+                    "type": "sandbox_ready",
+                    "data": {key: info.get(key) for key in ("provider", "enforcement", "reason", "sandbox") if info.get(key) is not None},
+                }
+            )
         if engine is None:
             await ws.send_json(
                 {
