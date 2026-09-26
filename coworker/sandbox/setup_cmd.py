@@ -19,11 +19,16 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .. import config as app_config
+from .providers import openshell
 from .providers.openshell import PINNED_VERSION
 from .selection import openshell_problem, select
 
 _INSTALLER = "https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh"
 _BIND_MOUNTS = "[openshell.drivers.docker]\nenable_bind_mounts = true\n"
+# The base image is pulled by the first `sandbox create` otherwise, which on a slow link
+# outlives the create's timeout and hangs the first session (OPE-205). So it is a check of
+# its own, and `setup` offers the download with Docker's own progress and no time limit.
+IMAGE_ROW = "the sandbox base image is downloaded (about 5 GB, one time)"
 
 
 def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
@@ -50,7 +55,10 @@ def checks() -> list[tuple[str, bool, str]]:
         linger = _run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger"], 15).stdout.strip() == "Linger=yes"
         out.append(("the gateway keeps running after you log out (linger)", linger, "" if linger else f"sudo loginctl enable-linger {getpass.getuser()}"))
     problem = openshell_problem(fresh=True) if exe else "OpenShell is not installed"
-    out.append(("the gateway is running", problem is None, problem or ""))
+    # A missing image is not a gateway problem: it gets its own row below.
+    image_missing = openshell.is_image_problem(problem)
+    gateway_ok = problem is None or image_missing
+    out.append(("the gateway is running", gateway_ok, "" if gateway_ok else (problem or "")))
     try:
         import grpc  # noqa: F401
 
@@ -58,6 +66,10 @@ def checks() -> list[tuple[str, bool, str]]:
     except ImportError:
         grpc_ok = False
     out.append(("the `grpcio` package is installed", grpc_ok, "" if grpc_ok else "pip install 'openworker[openshell]'"))
+    if gateway_ok and exe:
+        present = openshell.image_present()
+        if present is not None:  # only the Docker driver can be asked; other drivers get no row
+            out.append((IMAGE_ROW, present, "" if present else f"docker pull {openshell.sandbox_image()}"))
     configured = app_config.load_config().sandbox_provider
     out.append(("this machine is set to use OpenShell", configured == "openshell", f"sandbox_provider = {configured!r} in {app_config.global_config_path()}"))
     return out
@@ -92,11 +104,29 @@ def status(print_fn: Callable[[str], None] = print) -> int:
     return 0 if all(ok for _, ok, _ in rows) else 1
 
 
+def _offer_image_download(rows: dict[str, bool], confirm: Callable[[str], bool], print_fn: Callable[[str], None]) -> Optional[int]:
+    """When the base image is missing: show the command, ask, and run the pull with Docker's
+    own progress and no time limit. Returns an exit code to stop with, or None to go on."""
+    if rows.get(IMAGE_ROW, True):
+        return None
+    image = openshell.sandbox_image()
+    print_fn(f"The sandbox base image is not on this machine. It is about 5 GB and is downloaded once;\nuntil then the first session cannot start:\n  docker pull {image}")
+    if not confirm("Download it now? (10 to 20 minutes on a slow connection)"):
+        return 1
+    if subprocess.run(["docker", "pull", image], stdin=subprocess.DEVNULL).returncode != 0:
+        print_fn("the download failed; nothing else was changed")
+        return 1
+    return None
+
+
 def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, print_fn: Callable[[str], None] = print) -> int:
     confirm = ask or (lambda question: yes or input(f"{question} [y/N] ").strip().lower() in ("y", "yes"))
     if not sys.platform.startswith("linux"):
         print_fn("`sandbox setup` configures a Linux machine. On a Mac, install OpenShell yourself and use `openworker machine sandbox status`.")
-        return 2
+        # The one step that is the same on a Mac with Docker Desktop: the image download.
+        rows = {what: ok for what, ok, _ in checks()}
+        stop = _offer_image_download(rows, confirm, print_fn)
+        return 2 if stop is None else stop
     rows = {what: ok for what, ok, _ in checks()}
     if not rows["Docker is installed and this user can use it"]:
         print_fn("Docker is needed first, and installing it needs an administrator:\n  https://docs.docker.com/engine/install/\n  sudo usermod -aG docker $USER   (then log in again)")
@@ -134,5 +164,12 @@ def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, pri
         print_fn(f"Set this machine to run agents in OpenShell sandboxes, and to REFUSE sessions when OpenShell is not running:\n  sandbox_provider = \"openshell\" in {app_config.global_config_path()}")
         if confirm("Make this change?"):
             app_config.set_global_value("sandbox_provider", "openshell")
+    # Last, because it is the slow one: the image the gateway builds sandboxes from. The
+    # gateway may only just have started (bind-mount change above), so ask again.
+    if IMAGE_ROW not in rows:
+        rows = {what: ok for what, ok, _ in checks()}
+    stop = _offer_image_download(rows, confirm, print_fn)
+    if stop is not None:
+        return stop
     print_fn("")
     return status(print_fn)

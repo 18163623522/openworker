@@ -53,6 +53,27 @@ class OpenShellUnavailable(RuntimeError):
     message says what to do; callers show it as it is."""
 
 
+class OpenShellImageMissing(OpenShellUnavailable):
+    """OpenShell works, but the base image is not on this machine yet. The first `sandbox
+    create` would pull it (about 5 GB) and, on a slow link, outlive our timeout: the session
+    would hang for ten minutes and then fail with no word about why (OPE-205). So the image
+    is checked up front, and the message says how to get it."""
+
+
+IMAGE_MISSING_PREFIX = "The sandbox base image is not downloaded yet"
+
+
+def is_image_problem(problem: Optional[str]) -> bool:
+    """Whether a preflight message is the missing-image one (the only problem that
+    `setup` can fix by downloading, and that Settings shows as "needs download")."""
+    return bool(problem) and str(problem).startswith(IMAGE_MISSING_PREFIX)
+
+
+def sandbox_image() -> str:
+    """The image a sandbox is created from: the pinned one, unless the environment says."""
+    return os.environ.get("OPENWORKER_SANDBOX_IMAGE") or DEFAULT_IMAGE
+
+
 def _cli(*args: str, timeout: float = _CLI_TIMEOUT, check: bool = True) -> subprocess.CompletedProcess:
     exe = shutil.which("openshell")
     if exe is None:
@@ -75,7 +96,43 @@ def preflight() -> dict[str, Any]:
     status = _cli("status", timeout=30, check=False)
     if status.returncode != 0 or "Connected" not in status.stdout:
         raise OpenShellUnavailable("The OpenShell gateway is not running or cannot be reached (`openshell status`). On a headless machine, check `systemctl --user status openshell-gateway` and `loginctl enable-linger`.")
+    if image_present() is False:
+        raise OpenShellImageMissing(
+            f"{IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `openworker machine sandbox setup`, "
+            f"or `docker pull {sandbox_image()}`, then start the session again."
+        )
     return {"version": version}
+
+
+def active_driver() -> str:
+    """The gateway's compute driver ("docker", "podman", "kubernetes", "vm"), or "" when it
+    cannot be told. Read from `openshell gateway info -o json`."""
+    done = _cli("gateway", "info", "-o", "json", timeout=30, check=False)
+    if done.returncode != 0:
+        return ""
+    try:
+        drivers = json.loads(done.stdout).get("compute_drivers") or []
+        return str(drivers[0].get("name") or "") if drivers else ""
+    except (ValueError, AttributeError, IndexError, TypeError):
+        return ""
+
+
+def image_present(image: Optional[str] = None) -> Optional[bool]:
+    """Whether the base image is on this machine: True or False when the gateway uses the
+    Docker driver and the `docker` command is here to ask, None when it cannot be told
+    (another driver, such as the MicroVM one on a Mac, or no `docker` on PATH). The check is
+    keyed on the driver, not the operating system: the same image serves Linux, WSL and
+    macOS, and only the driver knows where images live."""
+    if active_driver() != "docker":
+        return None
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
+    done = subprocess.run(
+        [docker, "image", "inspect", image or sandbox_image()],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+    )
+    return done.returncode == 0
 
 
 def _gateway() -> tuple[str, Path]:
@@ -107,7 +164,7 @@ class OpenShellProvider:
         self.roots = [{"path": str(Path(r["path"]).expanduser().resolve()), "writable": bool(r.get("writable"))} for r in roots]
         self.cwd = str(Path(cwd).expanduser().resolve()) if cwd else self.roots[0]["path"]
         self.profile = profile
-        self.image = image or os.environ.get("OPENWORKER_SANDBOX_IMAGE") or DEFAULT_IMAGE
+        self.image = image or sandbox_image()
         # A label value may hold letters, digits, '-', '_' and '.', and at most 63 characters.
         self.label = "".join(c if c.isalnum() or c in "-_." else "-" for c in label)[:63].strip("-_.")
         self.sandbox_name = f"ow-{uuid.uuid4().hex[:12]}"

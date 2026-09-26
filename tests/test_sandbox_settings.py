@@ -69,6 +69,25 @@ def test_removing_a_shipped_entry_and_going_back_to_the_default_rule(config_file
     assert "sandbox_provider" not in text and "[[sandbox_credentials]]" not in text
 
 
+def test_a_missing_base_image_shows_as_needs_download_not_as_ready(config_file, monkeypatch):
+    # OPE-205: the page said "ready" while the first session was bound to hang on the
+    # one-time 5 GB download. Now that state has a name of its own, and the refusal a
+    # session would get carries the same message.
+    from coworker.sandbox import selection
+    from coworker.sandbox.providers.openshell import IMAGE_MISSING_PREFIX
+
+    message = f"{IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `openworker machine sandbox setup`."
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: message)
+    snap = settings.snapshot()
+    row = next(p for p in snap["providers"] if p["name"] == "openshell")
+    assert row == {"name": "openshell", "usable": False, "why": message, "state": "needs_download"}
+    assert next(p for p in snap["providers"] if p["name"] == "direct")["state"] == "ready"
+    assert settings.update({"provider": "openshell"})["ok"]  # the choice is allowed; the download is what is missing
+    assert "not downloaded yet" in settings.snapshot()["refused"]
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: "The OpenShell gateway is not running.")
+    assert next(p for p in settings.snapshot()["providers"] if p["name"] == "openshell")["state"] == "unavailable"
+
+
 def test_an_explicit_provider_that_cannot_be_used_shows_as_refused(config_file, monkeypatch):
     from coworker.sandbox import selection
     from coworker.sandbox.providers.openshell import OpenShellUnavailable

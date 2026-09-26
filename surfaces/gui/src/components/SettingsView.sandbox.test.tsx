@@ -79,6 +79,26 @@ describe("Settings ▸ Sandbox", () => {
     );
   });
 
+  it("shows OpenShell as 'needs download' and keeps it selectable when only the base image is missing", async () => {
+    // OPE-205: everything is in place except the one-time 5 GB image; "ready" would send
+    // the user into a first session that hangs on the download.
+    const { getSandboxSettings } = await import("../api");
+    (getSandboxSettings as any).mockResolvedValueOnce({
+      ...snapshot,
+      providers: [
+        { name: "direct", usable: true, why: "", state: "ready" },
+        { name: "seatbelt", usable: true, why: "", state: "ready" },
+        { name: "openshell", usable: false, why: "The sandbox base image is not downloaded yet", state: "needs_download" },
+      ],
+    });
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    expect(screen.getByText("needs download")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-provider-openshell-hint").textContent).toMatch(/sandbox setup/);
+    expect((screen.getByTestId("sandbox-provider-openshell") as HTMLInputElement).disabled).toBe(false);
+    expect(screen.queryByText("not available")).toBeNull();
+  });
+
   it("adds an entry through the editor and removes one", async () => {
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-section");

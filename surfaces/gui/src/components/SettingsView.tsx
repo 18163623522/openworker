@@ -773,6 +773,10 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
           .map((p) => {
             const [label, desc] = providerNames[p.name] ?? [p.name, ""];
             const active = chosen === p.name;
+            // OpenShell is installed and running but its base image is not downloaded yet:
+            // the provider can be chosen (nothing else is missing), but the first session
+            // cannot start until the download is done, so say that here instead of "ready".
+            const needsDownload = p.state === "needs_download";
             return (
               <label key={p.name} className="flex items-start gap-3 px-4 py-3 cursor-pointer">
                 <input
@@ -780,20 +784,27 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
                   name="sandbox-provider"
                   className="mt-1"
                   checked={active}
-                  disabled={!p.usable && !active}
+                  disabled={!p.usable && !active && !needsDownload}
                   onChange={() => save({ provider: p.name === "direct" && !cfg.provider ? "" : p.name })}
                   data-testid={`sandbox-provider-${p.name}`}
                 />
                 <span className="flex-1 min-w-0">
                   <span className="block text-ui text-ink">{label}</span>
                   <span className="block text-meta text-muted">{desc}</span>
+                  {needsDownload ? (
+                    <span className="block text-meta text-warnInk" data-testid={`sandbox-provider-${p.name}-hint`}>
+                      {t("settingsx.sandbox.needs_download_hint")}
+                    </span>
+                  ) : null}
                 </span>
-                <span className={"text-meta shrink-0 " + (p.usable ? (active ? "text-success" : "text-muted") : "text-muted")} title={p.why || undefined}>
+                <span className={"text-meta shrink-0 " + (needsDownload ? "text-warnInk" : p.usable ? (active ? "text-success" : "text-muted") : "text-muted")} title={p.why || undefined}>
                   {p.name === "direct" && !cfg.provider
                     ? t("settingsx.sandbox.status_default")
-                    : p.usable
-                      ? t("settingsx.sandbox.status_ready")
-                      : t("settingsx.sandbox.status_unavailable")}
+                    : needsDownload
+                      ? t("settingsx.sandbox.status_needs_download")
+                      : p.usable
+                        ? t("settingsx.sandbox.status_ready")
+                        : t("settingsx.sandbox.status_unavailable")}
                 </span>
               </label>
             );

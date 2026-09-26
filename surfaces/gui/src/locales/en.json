@@ -2280,6 +2280,8 @@
       "provider_openshell_desc": "One Linux container per agent, with the session's folders mounted. Needs OpenShell and Docker on this machine.",
       "status_default": "default",
       "status_ready": "ready",
+      "status_needs_download": "needs download",
+      "needs_download_hint": "The sandbox base image (about 5 GB, downloaded once) is not on this machine yet. Run `openworker machine sandbox setup` in a terminal; the first session cannot start until it is.",
       "status_unavailable": "not available",
       "refused": "Sessions on this machine are refused until this is fixed: {{why}}",
       "network": "Network allow list",

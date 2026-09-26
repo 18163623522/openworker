@@ -71,8 +71,14 @@ openworker machine sandbox setup
 `status` lists what is missing. `setup` shows each change before it makes it and asks
 first: it runs NVIDIA's installer for the pinned OpenShell release, allows bind mounts in
 the gateway's configuration (that is how your folders reach a sandbox), keeps the gateway
-running after you log out, and sets the machine to use OpenShell. It never runs `sudo` for
-you; when a step needs an administrator, it prints the command.
+running after you log out, sets the machine to use OpenShell, and downloads the base
+image sandboxes are built from. It never runs `sudo` for you; when a step needs an
+administrator, it prints the command.
+
+The base image is about 5 GB and is downloaded once. Until it is on the machine, Settings ▸
+Sandbox shows OpenShell as **needs download** and a session is refused with the same
+message, rather than hanging on the download. `setup` offers it with Docker's own
+progress; the command is also `docker pull` of the image named in the refusal.
 
 The setting is per machine, in Settings ▸ Sandbox or in `config.toml`:
 
@@ -154,7 +160,11 @@ enabled = true
 
 - **"Sessions on this machine are refused"** — the machine is set to OpenShell and it
   cannot be used right now. Run `openworker machine sandbox status` for the reason; the
-  usual ones are the gateway not running, or bind mounts not allowed.
+  usual ones are the gateway not running, bind mounts not allowed, or the base image not
+  downloaded yet.
+- **"The sandbox base image is not downloaded yet"** — the one-time 5 GB download has
+  not happened. Run `openworker machine sandbox setup` and accept the download, or run the
+  `docker pull` command from the message; then start the session again.
 - **A host is refused** — it is not on the profile; switch to `standard` if it is a search
   API, or share the credential entry whose hosts include it.
 - **`git push` says permission denied inside the sandbox** — no credential is shared.

@@ -2240,6 +2240,8 @@
       "provider_openshell_desc": "每个同事一个 Linux 容器，挂载会话的文件夹。需要这台机器上装有 OpenShell 和 Docker。",
       "status_default": "默认",
       "status_ready": "就绪",
+      "status_needs_download": "需要下载",
+      "needs_download_hint": "沙箱基础镜像（约 5 GB，仅下载一次）尚未下载到这台机器。请在终端运行 `openworker machine sandbox setup`；下载完成前第一个会话无法启动。",
       "status_unavailable": "不可用",
       "refused": "在修复此问题前，这台机器上的会话将被拒绝：{{why}}",
       "network": "网络允许列表",

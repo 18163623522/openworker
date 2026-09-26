@@ -78,25 +78,65 @@ def test_missing_openshell_is_refused_with_a_message_a_person_can_act_on(monkeyp
     assert "not installed" in str(err.value) and "sandbox setup" in str(err.value)
 
 
+def _fake_cli(answers):
+    """`subprocess.run` answering by the first argument after the program: `--version`,
+    `status`, `gateway` (info), and `image` (docker image inspect)."""
+
+    def run(argv, **kwargs):
+        assert kwargs.get("stdin") == subprocess.DEVNULL  # an open stdin hangs the CLI
+        out, code = answers[argv[1]]
+        return subprocess.CompletedProcess(argv, code, out, "")
+
+    return run
+
+
+_OK_VERSION = (f"openshell {openshell.PINNED_VERSION}\n", 0)
+_CONNECTED = ("Status: Connected", 0)
+_DOCKER_GATEWAY = ('{"compute_drivers": [{"name": "docker"}], "status": "healthy"}', 0)
+
+
 def test_another_version_or_a_stopped_gateway_is_refused(monkeypatch):
-    def fake(answers):
-        def run(argv, **kwargs):
-            assert kwargs.get("stdin") == subprocess.DEVNULL  # an open stdin hangs the CLI
-            out, code = answers[argv[1]]
-            return subprocess.CompletedProcess(argv, code, out, "")
-
-        return run
-
     monkeypatch.setattr(openshell.shutil, "which", lambda name: "/usr/bin/openshell")
-    monkeypatch.setattr(openshell.subprocess, "run", fake({"--version": ("openshell 9.9.9\n", 0)}))
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli({"--version": ("openshell 9.9.9\n", 0)}))
     with pytest.raises(openshell.OpenShellUnavailable, match="tested with"):
         openshell.preflight()
-    ok_version = (f"openshell {openshell.PINNED_VERSION}\n", 0)
-    monkeypatch.setattr(openshell.subprocess, "run", fake({"--version": ok_version, "status": ("Status: Disconnected", 1)}))
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli({"--version": _OK_VERSION, "status": ("Status: Disconnected", 1)}))
     with pytest.raises(openshell.OpenShellUnavailable, match="not running"):
         openshell.preflight()
-    monkeypatch.setattr(openshell.subprocess, "run", fake({"--version": ok_version, "status": ("Status: Connected", 0)}))
+    present = {"--version": _OK_VERSION, "status": _CONNECTED, "gateway": _DOCKER_GATEWAY, "image": ("[{...}]", 0)}
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli(present))
     assert openshell.preflight() == {"version": openshell.PINNED_VERSION}
+
+
+def test_a_missing_base_image_is_refused_before_a_create_can_hang_on_it(monkeypatch):
+    # OPE-205: the first `sandbox create` pulls about 5 GB; on a slow link that outlives the
+    # create's timeout and the session hangs for ten minutes with no word about why. So the
+    # image is checked up front, with a message that names the download.
+    monkeypatch.setattr(openshell.shutil, "which", lambda name: f"/usr/bin/{name}")
+    missing = {"--version": _OK_VERSION, "status": _CONNECTED, "gateway": _DOCKER_GATEWAY, "image": ("Error: No such image", 1)}
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli(missing))
+    with pytest.raises(openshell.OpenShellImageMissing) as err:
+        openshell.preflight()
+    text = str(err.value)
+    assert openshell.is_image_problem(text) and "sandbox setup" in text and f"docker pull {openshell.DEFAULT_IMAGE}" in text
+    assert isinstance(err.value, openshell.OpenShellUnavailable)  # callers that refuse sessions need no new branch
+    assert not openshell.is_image_problem("The OpenShell gateway is not running") and not openshell.is_image_problem(None)
+    # The check is keyed on the gateway's driver, not the OS: with another driver (a Mac's
+    # MicroVM, say) Docker cannot be asked, and the preflight passes as before.
+    vm_gateway = ('{"compute_drivers": [{"name": "vm"}]}', 0)
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli({"--version": _OK_VERSION, "status": _CONNECTED, "gateway": vm_gateway}))
+    assert openshell.image_present() is None
+    assert openshell.preflight() == {"version": openshell.PINNED_VERSION}
+    # No `docker` command on PATH: also "cannot tell", never a false refusal.
+    monkeypatch.setattr(openshell.shutil, "which", lambda name: "/usr/bin/openshell" if name == "openshell" else None)
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli({"--version": _OK_VERSION, "status": _CONNECTED, "gateway": _DOCKER_GATEWAY}))
+    assert openshell.image_present() is None
+    # The environment's image is the one asked for.
+    seen: list[str] = []
+    monkeypatch.setattr(openshell.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(openshell.subprocess, "run", lambda argv, **kw: seen.append(argv[-1]) or _fake_cli({"gateway": _DOCKER_GATEWAY, "image": ("", 0)})(argv, **kw))
+    monkeypatch.setenv("OPENWORKER_SANDBOX_IMAGE", "registry.example.com/team/agent:2")
+    assert openshell.image_present() is True and seen[-1] == "registry.example.com/team/agent:2"
 
 
 def test_registry_counts_caps_and_forgets(tmp_path, monkeypatch):

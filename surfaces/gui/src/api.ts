@@ -2102,7 +2102,9 @@ export interface SandboxSettings {
   provider: string; // "" = the default rule
   effective_provider: string;
   refused: string;
-  providers: { name: string; usable: boolean; why: string }[];
+  // `state` is what the page shows next to a provider. "needs_download": OpenShell is in
+  // place except for the base image (about 5 GB, pulled once); the radio stays enabled.
+  providers: { name: string; usable: boolean; why: string; state?: "ready" | "needs_download" | "unavailable" }[];
   network_profile: string;
   network_profiles: { name: string; hosts: string[] }[];
   credentials: SandboxCredentialEntry[];
