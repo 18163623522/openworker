@@ -30,9 +30,11 @@ const readiness = {
   supported: true,
   all_ok: false,
   steps: [
-    { key: "docker", what: "Docker is installed and this user can use it", ok: true, hint: "", fixable: false },
-    { key: "openshell", what: "OpenShell 0.0.116 is installed", ok: false, hint: "curl -LsSf https://example/install.sh | sh", fixable: false },
-    { key: "image", what: "the sandbox base image is downloaded (about 5 GB, one time)", ok: false, hint: "docker pull img", fixable: true },
+    { key: "docker", what: "Docker is installed and this user can use it", ok: true, hint: "", fixable: false, command: "", docs: "" },
+    // Handed over (no way to run as an administrator here): a command, and a guide.
+    { key: "openshell", what: "OpenShell 0.0.116 is installed", ok: false, hint: "", fixable: false, command: "curl -LsSf https://example/install.sh | sh", docs: "https://example/guide" },
+    { key: "gateway", what: "the gateway is running", ok: false, hint: "OpenShell is not installed", fixable: false, command: "", docs: "" },
+    { key: "image", what: "the sandbox base image is downloaded (about 5 GB, one time)", ok: false, hint: "", fixable: true, command: "docker pull img", docs: "" },
   ],
 };
 let setupState: any = { status: "idle", rows: [], progress: null, error: "", elapsed_s: 0 };
@@ -78,12 +80,12 @@ describe("Settings ▸ Sandbox", () => {
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-section");
     expect((screen.getByTestId("sandbox-switch") as HTMLInputElement).checked).toBe(false);
-    expect(screen.getByText(/Off: commands run as you/)).toBeTruthy();
+    expect(screen.getByText(/Off: commands run directly on this machine/)).toBeTruthy();
     expect(screen.queryByTestId("sandbox-network-section")).toBeNull();
     expect(screen.queryByTestId("sandbox-credentials-section")).toBeNull();
     expect(screen.queryByTestId("sandbox-readiness")).toBeNull();
     expect(screen.queryByText("ready")).toBeNull(); // no status word for "no sandbox"
-    expect(screen.getByText(/config\.toml/)).toBeTruthy();
+    expect(screen.queryByText(/config\.toml/)).toBeNull(); // off = nothing stored: no "stored in" line
   });
 
   it("switching on picks the provider that needs no setup on a Mac, and off clears the key", async () => {
@@ -129,11 +131,17 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByTestId("sandbox-provider-openshell").textContent).toBe("OpenShell (NVIDIA)");
     expect(screen.queryByTestId("sandbox-provider-select")).toBeNull(); // one provider on Linux: no dropdown
     await screen.findByTestId("sandbox-readiness-row-openshell");
-    expect(screen.getByText("2 requirements missing")).toBeTruthy();
+    expect(screen.getByText("3 requirements missing")).toBeTruthy();
     expect(screen.getByTestId("sandbox-readiness-row-docker").getAttribute("data-state")).toBe("ok");
     expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("pending");
     expect(screen.getByText("curl -LsSf https://example/install.sh | sh")).toBeTruthy(); // the command to run
-    expect(screen.getAllByText("Copy").length).toBe(2);
+    // Only the handed-over row shows its command with Copy; the image row is the app's to
+    // do, and a note (the gateway row) gets neither.
+    expect(screen.getAllByText("Run this in a terminal on this machine:").length).toBe(1);
+    expect(screen.getAllByText("Copy").length).toBe(1);
+    expect(screen.getByText("OpenShell is not installed")).toBeTruthy(); // the gateway row's note, plain
+    expect(screen.queryByTestId("sandbox-readiness-command-gateway")).toBeNull();
+    expect((screen.getByTestId("sandbox-readiness-docs-openshell") as HTMLAnchorElement).href).toBe("https://example/guide");
     expect((screen.getByTestId("sandbox-setup-start") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -144,7 +152,8 @@ describe("Settings ▸ Sandbox", () => {
       rows: [
         { ...readiness.steps[0], state: "ok" },
         { ...readiness.steps[1], ok: true, state: "ok" },
-        { ...readiness.steps[2], state: "fixing" },
+        { ...readiness.steps[2], ok: true, state: "ok" },
+        { ...readiness.steps[3], state: "fixing" },
       ],
       progress: { layers_total: 8, layers_done: 3, last_line: "x: Downloading", elapsed_s: 75 },
       error: "",
@@ -158,12 +167,32 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByTestId("sandbox-readiness-row-image").getAttribute("data-state")).toBe("fixing");
     cleanup();
 
+    // The app installing OpenShell itself: the installer's output is the progress.
+    setupState = {
+      status: "running",
+      rows: [
+        { ...readiness.steps[0], state: "ok" },
+        { ...readiness.steps[1], command: "", fixable: true, state: "fixing" },
+        { ...readiness.steps[2], state: "pending" },
+        { ...readiness.steps[3], state: "pending" },
+      ],
+      progress: { layers_total: 0, layers_done: 0, last_line: "downloading v0.0.116 release checksums...", elapsed_s: 12 },
+      error: "",
+      elapsed_s: 12,
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-install-progress");
+    expect(screen.getByTestId("sandbox-install-progress").textContent).toBe("Installing OpenShell… 12 s elapsed · downloading v0.0.116 release checksums...");
+    expect(screen.queryByText("Copy")).toBeNull(); // nothing to hand over while it works
+    cleanup();
+
     setupState = {
       status: "needs_you",
       rows: [
         { ...readiness.steps[0], state: "ok" },
         { ...readiness.steps[1], state: "needs_you" },
         { ...readiness.steps[2], state: "pending" },
+        { ...readiness.steps[3], state: "pending" },
       ],
       progress: null,
       error: "",
@@ -171,7 +200,7 @@ describe("Settings ▸ Sandbox", () => {
     };
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-setup-needs_you");
-    expect(screen.getByText(/Run the command shown, then check again/)).toBeTruthy();
+    expect(screen.getByText(/run the command shown in a terminal on this machine, then click Check again/)).toBeTruthy();
     expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("needs_you");
     expect(screen.getByTestId("sandbox-setup-start").textContent).toBe("Check again");
     fireEvent.click(screen.getByTestId("sandbox-setup-start"));

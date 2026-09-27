@@ -1,12 +1,13 @@
 """The guided setup behind Settings ▸ Sandbox ▸ "Set up sandbox" (OPE-207).
 
-One job per machine, on a worker thread. It walks `setup_cmd.steps()` top to bottom: a
-step the app may fix itself (bind mounts, the config line, linger when no administrator
-is needed, the image download) is fixed with its status shown; a step that needs an
-administrator or an installer is handed over as a command to run, and the job stops there
-until the user says "check again". The image download reports progress and can be
-cancelled. The job never runs anything as root and never lowers protection: a failure
-leaves the machine "not ready, here is what to do", and sessions stay refused.
+One job per machine, on a worker thread. It walks `setup_cmd.steps()` top to bottom and
+fixes each step it may: the OpenShell install (through `sudo` without a password or the
+system's password prompt, see `setup_cmd.admin_prefix`; as the user on a Mac), bind
+mounts, linger, the config line, the image download. The two slow ones (install,
+download) stream progress and can be cancelled. A step the app cannot do on this machine
+is handed over as ONE command to run in a terminal, and the job stops there until the
+user says "check again". The job never holds a password and never lowers protection: a
+failure leaves the machine "not ready, here is what to do", and sessions stay refused.
 """
 
 from __future__ import annotations
@@ -96,8 +97,8 @@ class SetupJob:
             if step.ok:
                 continue
             if not step.fixable:
-                # Needs an administrator or an installer: hand the command over and stop
-                # here, so later steps (which may depend on this one) are not attempted.
+                # The app cannot do this one here: hand its command over and stop, so
+                # later steps (which may depend on this one) are not attempted.
                 self._set_row(step.key, state=self.NEEDS_YOU)
                 with self._lock:
                     self.status = "needs_you"
@@ -105,11 +106,12 @@ class SetupJob:
             self._set_row(step.key, state=self.FIXING)
             problem = self._fix(step)
             if problem is None:
-                self._set_row(step.key, state=self.FIXED, hint="")
+                self._set_row(step.key, state=self.FIXED, hint="", command="")
                 continue
             if step.key == "linger":
-                # Refused without an administrator: not fatal, the command is shown; go on.
-                self._set_row(step.key, state=self.NEEDS_YOU, hint=problem)
+                # Refused as the user and as an administrator: not fatal, the command is
+                # shown; go on with the rest.
+                self._set_row(step.key, state=self.NEEDS_YOU, command=problem)
                 continue
             self._set_row(step.key, state=self.FAILED, hint=problem)
             with self._lock:
@@ -127,12 +129,18 @@ class SetupJob:
                         done[s.key]["state"] = self.OK if done[s.key]["state"] != self.FIXED else self.FIXED
                     elif done[s.key]["state"] not in (self.NEEDS_YOU, self.FAILED):
                         done[s.key]["state"] = self.FAILED
-                        done[s.key]["hint"] = s.hint
+                        done[s.key]["hint"], done[s.key]["command"] = s.hint, s.command
                 else:
                     self.rows.append({**s.as_dict(), "state": self.OK if s.ok else self.NEEDS_YOU})
             self.status = "done" if all(s.ok for s in final) else "needs_you"
 
+    def _progress(self, line: str, **more: Any) -> None:
+        with self._lock:
+            self.progress = {"layers_total": 0, "layers_done": 0, "last_line": line, "elapsed_s": int(time.time() - self.started_at), **more}
+
     def _fix(self, step: setup_cmd.Step) -> Optional[str]:
+        if step.key == "openshell":
+            return setup_cmd.install_openshell(self._progress, self._cancel)
         if step.key == "bind_mounts":
             return setup_cmd.apply_bind_mounts()
         if step.key == "config":
@@ -143,8 +151,7 @@ class SetupJob:
         if step.key == "image":
 
             def on_progress(p: setup_cmd.PullProgress) -> None:
-                with self._lock:
-                    self.progress = {**p.as_dict(), "elapsed_s": int(time.time() - self.started_at)}
+                self._progress(p.last_line, layers_total=p.layers_total, layers_done=p.layers_done)
 
             return setup_cmd.pull_image(on_progress, self._cancel)
         return f"no automatic fix for {step.key}"

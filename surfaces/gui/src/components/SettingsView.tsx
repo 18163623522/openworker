@@ -972,7 +972,12 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
             {rows.map((r) => {
               const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
               const good = state === "ok" || state === "fixed";
+              // A command is something to run in a terminal on that machine (with Copy); a
+              // hint is a note about what was found. A row the app fixes itself shows its
+              // command only once the app could not (handed over, or failed).
+              const showCommand = !good && r.command && (!r.fixable || state === "needs_you" || state === "failed");
               const showHint = !good && r.hint;
+              const showDocs = !good && r.docs;
               return (
                 <li key={r.key} className="px-4 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
                   <div className="flex items-start gap-2">
@@ -982,6 +987,12 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
                     <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
                     <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${state}`)}</span>
                   </div>
+                  {r.key === "openshell" && running && state === "fixing" && setup?.progress ? (
+                    <div className="mt-1 ml-6 text-meta text-muted font-mono break-all" data-testid="sandbox-install-progress">
+                      {t("settingsx.sandbox.install_progress", { elapsed: elapsed(setup.progress.elapsed_s) })}
+                      {setup.progress.last_line ? ` · ${setup.progress.last_line}` : ""}
+                    </div>
+                  ) : null}
                   {r.key === "image" && running && state === "fixing" && setup?.progress ? (
                     <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
                       <div className="h-1.5 rounded bg-line overflow-hidden">
@@ -997,13 +1008,22 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
                       </div>
                     </div>
                   ) : null}
-                  {showHint ? (
-                    <div className="mt-1 ml-6 flex items-start gap-2">
-                      <code className="text-meta font-mono text-muted break-all flex-1 min-w-0">{r.hint}</code>
-                      <button className="text-meta text-accent shrink-0" onClick={() => copy(r.hint)}>
-                        {copied === r.hint ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
-                      </button>
+                  {showHint ? <div className="mt-1 ml-6 text-meta text-muted">{r.hint}</div> : null}
+                  {showCommand ? (
+                    <div className="mt-1 ml-6" data-testid={`sandbox-readiness-command-${r.key}`}>
+                      <div className="text-meta text-muted">{t("settingsx.sandbox.run_in_terminal")}</div>
+                      <div className="flex items-start gap-2">
+                        <code className="text-meta font-mono text-ink break-all flex-1 min-w-0">{r.command}</code>
+                        <button className="text-meta text-accent shrink-0" onClick={() => copy(r.command)}>
+                          {copied === r.command ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
+                        </button>
+                      </div>
                     </div>
+                  ) : null}
+                  {showDocs ? (
+                    <a className="mt-1 ml-6 inline-block text-meta text-accent" href={r.docs} target="_blank" rel="noreferrer" data-testid={`sandbox-readiness-docs-${r.key}`}>
+                      {t("settingsx.sandbox.guide")}
+                    </a>
                   ) : null}
                 </li>
               );
@@ -1103,7 +1123,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
         </>
       ) : null}
 
-      <div className={FIELD_HELP + " mt-3"}>{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div>
+      {enabled ? <div className={FIELD_HELP + " mt-3"}>{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div> : null}
 
       {editing !== null ? (
         <CredentialEditor
@@ -1139,15 +1159,17 @@ function CredentialEditor({
   const valid = Boolean(slug) && (path.startsWith("~/") || path.startsWith("/"));
   return (
     <div className={CARD + " p-4 mt-3"} data-testid="sandbox-credential-editor">
+      <div className="text-ui text-ink mb-1">{entry ? t("settingsx.sandbox.editor_title_edit") : t("settingsx.sandbox.editor_title_add")}</div>
+      <div className={FIELD_HELP + " mb-3"}>{t("settingsx.sandbox.editor_help")}</div>
       <div className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-2 items-center">
         <label className="text-ui text-muted">{t("settingsx.sandbox.field_title")}</label>
-        <input className={INPUT} value={title} onChange={(e) => { setTitle(e.target.value); if (!entry) setName(""); }} />
+        <input className={INPUT} value={title} placeholder={t("settingsx.sandbox.field_title_example")} onChange={(e) => { setTitle(e.target.value); if (!entry) setName(""); }} />
         <label className="text-ui text-muted">{t("settingsx.sandbox.field_path")}</label>
-        <input className={INPUT + " font-mono"} value={path} onChange={(e) => setPath(e.target.value)} />
+        <input className={INPUT + " font-mono"} value={path} placeholder={t("settingsx.sandbox.field_path_example")} onChange={(e) => setPath(e.target.value)} />
         <label className="text-ui text-muted self-start pt-2">{t("settingsx.sandbox.field_hosts")}</label>
-        <textarea className={INPUT + " font-mono"} rows={3} value={hosts} onChange={(e) => setHosts(e.target.value)} />
+        <textarea className={INPUT + " font-mono"} rows={3} value={hosts} placeholder={t("settingsx.sandbox.field_hosts_example")} onChange={(e) => setHosts(e.target.value)} />
         <label className="text-ui text-muted">{t("settingsx.sandbox.field_does")}</label>
-        <input className={INPUT} value={does} onChange={(e) => setDoes(e.target.value)} />
+        <input className={INPUT} value={does} placeholder={t("settingsx.sandbox.field_does_example")} onChange={(e) => setDoes(e.target.value)} />
       </div>
       <div className="flex justify-end gap-2 mt-3">
         <button className={BTN_BORDERED} onClick={onCancel}>{t("settingsx.sandbox.cancel")}</button>

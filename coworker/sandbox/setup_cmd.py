@@ -1,13 +1,21 @@
 """`openworker machine sandbox status|setup`: get a machine ready to run agents in
 OpenShell sandboxes (design doc, ruling 23).
 
-`setup` shows every change before it makes it and asks first (or `--yes`). It never runs
-`sudo` for you; when a step needs it, it prints the command. Someone who brings their own
-OpenShell can ignore `setup` and use `status` to see what is missing.
+`setup` shows every change before it makes it and asks first (or `--yes`). Someone who
+brings their own OpenShell can ignore `setup` and use `status` to see what is missing.
 
 The same steps serve Settings ▸ Sandbox (OPE-207): `steps()` is the readiness list the page
-shows, and `setup_job.SetupJob` runs the fixes the app may apply on its own, with progress,
-handing the rest over as commands to run. One list of checks and fixes, two front ends.
+shows, and `setup_job.SetupJob` runs the fixes, with progress. One list of checks and fixes,
+two front ends.
+
+Two steps need an administrator on Linux: installing the OpenShell package, and `linger`
+(the gateway is a user service and stops at logout otherwise). The app runs them itself
+when it can do so without holding a password: through `sudo` when this user may use it
+without one, or through the system's own password prompt (`pkexec`) on a Linux desktop.
+Where neither exists (WSL has no prompt), the two are folded into ONE command for the
+user to run, and the job stops there until "check again". A Mac needs no administrator:
+Homebrew installs OpenShell as the user, and there is no linger. The app never asks for,
+sees or stores a password.
 
 Hidden from `openworker --help` until it has been tried on a fresh machine.
 """
@@ -31,6 +39,9 @@ from .providers.openshell import PINNED_VERSION
 from .selection import openshell_problem, select
 
 _INSTALLER = "https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh"
+# Where the page's "Guide" links point: how OpenShell fits, what a machine needs, setup.
+GUIDE_URL = "https://github.com/andrewyng/openworker/blob/main/docs/openshell.md"
+DOCKER_INSTALL_URL = "https://docs.docker.com/engine/install/"
 _BIND_MOUNTS = "[openshell.drivers.docker]\nenable_bind_mounts = true\n"
 # The base image is pulled by the first `sandbox create` otherwise, which on a slow link
 # outlives the create's timeout and hangs the first session (OPE-205). So it is a check of
@@ -53,8 +64,8 @@ ROWS = {
     "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
     "image": IMAGE_ROW,
 }
-# Steps the app may fix on its own (no administrator, no installer). The rest are shown
-# as a command for the user to run.
+# Steps the app may fix on its own without an administrator. `openshell` joins them at
+# run time when `admin_prefix()` finds a way to run as one; see `steps()`.
 FIXABLE = {"bind_mounts", "config", "image", "linger"}
 
 
@@ -63,11 +74,13 @@ class Step:
     key: str
     what: str
     ok: bool
-    hint: str = ""  # what to run, or why it failed
+    hint: str = ""  # a note: what was found, or why it failed. Never a command.
     fixable: bool = False  # `SetupJob` can do this one itself
+    command: str = ""  # what to run in a terminal on this machine when the app cannot
+    docs: str = ""  # a page that explains this requirement
 
     def as_dict(self) -> dict[str, Any]:
-        return {"key": self.key, "what": self.what, "ok": self.ok, "hint": self.hint, "fixable": self.fixable}
+        return {"key": self.key, "what": self.what, "ok": self.ok, "hint": self.hint, "fixable": self.fixable, "command": self.command, "docs": self.docs}
 
 
 def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
@@ -76,6 +89,45 @@ def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
 
 def _openshell_home() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "openshell"
+
+
+def installer_command() -> str:
+    """NVIDIA's installer, pinned to the tested release. It downloads the package from
+    their GitHub release, checks its checksum and installs it. On Linux it needs `sudo`
+    (it asks itself when it has a terminal); on a Mac it uses Homebrew as the user."""
+    return f"curl -LsSf {_INSTALLER} | OPENSHELL_VERSION=v{PINNED_VERSION} sh"
+
+
+def is_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def admin_prefix() -> Optional[list[str]]:
+    """How this process can run a command as an administrator WITHOUT holding a password,
+    or None. `sudo -n` when this user may use sudo without a password (a dev VM, a cloud
+    box); else `pkexec` on a Linux desktop, where polkit shows the system's own password
+    prompt and the app never sees what is typed. WSL has no such prompt, so None there:
+    the caller hands the command over. `SUDO_USER` tells NVIDIA's installer which user's
+    gateway service to set up; sudo sets it by itself, pkexec does not."""
+    if not sys.platform.startswith("linux"):
+        return None
+    if shutil.which("sudo") and _run(["sudo", "-n", "true"], 15).returncode == 0:
+        return ["sudo", "-n"]
+    if shutil.which("pkexec") and not is_wsl() and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return ["pkexec", "env", f"SUDO_USER={getpass.getuser()}", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}"]
+    return None
+
+
+def install_handover_command() -> str:
+    """The ONE command a user runs in a terminal when the app cannot run the administrator
+    steps itself: linger first (the installer needs the user's systemd manager, which does
+    not run without it on WSL), then the installer. On a Mac, the installer alone."""
+    if sys.platform.startswith("linux"):
+        return f"sudo loginctl enable-linger {getpass.getuser()} && {installer_command()}"
+    return installer_command()
 
 
 def landlock_available() -> Optional[bool]:
@@ -112,19 +164,35 @@ def steps() -> list[Step]:
     out: list[Step] = []
     docker = shutil.which("docker")
     docker_ok = bool(docker) and _run(["docker", "info", "--format", "{{.ServerVersion}}"], 30).returncode == 0
-    out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, and add this user to the `docker` group"))
+    out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, then add this user to the `docker` group and log in again", docs="" if docker_ok else DOCKER_INSTALL_URL))
     exe = shutil.which("openshell")
     version = _run([exe, "--version"], 15).stdout.strip().split()[-1] if exe else ""
-    out.append(Step("openshell", ROWS["openshell"], version == PINNED_VERSION, f"found {version or 'none'}" if version != PINNED_VERSION else ""))
+    openshell_ok = version == PINNED_VERSION
+    # The app installs it when it can run as an administrator without a password (or
+    # needs none, on a Mac); otherwise the row carries the one command to run.
+    can_install = sys.platform == "darwin" or (sys.platform.startswith("linux") and admin_prefix() is not None)
+    out.append(
+        Step(
+            "openshell",
+            ROWS["openshell"],
+            openshell_ok,
+            "" if openshell_ok or not version else f"found {version}, not the tested release",
+            fixable=not openshell_ok and can_install,
+            command="" if openshell_ok or can_install else install_handover_command(),
+            docs="" if openshell_ok else GUIDE_URL,
+        )
+    )
     gateway_toml = _openshell_home() / "gateway.toml"
     binds = gateway_toml.is_file() and "enable_bind_mounts = true" in gateway_toml.read_text(encoding="utf-8")
-    out.append(Step("bind_mounts", ROWS["bind_mounts"], binds, "" if binds else str(gateway_toml), fixable=True))
+    out.append(Step("bind_mounts", ROWS["bind_mounts"], binds, fixable=True))
     if sys.platform.startswith("linux"):
         linger = _run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger"], 15).stdout.strip() == "Linger=yes"
-        out.append(Step("linger", ROWS["linger"], linger, "" if linger else f"sudo loginctl enable-linger {getpass.getuser()}", fixable=True))
+        # Fixable: `enable_linger` tries as the user, then as an administrator; when both
+        # are refused the job hands this command over and goes on.
+        out.append(Step("linger", ROWS["linger"], linger, fixable=True, command="" if linger else f"sudo loginctl enable-linger {getpass.getuser()}"))
         landlock = landlock_available()
         if landlock is not None:
-            out.append(Step("landlock", ROWS["landlock"], landlock, "" if landlock else "update the kernel (on WSL: `wsl --update` from Windows)"))
+            out.append(Step("landlock", ROWS["landlock"], landlock, "" if landlock else "update the kernel (on WSL: run `wsl --update` from Windows)"))
     problem = openshell_problem(fresh=True) if exe else "OpenShell is not installed"
     # A missing image is not a gateway problem: it gets its own row below.
     image_missing = openshell.is_image_problem(problem)
@@ -136,7 +204,7 @@ def steps() -> list[Step]:
         grpc_ok = True
     except ImportError:
         grpc_ok = False
-    out.append(Step("grpcio", ROWS["grpcio"], grpc_ok, "" if grpc_ok else "pip install 'openworker[openshell]'"))
+    out.append(Step("grpcio", ROWS["grpcio"], grpc_ok, command="" if grpc_ok else "pip install 'openworker[openshell]'"))
     configured = app_config.load_config().sandbox_provider
     out.append(Step("config", ROWS["config"], configured == "openshell", "" if configured == "openshell" else f"sandbox_provider = {configured!r} in {app_config.global_config_path()}", fixable=True))
     if gateway_ok and exe:
@@ -146,13 +214,13 @@ def steps() -> list[Step]:
                 free = image_store_free_gb()
                 if free is not None:
                     out.append(Step("disk", ROWS["disk"], free >= IMAGE_FREE_GB, "" if free >= IMAGE_FREE_GB else f"{free:.1f} GB free; free up space before the download"))
-            out.append(Step("image", IMAGE_ROW, present, "" if present else f"{openshell.image_tool() or 'docker'} pull {openshell.sandbox_image()}", fixable=True))
+            out.append(Step("image", IMAGE_ROW, present, fixable=True, command="" if present else f"{openshell.image_tool() or 'docker'} pull {openshell.sandbox_image()}"))
     return out
 
 
 def checks() -> list[tuple[str, bool, str]]:
     """(what, ok, detail) rows: the shape `status` prints and older callers read."""
-    return [(s.what, s.ok, s.hint) for s in steps()]
+    return [(s.what, s.ok, s.command or s.hint) for s in steps()]
 
 
 # -- the fixes, one function each: `setup` (with prompts) and `SetupJob` (with progress) --
@@ -187,10 +255,57 @@ def apply_bind_mounts() -> Optional[str]:
 
 
 def enable_linger() -> Optional[str]:
-    """Try without an administrator; return the command to run when that is refused."""
+    """Try as the user, then as an administrator without a password (`admin_prefix`);
+    return the command to run when both are refused."""
     user = getpass.getuser()
-    if _run(["loginctl", "enable-linger", user], 30).returncode != 0:
-        return f"sudo loginctl enable-linger {user}"
+    if _run(["loginctl", "enable-linger", user], 30).returncode == 0:
+        return None
+    prefix = admin_prefix()
+    if prefix is not None and _run(prefix + ["loginctl", "enable-linger", user], 120).returncode == 0:
+        return None
+    return f"sudo loginctl enable-linger {user}"
+
+
+def _stream(argv: list[str], on_line: Optional[Callable[[str], None]], cancel: Optional[threading.Event]) -> tuple[Optional[int], str]:
+    """Run `argv` with stdin closed, feeding each output line to `on_line`. Returns the
+    exit code (None when cancelled) and the last line seen."""
+    last = ""
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as exc:
+        return 127, f"could not run {argv[0]}: {exc}"
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if cancel is not None and cancel.is_set():
+            proc.kill()
+            proc.wait()
+            return None, last
+        line = line.strip()
+        if line:
+            last = line[:160]
+            if on_line is not None:
+                on_line(last)
+    return proc.wait(), last
+
+
+def install_openshell(on_line: Optional[Callable[[str], None]] = None, cancel: Optional[threading.Event] = None) -> Optional[str]:
+    """Install the pinned OpenShell from the app (Settings ▸ Set up sandbox). On a Mac the
+    installer runs as the user. On Linux it runs as an administrator through
+    `admin_prefix()`, with linger enabled FIRST in the same run (the installer needs the
+    user's systemd manager, which does not run without linger on WSL and on a headless
+    box). Returns an error text, or None when it succeeded."""
+    if sys.platform == "darwin":
+        argv = ["sh", "-c", installer_command()]
+    else:
+        prefix = admin_prefix()
+        if prefix is None:
+            return "this machine has no way to run an administrator step without a password; run: " + install_handover_command()
+        argv = prefix + ["sh", "-c", f"loginctl enable-linger {getpass.getuser()} && {installer_command()}"]
+    code, last = _stream(argv, on_line, cancel)
+    if code is None:
+        return "installation cancelled"
+    if code != 0:
+        return f"the installer exited with {code}: {last}"
     return None
 
 
@@ -303,9 +418,18 @@ def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, pri
     if not rows[ROWS["docker"]]:
         print_fn("Docker is needed first, and installing it needs an administrator:\n  https://docs.docker.com/engine/install/\n  sudo usermod -aG docker $USER   (then log in again)")
         return 1
+    if not rows.get(ROWS["linger"], True):
+        # Before the installer: it starts the gateway through the user's systemd manager,
+        # which on WSL and on a headless box only runs once linger is on.
+        print_fn(f"The gateway is a user service and stops when you log out. Keeping it running needs an administrator:\n  sudo loginctl enable-linger {getpass.getuser()}")
+        if not confirm("Run it now (sudo will ask for your password)?"):
+            return 1
+        if subprocess.run(["sudo", "loginctl", "enable-linger", getpass.getuser()]).returncode != 0:
+            print_fn("enable-linger failed; nothing else was changed")
+            return 1
     if not rows[ROWS["openshell"]]:
-        command = f"curl -LsSf {_INSTALLER} | OPENSHELL_VERSION=v{PINNED_VERSION} sh"
-        print_fn(f"OpenShell {PINNED_VERSION} is not installed. NVIDIA's installer downloads a package from their GitHub release,\nchecks its checksum and installs it (it will ask for sudo itself):\n  {command}")
+        command = installer_command()
+        print_fn(f"OpenShell {PINNED_VERSION} is not installed. NVIDIA's installer downloads a package from their GitHub release,\nchecks its checksum and installs it (it will ask for sudo itself):\n  {command}\nGuide: {GUIDE_URL}")
         if not confirm("Run NVIDIA's installer now?"):
             return 1
         if subprocess.run(["sh", "-c", command]).returncode != 0:
@@ -319,10 +443,6 @@ def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, pri
         if problem:
             print_fn(problem)
             return 1
-    if not rows.get(ROWS["linger"], True):
-        command = enable_linger()
-        if command:
-            print_fn(f"The gateway is a user service and stops when you log out. An administrator has to run:\n  {command}")
     if not rows[ROWS["config"]]:
         print_fn(f"Set this machine to run agents in OpenShell sandboxes, and to REFUSE sessions when OpenShell is not running:\n  sandbox_provider = \"openshell\" in {app_config.global_config_path()}")
         if confirm("Make this change?"):

@@ -2135,8 +2135,10 @@ export interface SandboxReadinessStep {
   key: string;
   what: string;
   ok: boolean;
-  hint: string;
-  fixable: boolean;
+  hint: string; // a note (what was found, why it failed); never a command
+  fixable: boolean; // the setup job does this one itself on that machine
+  command: string; // what to run in a terminal there when the app cannot
+  docs: string; // a page explaining the requirement, or ""
 }
 export interface SandboxReadiness {
   platform: string;
