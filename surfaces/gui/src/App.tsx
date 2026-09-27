@@ -2277,7 +2277,9 @@ export function App() {
                   )}
                   {/* OPE-206: the sandbox for this session is being built (a container, its
                       runner, its mounts). Not a turn, so `running` is false; the row says so. */}
-                  {preparingSandbox && !connected && (
+                  {/* Not gated on `connected`: switching sessions keeps the previous socket's
+                      connected=true until this one's `ready`, which also clears the flag. */}
+                  {preparingSandbox && (
                     <WaitingForAgent label={t("app.preparing_sandbox", { provider: preparingSandbox })} />
                   )}
                   {/* Compaction runs between provider turns (nothing streams during it), so
