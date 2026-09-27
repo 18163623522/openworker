@@ -874,12 +874,9 @@ export function App() {
           setPreparingSandbox(d.provider || "sandbox");
           break;
         case "sandbox_ready":
+          // No transcript item here: one would make a fresh session non-idle and hide its
+          // intro screen. Which wall the session runs behind belongs in the header (OPE-207).
           setPreparingSandbox(null);
-          // One quiet line in the transcript: which wall this session's commands are behind.
-          setItems((p) => [
-            ...p,
-            { kind: "notice", tone: "info", text: t("app.notice.sandbox_ready", { detail: d.reason || d.provider || "" }) },
-          ]);
           break;
         case "ready":
           setPreparingSandbox(null);
@@ -1809,7 +1806,9 @@ export function App() {
 
   // `running` too: a mid-turn reconnect may land before any item is rebuilt — a live
   // session must show the transcript (waiting row, Stop), never the intro hero.
-  const idle = items.length === 0 && !streaming && !running;
+  // Not idle while this session's sandbox is being built: the waiting row lives in the
+  // transcript branch, and a brand-new session has no items yet (OPE-206).
+  const idle = items.length === 0 && !streaming && !running && !preparingSandbox;
   const pendingApproval = [...items].reverse().find((i) => i.kind === "approval" && !i.resolved);
   const pendingDirReq = [...items].reverse().find((i) => i.kind === "dirreq" && !i.resolved);
   const pendingToolReq = [...items].reverse().find((i) => i.kind === "toolreq" && !i.resolved);
