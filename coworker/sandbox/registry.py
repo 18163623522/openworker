@@ -12,6 +12,7 @@ gone (a crash, a kill) so they do not pile up.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..secrets import state_dir
+
+log = logging.getLogger(__name__)
 
 LOCAL_MACHINE = "local"
 MAX_ENV = "OPENWORKER_SANDBOX_MAX"
@@ -148,6 +151,9 @@ class SandboxRegistry:
                 listed = []
             openshell_names = {str(s.get("name") or s.get("metadata", {}).get("name") or "") for s in listed} - {""}
             for name in sorted(openshell_names - owned):
+                # Say so: a deletion here is a sandbox nobody claims. If a live server is in
+                # fact building it, the log line is how that shows up.
+                log.info("reap: deleting OpenShell sandbox %s (not owned by a live server; owned=%s, pid=%d)", name, sorted(owned), os.getpid())
                 try:
                     openshell._cli("sandbox", "delete", name, timeout=90, check=False)
                     removed.append(name)

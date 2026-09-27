@@ -242,6 +242,7 @@ class OpenShellProvider:
         try:
             _cli(*args, "--", *command, timeout=600)  # the first create pulls the image
         except RuntimeError as exc:
+            log.warning("sandbox create failed for %s: %s", self.sandbox_name, exc)
             if "bind" in str(exc).lower() and "enable" in str(exc).lower():
                 raise OpenShellUnavailable("The OpenShell gateway does not allow bind mounts, so it cannot give a sandbox your folders. Set `enable_bind_mounts = true` under `[openshell.drivers.docker]` in the gateway config (`openworker machine sandbox setup` does this).") from exc
             raise
@@ -298,6 +299,9 @@ class OpenShellProvider:
         self.create()
 
     def _delete(self) -> None:
+        import traceback
+
+        log.info("deleting sandbox %s, from:\n%s", self.sandbox_name, "".join(traceback.format_stack(limit=8)))
         try:
             _cli("sandbox", "delete", self.sandbox_name, timeout=90, check=False)
         except (subprocess.TimeoutExpired, OpenShellUnavailable):
