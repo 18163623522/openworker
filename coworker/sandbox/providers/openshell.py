@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import yaml
 
@@ -284,13 +284,17 @@ class OpenShellProvider:
             if "entries" not in info:
                 raise RuntimeError(f"the folder {root['path']} is not reachable inside the sandbox")
 
-    def regrant(self, roots: Sequence[dict[str, Any]]) -> None:
+    def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. Mounts and the file policy are fixed when a sandbox
-        is created, so this one is deleted and a new one is created with the new folders."""
+        is created, so this one is deleted and a new one is created with the new folders.
+        `before_create` runs once the new name is chosen and before the sandbox exists: the
+        workspace reserves the name in the registry there (see RunnerWorkspace)."""
         self._delete()
         self.roots = [{"path": str(Path(r["path"]).expanduser().resolve()), "writable": bool(r.get("writable"))} for r in roots]
         self.sandbox_name = f"ow-{uuid.uuid4().hex[:12]}"
         self.sandbox_id = None
+        if before_create is not None:
+            before_create()
         self.create()
 
     def _delete(self) -> None:

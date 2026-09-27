@@ -176,6 +176,50 @@ def test_registry_counts_caps_and_forgets(tmp_path, monkeypatch):
     assert [r["name"] for r in reg.list()] == ["ow-b"]
 
 
+def test_reap_leaves_a_sandbox_that_a_living_server_is_still_creating(tmp_path, monkeypatch):
+    # Engine builds run concurrently (OPE-206). A sandbox that exists at the gateway but was
+    # not yet connected used to look like an orphan to another build's reap() and got
+    # deleted mid-provisioning ("The operation was cancelled: stream closed"). The name is
+    # now reserved in the registry, state "creating", before the sandbox is created.
+    from coworker.sandbox import registry as registry_mod
+
+    reg = registry_mod.SandboxRegistry(tmp_path / "registry.db")
+    reg.record("ow-building", provider="openshell", session_id="s1", state="creating")  # this server, alive
+    monkeypatch.setattr(registry_mod, "_openshell_present", lambda: True)
+    monkeypatch.setattr(openshell, "list_our_sandboxes", lambda: [{"name": "ow-building"}, {"name": "ow-orphan"}])
+    deleted: list[str] = []
+    monkeypatch.setattr(openshell, "_cli", lambda *args, **kw: deleted.append(args[2]))
+    assert reg.reap() == ["ow-orphan"]
+    assert deleted == ["ow-orphan"]  # the one being built by a live server is left alone
+    assert reg.find("s1")["state"] == "creating"
+
+
+def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
+    from coworker.sandbox import registry as registry_mod
+    from coworker.sandbox.workspace import RunnerWorkspace
+
+    reg = registry_mod.SandboxRegistry(tmp_path / "registry.db")
+    seen: dict = {}
+
+    class Provider:
+        roots, profile = [{"path": str(tmp_path), "writable": True}], "strict"
+
+        def describe(self):
+            return {"provider": "openshell", "enforcement": "full", "sandbox": "ow-reserved"}
+
+        def create(self):
+            seen["row_at_create"] = reg.find("s9")  # what reap() would see while we provision
+            raise RuntimeError("create failed on purpose")
+
+        def destroy(self):
+            seen["destroyed"] = True
+
+    with pytest.raises(RuntimeError, match="on purpose"):
+        RunnerWorkspace(Provider(), cwd=tmp_path, registry=reg, session_id="s9", agent="lead")
+    assert seen["row_at_create"]["name"] == "ow-reserved" and seen["row_at_create"]["state"] == "creating"
+    assert seen["destroyed"] and reg.find("s9") is None  # a failed create leaves no reservation behind
+
+
 def test_registry_reaps_rows_of_a_server_that_is_gone(tmp_path, monkeypatch):
     from coworker.sandbox import registry as registry_mod
 

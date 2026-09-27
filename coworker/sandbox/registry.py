@@ -90,12 +90,16 @@ class SandboxRegistry:
         profile: str = "",
         enforcement: str = "",
         machine_id: str = LOCAL_MACHINE,
+        state: str = "ready",
     ) -> None:
+        """`state`: "creating" reserves the name BEFORE the sandbox exists, so that another
+        engine build's `reap()` (they run concurrently since OPE-206) does not take the
+        half-built sandbox for an orphan and delete it; "ready" once it is connected."""
         now = time.time()
         with self._lock, self._connect() as db:
             db.execute(
                 "INSERT OR REPLACE INTO sandboxes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (name, provider, machine_id, session_id, agent, json.dumps(roots or []), profile, enforcement, "ready", os.getpid(), now, now),
+                (name, provider, machine_id, session_id, agent, json.dumps(roots or []), profile, enforcement, state, os.getpid(), now, now),
             )
 
     def touch(self, name: str) -> None:
