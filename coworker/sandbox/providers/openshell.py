@@ -299,9 +299,7 @@ class OpenShellProvider:
         self.create()
 
     def _delete(self) -> None:
-        import traceback
-
-        log.info("deleting sandbox %s, from:\n%s", self.sandbox_name, "".join(traceback.format_stack(limit=8)))
+        log.info("deleting sandbox %s", self.sandbox_name)
         try:
             _cli("sandbox", "delete", self.sandbox_name, timeout=90, check=False)
         except (subprocess.TimeoutExpired, OpenShellUnavailable):
