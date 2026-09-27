@@ -140,7 +140,6 @@ class SandboxRegistry:
         removed: list[str] = []
         rows = self.list(LOCAL_MACHINE)
         dead = [r for r in rows if not _alive(int(r["server_pid"]))]
-        owned = {r["name"] for r in rows if r not in dead}
         openshell_names: set[str] = set()
         if any(r["provider"] == "openshell" for r in dead) or _openshell_present():
             from .providers import openshell
@@ -150,6 +149,12 @@ class SandboxRegistry:
             except Exception:
                 listed = []
             openshell_names = {str(s.get("name") or s.get("metadata", {}).get("name") or "") for s in listed} - {""}
+            # Ownership is read AFTER the gateway's list, never before: another build may
+            # reserve its name and create its sandbox while `sandbox list` runs, and rows
+            # read earlier would not show it, so it would be taken for an orphan here.
+            rows = self.list(LOCAL_MACHINE)
+            dead = [r for r in rows if not _alive(int(r["server_pid"]))]
+            owned = {r["name"] for r in rows if r not in dead}
             for name in sorted(openshell_names - owned):
                 # Say so: a deletion here is a sandbox nobody claims. If a live server is in
                 # fact building it, the log line is how that shows up.
