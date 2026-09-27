@@ -20,6 +20,10 @@ import {
   type Machine,
   type MeInfo,
   getSandboxSettings,
+  getSandboxReadiness,
+  getSandboxSetup,
+  startSandboxSetup,
+  cancelSandboxSetup,
   getSettings,
   getTrustedWorkspaces,
   setSandboxSettings,
@@ -37,6 +41,10 @@ import {
   type PdfSettings,
   type SandboxCredentialEntry,
   type SandboxSettings,
+  type SandboxReadiness,
+  type SandboxReadinessStep,
+  type SandboxSetupState,
+  type SandboxSetupRowState,
   type WorkspaceCommandTrust,
 } from "../api";
 import {
@@ -720,15 +728,25 @@ function PersonasSection({
 // in, and the way out (moved here from the Machines page's inline bar). On
 // desktop and self-hosted browsers it is the optional OpenWorker Cloud
 // sign-in — the same one the sidebar's account menu offers, given a full page.
-// Settings ▸ Sandbox (UX-051 A, design doc rulings 17, 29, 32): machine-level provider,
-// network allow list, and the credential files an agent may be given. Reads and writes the
-// machine's config.toml through /v1/settings/sandbox; nothing here is per project.
+// Settings ▸ Sandbox (UX-051 A, OPE-207): one switch — run agents in a sandbox, or not —
+// and, when it is on, the provider, a readiness checklist with a guided setup, and the
+// sub-settings that only mean something behind a wall (network allow list, shared
+// credentials). Reads and writes the machine's config.toml through /v1/settings/sandbox;
+// nothing here is per project. The switch never lowers protection on its own: when the
+// sandbox cannot be used, sessions are refused with the reason, and the checklist says
+// what to do.
+const SANDBOX_PROVIDERS = ["openshell", "seatbelt"] as const;
+
 function SandboxSection({ machine }: { machine?: Machine | null }) {
   const { t } = useTranslation();
   const mid = machine?.id ?? null;
   const [cfg, setCfg] = useState<SandboxSettings | null>(null);
   const [error, setError] = useState<string>("");
   const [editing, setEditing] = useState<string | null>(null); // credential name being edited, "" = new
+  const [readiness, setReadiness] = useState<SandboxReadiness | null>(null);
+  const [setup, setSetup] = useState<SandboxSetupState | null>(null);
+  const [copied, setCopied] = useState<string>("");
+  const notifiedRef = useRef(false);
 
   useEffect(() => {
     getSandboxSettings(mid).then(setCfg).catch(() => setCfg(null));
@@ -744,19 +762,100 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
     setCfg(res as SandboxSettings);
   };
 
+  // The switch reads the machine's choice; a headless machine's default rule (OpenShell
+  // when installed) counts as on. `provider` is empty for "no choice made".
+  const chosenName = cfg ? cfg.provider || cfg.effective_provider || "" : "";
+  const enabled = (SANDBOX_PROVIDERS as readonly string[]).includes(chosenName);
+  const providerName = enabled ? chosenName : "";
+  const windowsHost = cfg?.platform === "win32";
+
+  // The checklist is only about OpenShell (Seatbelt needs no setup). Loaded when the
+  // switch is on, and again after a setup run.
+  const loadReadiness = () => {
+    if (!cfg || providerName !== "openshell") return;
+    setReadiness(null);
+    getSandboxReadiness(mid).then(setReadiness).catch(() => setReadiness({ platform: cfg.platform, supported: false, steps: [], all_ok: false }));
+  };
+  useEffect(loadReadiness, [mid, providerName, cfg?.platform]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A setup job may be running from before (the page was closed and reopened): adopt it.
+  useEffect(() => {
+    if (providerName !== "openshell") return;
+    getSandboxSetup(mid).then((s) => setSetup(s.status === "idle" ? null : s)).catch(() => {});
+  }, [mid, providerName]);
+
+  // Poll the job while it runs; on the way out, reload the checklist and the settings
+  // (the job may have written the config line) and say so once.
+  useEffect(() => {
+    if (!setup || setup.status !== "running") return;
+    const timer = window.setInterval(() => {
+      getSandboxSetup(mid)
+        .then((s) => {
+          setSetup(s);
+          if (s.status !== "running") {
+            loadReadiness();
+            getSandboxSettings(mid).then(setCfg).catch(() => {});
+            if (s.status === "done" && !notifiedRef.current) {
+              notifiedRef.current = true;
+              try {
+                if ("Notification" in window && Notification.permission === "granted") {
+                  new Notification(t("settingsx.sandbox.notify_title"), { body: t("settingsx.sandbox.notify_body") });
+                }
+              } catch {
+                /* notifications are a courtesy */
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [setup?.status, mid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startSetup = async () => {
+    notifiedRef.current = false;
+    try {
+      if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    const s = await startSandboxSetup(mid).catch(() => null);
+    if (s) setSetup(s);
+  };
+  const cancelSetup = async () => {
+    const s = await cancelSandboxSetup(mid).catch(() => null);
+    if (s) setSetup(s);
+  };
+  const copy = (text: string) => {
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(text);
+      window.setTimeout(() => setCopied(""), 1500);
+    }).catch(() => {});
+  };
+
   if (!cfg) return null;
   const providerNames: Record<string, [string, string]> = {
-    direct: [t("settingsx.sandbox.provider_direct"), t("settingsx.sandbox.provider_direct_desc")],
     seatbelt: [t("settingsx.sandbox.provider_seatbelt"), t("settingsx.sandbox.provider_seatbelt_desc")],
     openshell: [t("settingsx.sandbox.provider_openshell"), t("settingsx.sandbox.provider_openshell_desc")],
   };
-  const chosen = cfg.provider || cfg.effective_provider || "direct";
+  const available = cfg.providers.filter((p) => p.name !== "direct" && (p.name !== "seatbelt" || cfg.platform === "darwin"));
+  // Switching on picks the provider that needs no setup where there is one (a Mac's
+  // Seatbelt), otherwise OpenShell; the user can change it on the line below.
+  const defaultProvider = cfg.platform === "darwin" && available.some((p) => p.name === "seatbelt") ? "seatbelt" : "openshell";
+  const providerRow = cfg.providers.find((p) => p.name === providerName);
+  const needsDownload = providerRow?.state === "needs_download";
   const shipped = (name: string, key: "title" | "does", fallback?: string) => {
     const k = `settingsx.sandbox.${key}_${name}`;
     const v = t(k);
     return v === k ? fallback || "" : v;
   };
   const updateCredentials = (rows: SandboxCredentialEntry[]) => save({ credentials: rows });
+
+  // The checklist to show: the live job's rows while it runs or just ran, else readiness.
+  const rows: (SandboxReadinessStep & { state?: SandboxSetupRowState })[] = setup && setup.status !== "idle" ? setup.rows : readiness?.steps ?? [];
+  const missing = rows.filter((r) => !r.ok && r.state !== "fixed").length;
+  const running = setup?.status === "running";
+  const elapsed = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`);
 
   return (
     <section data-testid="sandbox-section">
@@ -766,111 +865,244 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
       />
       {error ? <div className="mb-3 text-meta text-danger">{error}</div> : null}
 
-      <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.run_in")}</div>
-      <div className={CARD + " mb-1 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.run_in")}>
-        {cfg.providers
-          .filter((p) => p.name !== "seatbelt" || cfg.platform === "darwin")
-          .map((p) => {
-            const [label, desc] = providerNames[p.name] ?? [p.name, ""];
-            const active = chosen === p.name;
-            // OpenShell is installed and running but its base image is not downloaded yet:
-            // the provider can be chosen (nothing else is missing), but the first session
-            // cannot start until the download is done, so say that here instead of "ready".
-            const needsDownload = p.state === "needs_download";
-            return (
-              <label key={p.name} className="flex items-start gap-3 px-4 py-3 cursor-pointer">
-                <input
-                  type="radio"
-                  name="sandbox-provider"
-                  className="mt-1"
-                  checked={active}
-                  disabled={!p.usable && !active && !needsDownload}
-                  onChange={() => save({ provider: p.name === "direct" && !cfg.provider ? "" : p.name })}
-                  data-testid={`sandbox-provider-${p.name}`}
-                />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-ui text-ink">{label}</span>
-                  <span className="block text-meta text-muted">{desc}</span>
-                  {needsDownload ? (
-                    <span className="block text-meta text-warnInk" data-testid={`sandbox-provider-${p.name}-hint`}>
-                      {t("settingsx.sandbox.needs_download_hint")}
-                    </span>
-                  ) : null}
-                </span>
-                <span className={"text-meta shrink-0 " + (needsDownload ? "text-warnInk" : p.usable ? (active ? "text-success" : "text-muted") : "text-muted")} title={p.why || undefined}>
-                  {p.name === "direct" && !cfg.provider
-                    ? t("settingsx.sandbox.status_default")
-                    : needsDownload
-                      ? t("settingsx.sandbox.status_needs_download")
-                      : p.usable
-                        ? t("settingsx.sandbox.status_ready")
-                        : t("settingsx.sandbox.status_unavailable")}
-                </span>
-              </label>
-            );
-          })}
-      </div>
-      {cfg.refused ? <div className="mb-4 text-meta text-danger">{t("settingsx.sandbox.refused", { why: cfg.refused })}</div> : <div className="mb-4" />}
-
-      <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.network")}</div>
-      <div className={CARD + " divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
-        {cfg.network_profiles.map((np) => (
-          <label key={np.name} className="flex items-start gap-3 px-4 py-3 cursor-pointer">
-            <input
-              type="radio"
-              name="sandbox-network"
-              className="mt-1"
-              checked={cfg.network_profile === np.name}
-              onChange={() => save({ network_profile: np.name })}
-              data-testid={`sandbox-network-${np.name}`}
-            />
-            <span className="flex-1 min-w-0">
-              <span className="block text-ui text-ink">{t(`settingsx.sandbox.profile_${np.name}`)}</span>
-              <span className="block text-meta text-muted">{t(`settingsx.sandbox.profile_${np.name}_desc`)}</span>
+      <div className={CARD + " mb-4"}>
+        <label className={"flex items-start gap-3 px-4 py-3 " + (windowsHost ? "opacity-60" : "cursor-pointer")}>
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={enabled}
+            disabled={windowsHost}
+            onChange={(e) => save({ provider: e.target.checked ? defaultProvider : "" })}
+            data-testid="sandbox-switch"
+          />
+          <span className="flex-1 min-w-0">
+            <span className="block text-ui text-ink">{t("settingsx.sandbox.switch")}</span>
+            <span className="block text-meta text-muted">
+              {enabled ? t("settingsx.sandbox.switch_on_desc") : t("settingsx.sandbox.switch_off_desc")}
+              {!enabled && !windowsHost ? <span className="text-faint"> ({t("settingsx.sandbox.current")})</span> : null}
             </span>
-          </label>
-        ))}
-      </div>
-      <div className={FIELD_HELP + " mb-4"}>{t("settingsx.sandbox.network_help")}</div>
-
-      <div className="flex items-center mb-2">
-        <div className={FIELD_LABEL}>{t("settingsx.sandbox.credentials")}</div>
-        <button className="ml-auto text-ui text-accent" onClick={() => setEditing("")} data-testid="sandbox-credential-add">
-          {t("settingsx.sandbox.add")}
-        </button>
-      </div>
-      <div className={CARD + " divide-y divide-line"}>
-        {cfg.credentials.map((c) => (
-          <div key={c.name} className="flex items-start gap-3 px-4 py-3" data-testid={`sandbox-credential-${c.name}`}>
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={c.enabled}
-              onChange={(e) => updateCredentials(cfg.credentials.map((x) => (x.name === c.name ? { ...x, enabled: e.target.checked } : x)))}
-              aria-label={c.title || shipped(c.name, "title", c.name)}
-            />
-            <span className="flex-1 min-w-0">
-              <span className="block text-ui text-ink">
-                {c.title || shipped(c.name, "title", c.name)}{" "}
-                <code className="text-meta text-muted font-mono">{c.path}</code>
+            {windowsHost ? (
+              <span className="block text-meta text-warnInk" data-testid="sandbox-windows-hint">
+                {t("settingsx.sandbox.windows_hint")}
               </span>
-              <span className="block text-meta text-muted">
-                {c.does ? c.does : shipped(c.name, "does")}{" "}
-                {c.hosts && c.hosts.length ? <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span> : null}
+            ) : null}
+          </span>
+        </label>
+
+        {enabled ? (
+          <div className="border-t border-line px-4 py-3" data-testid="sandbox-provider-block">
+            <div className="flex items-start gap-3">
+              <span className="flex-1 min-w-0">
+                <span className="block text-ui text-ink">
+                  {t("settingsx.sandbox.provider_label")}:{" "}
+                  {available.length > 1 ? (
+                    <select
+                      className="text-ui bg-transparent border border-line rounded-md px-1.5 py-0.5"
+                      value={providerName}
+                      onChange={(e) => save({ provider: e.target.value })}
+                      data-testid="sandbox-provider-select"
+                    >
+                      {available.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {providerNames[p.name]?.[0] ?? p.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span data-testid={`sandbox-provider-${providerName}`}>{providerNames[providerName]?.[0] ?? providerName}</span>
+                  )}
+                </span>
+                <span className="block text-meta text-muted">{providerNames[providerName]?.[1] ?? ""}</span>
+                {needsDownload ? (
+                  <span className="block text-meta text-warnInk" data-testid={`sandbox-provider-${providerName}-hint`}>
+                    {t("settingsx.sandbox.needs_download_hint")}
+                  </span>
+                ) : null}
               </span>
-            </span>
-            <span className="text-meta text-muted shrink-0 whitespace-nowrap">
-              <button className="hover:text-ink" onClick={() => setEditing(c.name)}>{t("settingsx.sandbox.edit")}</button>
-              <span className="mx-1.5 text-faint">·</span>
-              <button className="hover:text-ink" onClick={() => updateCredentials(cfg.credentials.filter((x) => x.name !== c.name))}>
-                {t("settingsx.sandbox.remove")}
-              </button>
-            </span>
+              <span
+                className={"text-meta shrink-0 " + (needsDownload ? "text-warnInk" : providerRow?.usable ? "text-success" : "text-muted")}
+                title={providerRow?.why || undefined}
+                data-testid="sandbox-provider-status"
+              >
+                {needsDownload
+                  ? t("settingsx.sandbox.status_needs_download")
+                  : providerRow?.usable
+                    ? t("settingsx.sandbox.status_ready")
+                    : t("settingsx.sandbox.status_unavailable")}
+              </span>
+            </div>
+            {providerRow && !providerRow.usable && providerRow.why && !needsDownload ? (
+              <div className={FIELD_HELP + " text-warnInk"}>{t("settingsx.sandbox.refused", { why: providerRow.why })}</div>
+            ) : null}
           </div>
-        ))}
+        ) : null}
       </div>
-      <div className={FIELD_HELP}>{t("settingsx.sandbox.credentials_help")}</div>
-      {cfg.platform === "darwin" ? <div className={FIELD_HELP}>{t("settingsx.sandbox.keychain_note")}</div> : null}
+
+      {enabled && providerName === "openshell" ? (
+        <div className={CARD + " mb-4"} data-testid="sandbox-readiness">
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-line">
+            <span className="flex-1 min-w-0">
+              <span className="block text-ui text-ink">{t("settingsx.sandbox.readiness")}</span>
+              <span className={"block text-meta " + (rows.length && missing === 0 ? "text-success" : "text-muted")}>
+                {!readiness && !setup
+                  ? t("settingsx.sandbox.readiness_loading")
+                  : missing === 0
+                    ? t("settingsx.sandbox.readiness_all_ok")
+                    : missing === 1
+                      ? t("settingsx.sandbox.readiness_missing_one")
+                      : t("settingsx.sandbox.readiness_missing", { count: missing })}
+              </span>
+            </span>
+            {running ? (
+              <button className={BTN_BORDERED} onClick={cancelSetup} data-testid="sandbox-setup-cancel">
+                {t("settingsx.sandbox.setup_cancel")}
+              </button>
+            ) : (
+              <button
+                className={BTN_ACCENT}
+                disabled={!rows.length || (missing === 0 && setup?.status !== "needs_you" && setup?.status !== "failed")}
+                onClick={startSetup}
+                data-testid="sandbox-setup-start"
+              >
+                {setup && setup.status !== "idle" ? t("settingsx.sandbox.setup_again") : t("settingsx.sandbox.setup_start")}
+              </button>
+            )}
+          </div>
+          <ul className="divide-y divide-line">
+            {rows.map((r) => {
+              const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
+              const good = state === "ok" || state === "fixed";
+              const showHint = !good && r.hint;
+              return (
+                <li key={r.key} className="px-4 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
+                  <div className="flex items-start gap-2">
+                    <span className={"shrink-0 w-4 " + (good ? "text-success" : state === "fixing" ? "text-muted" : "text-warnInk")} aria-hidden>
+                      {good ? "✓" : state === "fixing" ? "⟳" : "✗"}
+                    </span>
+                    <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
+                    <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${state}`)}</span>
+                  </div>
+                  {r.key === "image" && running && state === "fixing" && setup?.progress ? (
+                    <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
+                      <div className="h-1.5 rounded bg-line overflow-hidden">
+                        <div
+                          className="h-full bg-accent transition-all"
+                          style={{ width: setup.progress.layers_total ? `${Math.round((100 * setup.progress.layers_done) / setup.progress.layers_total)}%` : "5%" }}
+                        />
+                      </div>
+                      <div className="text-meta text-muted mt-1">
+                        {setup.progress.layers_total
+                          ? t("settingsx.sandbox.download_progress", { done: setup.progress.layers_done, total: setup.progress.layers_total, elapsed: elapsed(setup.progress.elapsed_s) })
+                          : t("settingsx.sandbox.download_progress_unknown", { elapsed: elapsed(setup.progress.elapsed_s) })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {showHint ? (
+                    <div className="mt-1 ml-6 flex items-start gap-2">
+                      <code className="text-meta font-mono text-muted break-all flex-1 min-w-0">{r.hint}</code>
+                      <button className="text-meta text-accent shrink-0" onClick={() => copy(r.hint)}>
+                        {copied === r.hint ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+          {setup && setup.status !== "idle" && setup.status !== "running" ? (
+            <div
+              className={"px-4 py-3 border-t border-line text-ui " + (setup.status === "done" ? "text-success" : "text-warnInk")}
+              data-testid={`sandbox-setup-${setup.status}`}
+            >
+              {setup.status === "done"
+                ? t("settingsx.sandbox.setup_done", { provider: providerNames.openshell[0] })
+                : setup.status === "needs_you"
+                  ? t("settingsx.sandbox.setup_needs_you")
+                  : setup.status === "cancelled"
+                    ? t("settingsx.sandbox.setup_cancelled")
+                    : t("settingsx.sandbox.setup_failed", { error: setup.error })}
+            </div>
+          ) : null}
+          <div className={FIELD_HELP + " px-4 pb-3"}>{t("settingsx.sandbox.setup_never_root")}</div>
+        </div>
+      ) : null}
+
+      {enabled ? (
+        <>
+          <details className={CARD + " mb-4"} data-testid="sandbox-network-section">
+            <summary className="px-4 py-3 cursor-pointer text-ui text-ink">{t("settingsx.sandbox.network")}</summary>
+            <div className="border-t border-line divide-y divide-line" role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
+              {cfg.network_profiles.map((np) => (
+                <label key={np.name} className="flex items-start gap-3 px-4 py-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="sandbox-network"
+                    className="mt-1"
+                    checked={cfg.network_profile === np.name}
+                    onChange={() => save({ network_profile: np.name })}
+                    data-testid={`sandbox-network-${np.name}`}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-ui text-ink">{t(`settingsx.sandbox.profile_${np.name}`)}</span>
+                    <span className="block text-meta text-muted">{t(`settingsx.sandbox.profile_${np.name}_desc`)}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className={FIELD_HELP + " px-4 pb-3"}>{t("settingsx.sandbox.network_help")}</div>
+          </details>
+
+          <details className={CARD + " mb-4"} data-testid="sandbox-credentials-section">
+            <summary className="px-4 py-3 cursor-pointer text-ui text-ink flex items-center">
+              <span>{t("settingsx.sandbox.credentials")}</span>
+              <button
+                className="ml-auto text-ui text-accent"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setEditing("");
+                }}
+                data-testid="sandbox-credential-add"
+              >
+                {t("settingsx.sandbox.add")}
+              </button>
+            </summary>
+            <div className="border-t border-line divide-y divide-line">
+              {cfg.credentials.map((c) => (
+                <div key={c.name} className="flex items-start gap-3 px-4 py-3" data-testid={`sandbox-credential-${c.name}`}>
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={c.enabled}
+                    onChange={(e) => updateCredentials(cfg.credentials.map((x) => (x.name === c.name ? { ...x, enabled: e.target.checked } : x)))}
+                    aria-label={c.title || shipped(c.name, "title", c.name)}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-ui text-ink">
+                      {c.title || shipped(c.name, "title", c.name)}{" "}
+                      <code className="text-meta text-muted font-mono">{c.path}</code>
+                    </span>
+                    <span className="block text-meta text-muted">
+                      {c.does ? c.does : shipped(c.name, "does")}{" "}
+                      {c.hosts && c.hosts.length ? <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span> : null}
+                    </span>
+                  </span>
+                  <span className="text-meta text-muted shrink-0 whitespace-nowrap">
+                    <button className="hover:text-ink" onClick={() => setEditing(c.name)}>{t("settingsx.sandbox.edit")}</button>
+                    <span className="mx-1.5 text-faint">·</span>
+                    <button className="hover:text-ink" onClick={() => updateCredentials(cfg.credentials.filter((x) => x.name !== c.name))}>
+                      {t("settingsx.sandbox.remove")}
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className={FIELD_HELP + " px-4"}>{t("settingsx.sandbox.credentials_help")}</div>
+            {cfg.platform === "darwin" ? <div className={FIELD_HELP + " px-4"}>{t("settingsx.sandbox.keychain_note")}</div> : null}
+            <div className="pb-3" />
+          </details>
+        </>
+      ) : null}
+
       <div className={FIELD_HELP + " mt-3"}>{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div>
 
       {editing !== null ? (

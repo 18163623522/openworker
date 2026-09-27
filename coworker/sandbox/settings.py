@@ -69,6 +69,18 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
     }
 
 
+def readiness() -> dict[str, Any]:
+    """The checklist Settings ▸ Sandbox shows for OpenShell: the same rows as `openworker
+    machine sandbox status`, with keys and whether the app may fix each one itself
+    (OPE-207). Costs a few CLI calls; the page asks for it separately from `snapshot`."""
+    from . import setup_cmd
+
+    if sys.platform == "win32":
+        return {"platform": sys.platform, "supported": False, "steps": [], "all_ok": False}
+    rows = [s.as_dict() for s in setup_cmd.steps()]
+    return {"platform": sys.platform, "supported": True, "steps": rows, "all_ok": all(r["ok"] for r in rows)}
+
+
 def _for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A shipped entry's title and wording are left out when the user has not changed
     them, so the app can show them in the user's language; a user's own text is kept."""

@@ -2405,6 +2405,33 @@ def create_app(manager: SessionManager) -> FastAPI:
 
         return sandbox_settings.update(body or {})
 
+    @app.get("/v1/settings/sandbox/readiness")
+    async def settings_sandbox_readiness() -> dict[str, Any]:
+        # OPE-207: the checklist behind "Set up sandbox". A few CLI calls, so off the loop.
+        from ..sandbox import settings as sandbox_settings
+
+        return await asyncio.to_thread(sandbox_settings.readiness)
+
+    @app.get("/v1/settings/sandbox/setup")
+    def settings_sandbox_setup_state() -> dict[str, Any]:
+        from ..sandbox import setup_job
+
+        return setup_job.job().state()
+
+    @app.post("/v1/settings/sandbox/setup")
+    def settings_sandbox_setup_start() -> dict[str, Any]:
+        # Runs on its own thread: fixes what the app may fix (never as root), hands the
+        # rest over as commands, downloads the image with progress. GET polls the state.
+        from ..sandbox import setup_job
+
+        return setup_job.job().start()
+
+    @app.post("/v1/settings/sandbox/setup/cancel")
+    def settings_sandbox_setup_cancel() -> dict[str, Any]:
+        from ..sandbox import setup_job
+
+        return setup_job.job().cancel()
+
     @app.post("/v1/settings/compaction")
     def settings_set_compaction(body: dict) -> dict[str, Any]:
         # Auto-compaction overrides (OPE-27): threshold % of the context window, the

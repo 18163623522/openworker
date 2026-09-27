@@ -2128,6 +2128,51 @@ export async function setSandboxSettings(
   return res.json();
 }
 
+// OPE-207: the readiness checklist behind Settings ▸ Sandbox (the rows `openworker machine
+// sandbox status` prints, with a key and whether the app may fix each one itself), and
+// the guided setup job that walks it on the machine where sessions run.
+export interface SandboxReadinessStep {
+  key: string;
+  what: string;
+  ok: boolean;
+  hint: string;
+  fixable: boolean;
+}
+export interface SandboxReadiness {
+  platform: string;
+  supported: boolean;
+  steps: SandboxReadinessStep[];
+  all_ok: boolean;
+}
+export type SandboxSetupRowState = "pending" | "fixing" | "fixed" | "ok" | "needs_you" | "failed";
+export interface SandboxSetupState {
+  status: "idle" | "running" | "done" | "needs_you" | "failed" | "cancelled";
+  rows: (SandboxReadinessStep & { state: SandboxSetupRowState })[];
+  progress: { layers_total: number; layers_done: number; last_line: string; elapsed_s: number } | null;
+  error: string;
+  elapsed_s: number;
+}
+
+export async function getSandboxReadiness(machineId?: string | null): Promise<SandboxReadiness> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/readiness`);
+  return res.json();
+}
+
+export async function getSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup`);
+  return res.json();
+}
+
+export async function startSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup`, { method: "POST" });
+  return res.json();
+}
+
+export async function cancelSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup/cancel`, { method: "POST" });
+  return res.json();
+}
+
 export async function getSettings(machineId?: string | null): Promise<ModelSettings> {
   const res = await fetch(`${engineBase(machineId)}/v1/settings`);
   return res.json();

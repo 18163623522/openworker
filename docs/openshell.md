@@ -80,6 +80,16 @@ Sandbox shows OpenShell as **needs download** and a session is refused with the 
 message, rather than hanging on the download. `setup` offers it with Docker's own
 progress; the command is also `docker pull` of the image named in the refusal.
 
+Settings ▸ Sandbox does the same from the app: one switch, **Run agents in a sandbox**,
+and under it the provider, a readiness checklist (the rows `status` prints, with what to
+run for each missing one), and a **Set up sandbox** button that walks the list. The app
+fixes what it may (the gateway's bind-mount setting, the config line, the image download
+with progress) and hands the rest over as a command to copy, because it never runs
+anything as an administrator; **Check again** continues once you have run it. The
+network allow list and the shared credentials appear only while the switch is on: they
+apply behind a wall and nowhere else. On Windows the switch is off and disabled; run
+OpenWorker on a Linux machine (a WSL Ubuntu counts) added under Settings ▸ Machines.
+
 The setting is per machine, in Settings ▸ Sandbox or in `config.toml`:
 
 ```toml

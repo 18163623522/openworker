@@ -5,18 +5,25 @@ OpenShell sandboxes (design doc, ruling 23).
 `sudo` for you; when a step needs it, it prints the command. Someone who brings their own
 OpenShell can ignore `setup` and use `status` to see what is missing.
 
+The same steps serve Settings ▸ Sandbox (OPE-207): `steps()` is the readiness list the page
+shows, and `setup_job.SetupJob` runs the fixes the app may apply on its own, with progress,
+handing the rest over as commands to run. One list of checks and fixes, two front ends.
+
 Hidden from `openworker --help` until it has been tried on a fresh machine.
 """
 
 from __future__ import annotations
 
+import ctypes
 import getpass
 import os
 import shutil
 import subprocess
 import sys
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .. import config as app_config
 from .providers import openshell
@@ -29,6 +36,38 @@ _BIND_MOUNTS = "[openshell.drivers.docker]\nenable_bind_mounts = true\n"
 # outlives the create's timeout and hangs the first session (OPE-205). So it is a check of
 # its own, and `setup` offers the download with Docker's own progress and no time limit.
 IMAGE_ROW = "the sandbox base image is downloaded (about 5 GB, one time)"
+# Unpacked, the image is larger than its download; this much free space avoids a failed
+# pull halfway (OPE-207).
+IMAGE_FREE_GB = 10
+
+# Row titles, by key. Kept as constants: tests and `setup()` look rows up by title.
+ROWS = {
+    "docker": "Docker is installed and this user can use it",
+    "openshell": f"OpenShell {PINNED_VERSION} is installed",
+    "bind_mounts": "the gateway allows bind mounts (your folders reach a sandbox this way)",
+    "linger": "the gateway keeps running after you log out (linger)",
+    "gateway": "the gateway is running",
+    "grpcio": "the `grpcio` package is installed",
+    "landlock": "the kernel supports Landlock (OpenShell requires it)",
+    "config": "this machine is set to use OpenShell",
+    "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
+    "image": IMAGE_ROW,
+}
+# Steps the app may fix on its own (no administrator, no installer). The rest are shown
+# as a command for the user to run.
+FIXABLE = {"bind_mounts", "config", "image", "linger"}
+
+
+@dataclass
+class Step:
+    key: str
+    what: str
+    ok: bool
+    hint: str = ""  # what to run, or why it failed
+    fixable: bool = False  # `SetupJob` can do this one itself
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"key": self.key, "what": self.what, "ok": self.ok, "hint": self.hint, "fixable": self.fixable}
 
 
 def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
@@ -39,40 +78,173 @@ def _openshell_home() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "openshell"
 
 
-def checks() -> list[tuple[str, bool, str]]:
-    """(what, ok, detail) for everything OpenShell sandboxes need on this machine."""
-    out: list[tuple[str, bool, str]] = []
+def landlock_available() -> Optional[bool]:
+    """Whether this kernel has Landlock: True/False on Linux, None elsewhere (a Mac's
+    sandboxes run in Docker Desktop's own Linux VM, which cannot be asked from here).
+    `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` returns the ABI
+    version; the syscall number 444 is the same on x86-64 and arm64."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.syscall(444, None, 0, 1) >= 0
+    except Exception:
+        return None
+
+
+def image_store_free_gb() -> Optional[float]:
+    """Free space where the driver keeps images, in GB, or None when it cannot be told."""
+    try:
+        tool = openshell.image_tool()
+        if tool is None:
+            return None
+        root = _run([tool, "info", "--format", "{{.DockerRootDir}}" if tool == "docker" else "{{.Store.GraphRoot}}"], 30).stdout.strip()
+        if not root or not os.path.isdir(root):
+            # Docker Desktop's storage lives in its VM: the host's disk is the next best guess.
+            root = str(Path.home())
+        return shutil.disk_usage(root).free / 1e9
+    except Exception:  # no openshell, no docker, an odd `info`: "cannot tell", never a red row
+        return None
+
+
+def steps() -> list[Step]:
+    """Everything OpenShell sandboxes need on this machine, in the order `setup` handles it."""
+    out: list[Step] = []
     docker = shutil.which("docker")
     docker_ok = bool(docker) and _run(["docker", "info", "--format", "{{.ServerVersion}}"], 30).returncode == 0
-    out.append(("Docker is installed and this user can use it", docker_ok, "" if docker_ok else "install Docker, and add this user to the `docker` group"))
+    out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, and add this user to the `docker` group"))
     exe = shutil.which("openshell")
     version = _run([exe, "--version"], 15).stdout.strip().split()[-1] if exe else ""
-    out.append((f"OpenShell {PINNED_VERSION} is installed", version == PINNED_VERSION, f"found {version or 'none'}"))
+    out.append(Step("openshell", ROWS["openshell"], version == PINNED_VERSION, f"found {version or 'none'}" if version != PINNED_VERSION else ""))
     gateway_toml = _openshell_home() / "gateway.toml"
     binds = gateway_toml.is_file() and "enable_bind_mounts = true" in gateway_toml.read_text(encoding="utf-8")
-    out.append(("the gateway allows bind mounts (your folders reach a sandbox this way)", binds, str(gateway_toml)))
+    out.append(Step("bind_mounts", ROWS["bind_mounts"], binds, "" if binds else str(gateway_toml), fixable=True))
     if sys.platform.startswith("linux"):
         linger = _run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger"], 15).stdout.strip() == "Linger=yes"
-        out.append(("the gateway keeps running after you log out (linger)", linger, "" if linger else f"sudo loginctl enable-linger {getpass.getuser()}"))
+        out.append(Step("linger", ROWS["linger"], linger, "" if linger else f"sudo loginctl enable-linger {getpass.getuser()}", fixable=True))
+        landlock = landlock_available()
+        if landlock is not None:
+            out.append(Step("landlock", ROWS["landlock"], landlock, "" if landlock else "update the kernel (on WSL: `wsl --update` from Windows)"))
     problem = openshell_problem(fresh=True) if exe else "OpenShell is not installed"
     # A missing image is not a gateway problem: it gets its own row below.
     image_missing = openshell.is_image_problem(problem)
     gateway_ok = problem is None or image_missing
-    out.append(("the gateway is running", gateway_ok, "" if gateway_ok else (problem or "")))
+    out.append(Step("gateway", ROWS["gateway"], gateway_ok, "" if gateway_ok else (problem or "")))
     try:
         import grpc  # noqa: F401
 
         grpc_ok = True
     except ImportError:
         grpc_ok = False
-    out.append(("the `grpcio` package is installed", grpc_ok, "" if grpc_ok else "pip install 'openworker[openshell]'"))
+    out.append(Step("grpcio", ROWS["grpcio"], grpc_ok, "" if grpc_ok else "pip install 'openworker[openshell]'"))
+    configured = app_config.load_config().sandbox_provider
+    out.append(Step("config", ROWS["config"], configured == "openshell", "" if configured == "openshell" else f"sandbox_provider = {configured!r} in {app_config.global_config_path()}", fixable=True))
     if gateway_ok and exe:
         present = openshell.image_present()
         if present is not None:  # only a local docker/podman driver can be asked; others get no row
-            out.append((IMAGE_ROW, present, "" if present else f"{openshell.image_tool() or 'docker'} pull {openshell.sandbox_image()}"))
-    configured = app_config.load_config().sandbox_provider
-    out.append(("this machine is set to use OpenShell", configured == "openshell", f"sandbox_provider = {configured!r} in {app_config.global_config_path()}"))
+            if not present:
+                free = image_store_free_gb()
+                if free is not None:
+                    out.append(Step("disk", ROWS["disk"], free >= IMAGE_FREE_GB, "" if free >= IMAGE_FREE_GB else f"{free:.1f} GB free; free up space before the download"))
+            out.append(Step("image", IMAGE_ROW, present, "" if present else f"{openshell.image_tool() or 'docker'} pull {openshell.sandbox_image()}", fixable=True))
     return out
+
+
+def checks() -> list[tuple[str, bool, str]]:
+    """(what, ok, detail) rows: the shape `status` prints and older callers read."""
+    return [(s.what, s.ok, s.hint) for s in steps()]
+
+
+# -- the fixes, one function each: `setup` (with prompts) and `SetupJob` (with progress) --
+
+
+def bind_mounts_change() -> str:
+    """What `apply_bind_mounts` will do, for showing before asking."""
+    home = _openshell_home()
+    return (
+        f"Allow bind mounts, so a sandbox can be given your folders (and nothing else):\n  write to {home / 'gateway.toml'}:\n    "
+        + _BIND_MOUNTS.replace("\n", "\n    ").rstrip()
+        + f"\n  point the gateway at it in {home / 'gateway.env'}, then restart the gateway (running sandboxes restart too)"
+    )
+
+
+def apply_bind_mounts() -> Optional[str]:
+    """Write the gateway config, point the service at it, restart it. Returns an error
+    text when the config already has a docker table (never edit that by hand-off)."""
+    home = _openshell_home()
+    gateway_toml, gateway_env = home / "gateway.toml", home / "gateway.env"
+    home.mkdir(parents=True, exist_ok=True)
+    existing = gateway_toml.read_text(encoding="utf-8") if gateway_toml.is_file() else ""
+    if "[openshell.drivers.docker]" in existing:
+        return f"{gateway_toml} already has a [openshell.drivers.docker] table; add `enable_bind_mounts = true` to it by hand."
+    gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
+    env_line = f"OPENSHELL_GATEWAY_CONFIG={gateway_toml}\n"
+    env_text = gateway_env.read_text(encoding="utf-8") if gateway_env.is_file() else ""
+    if "OPENSHELL_GATEWAY_CONFIG=" not in env_text:
+        gateway_env.write_text(env_text + env_line, encoding="utf-8")
+    _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
+    return None
+
+
+def enable_linger() -> Optional[str]:
+    """Try without an administrator; return the command to run when that is refused."""
+    user = getpass.getuser()
+    if _run(["loginctl", "enable-linger", user], 30).returncode != 0:
+        return f"sudo loginctl enable-linger {user}"
+    return None
+
+
+def apply_config() -> None:
+    app_config.set_global_value("sandbox_provider", "openshell")
+
+
+@dataclass
+class PullProgress:
+    layers_total: int = 0
+    layers_done: int = 0
+    last_line: str = ""
+    layers: dict[str, str] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"layers_total": self.layers_total, "layers_done": self.layers_done, "last_line": self.last_line}
+
+
+def pull_image(on_progress: Optional[Callable[[PullProgress], None]] = None, cancel: Optional[threading.Event] = None) -> Optional[str]:
+    """`docker pull` (or podman), streaming its per-layer lines into a PullProgress.
+    No time limit: on a slow link this is the 20-minute step. Returns an error text on
+    failure or cancellation, None when the image is there."""
+    tool, image = openshell.image_tool() or "docker", openshell.sandbox_image()
+    progress = PullProgress()
+    try:
+        proc = subprocess.Popen([tool, "pull", image], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as exc:
+        return f"could not run {tool}: {exc}"
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if cancel is not None and cancel.is_set():
+            proc.kill()
+            proc.wait()
+            return "download cancelled"
+        line = line.strip()
+        if not line:
+            continue
+        progress.last_line = line[:160]
+        # Without a terminal Docker prints "<layer id>: <status>" once per change.
+        if ": " in line:
+            layer, status = line.split(": ", 1)
+            if len(layer) == 12 and layer.isalnum():
+                progress.layers[layer] = status
+                progress.layers_total = len(progress.layers)
+                progress.layers_done = sum(1 for s in progress.layers.values() if s.startswith(("Pull complete", "Already exists")))
+        if on_progress is not None:
+            on_progress(progress)
+    code = proc.wait()
+    if code != 0:
+        return f"{tool} pull exited with {code}: {progress.last_line}"
+    return None
+
+
+# -- the terminal front end -------------------------------------------------------------
 
 
 def seatbelt_check() -> tuple[str, bool, str]:
@@ -128,10 +300,10 @@ def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, pri
         stop = _offer_image_download(rows, confirm, print_fn)
         return 2 if stop is None else stop
     rows = {what: ok for what, ok, _ in checks()}
-    if not rows["Docker is installed and this user can use it"]:
+    if not rows[ROWS["docker"]]:
         print_fn("Docker is needed first, and installing it needs an administrator:\n  https://docs.docker.com/engine/install/\n  sudo usermod -aG docker $USER   (then log in again)")
         return 1
-    if not rows[f"OpenShell {PINNED_VERSION} is installed"]:
+    if not rows[ROWS["openshell"]]:
         command = f"curl -LsSf {_INSTALLER} | OPENSHELL_VERSION=v{PINNED_VERSION} sh"
         print_fn(f"OpenShell {PINNED_VERSION} is not installed. NVIDIA's installer downloads a package from their GitHub release,\nchecks its checksum and installs it (it will ask for sudo itself):\n  {command}")
         if not confirm("Run NVIDIA's installer now?"):
@@ -139,31 +311,22 @@ def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, pri
         if subprocess.run(["sh", "-c", command]).returncode != 0:
             print_fn("the installer failed; nothing else was changed")
             return 1
-    home = _openshell_home()
-    gateway_toml, gateway_env = home / "gateway.toml", home / "gateway.env"
-    if not rows["the gateway allows bind mounts (your folders reach a sandbox this way)"]:
-        print_fn(f"Allow bind mounts, so a sandbox can be given your folders (and nothing else):\n  write to {gateway_toml}:\n    " + _BIND_MOUNTS.replace("\n", "\n    ").rstrip() + f"\n  point the gateway at it in {gateway_env}, then restart the gateway (running sandboxes restart too)")
+    if not rows[ROWS["bind_mounts"]]:
+        print_fn(bind_mounts_change())
         if not confirm("Make this change?"):
             return 1
-        home.mkdir(parents=True, exist_ok=True)
-        existing = gateway_toml.read_text(encoding="utf-8") if gateway_toml.is_file() else ""
-        if "[openshell.drivers.docker]" in existing:
-            print_fn(f"{gateway_toml} already has a [openshell.drivers.docker] table; add `enable_bind_mounts = true` to it by hand.")
+        problem = apply_bind_mounts()
+        if problem:
+            print_fn(problem)
             return 1
-        gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
-        env_line = f"OPENSHELL_GATEWAY_CONFIG={gateway_toml}\n"
-        env_text = gateway_env.read_text(encoding="utf-8") if gateway_env.is_file() else ""
-        if "OPENSHELL_GATEWAY_CONFIG=" not in env_text:
-            gateway_env.write_text(env_text + env_line, encoding="utf-8")
-        _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
-    if not rows.get("the gateway keeps running after you log out (linger)", True):
-        user = getpass.getuser()
-        if _run(["loginctl", "enable-linger", user], 30).returncode != 0:
-            print_fn(f"The gateway is a user service and stops when you log out. An administrator has to run:\n  sudo loginctl enable-linger {user}")
-    if not rows["this machine is set to use OpenShell"]:
+    if not rows.get(ROWS["linger"], True):
+        command = enable_linger()
+        if command:
+            print_fn(f"The gateway is a user service and stops when you log out. An administrator has to run:\n  {command}")
+    if not rows[ROWS["config"]]:
         print_fn(f"Set this machine to run agents in OpenShell sandboxes, and to REFUSE sessions when OpenShell is not running:\n  sandbox_provider = \"openshell\" in {app_config.global_config_path()}")
         if confirm("Make this change?"):
-            app_config.set_global_value("sandbox_provider", "openshell")
+            apply_config()
     # Last, because it is the slow one: the image the gateway builds sandboxes from. The
     # gateway may only just have started (bind-mount change above), so ask again.
     if IMAGE_ROW not in rows:
