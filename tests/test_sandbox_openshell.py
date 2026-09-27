@@ -8,6 +8,7 @@ messages. The second half needs a machine with OpenShell running and is skipped 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -218,6 +219,34 @@ def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
         RunnerWorkspace(Provider(), cwd=tmp_path, registry=reg, session_id="s9", agent="lead")
     assert seen["row_at_create"]["name"] == "ow-reserved" and seen["row_at_create"]["state"] == "creating"
     assert seen["destroyed"] and reg.find("s9") is None  # a failed create leaves no reservation behind
+
+
+def test_the_private_folder_is_visible_to_the_gateway_and_to_no_sandbox(tmp_path, monkeypatch):
+    # OPE-208: copied credentials used to go under /tmp, which the installer's gateway
+    # (PrivateTmp=true) cannot see, so a session with a shared credential failed to create.
+    # The folder is now under the state dir, in a sibling of `sandbox/`: `sandbox/` itself
+    # is mounted read-only into every sandbox, so a copy there would leak across sessions.
+    from coworker.sandbox import bundle
+
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(bundle, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
+    provider = openshell.OpenShellProvider(roots=ROOTS)
+    private = Path(provider._tmp)
+    assert private.parent == tmp_path / openshell.RUNTIME_DIR_NAME
+    assert not str(private).startswith(str(tmp_path / "sandbox") + os.sep)  # not inside the mounted folder
+    assert not str(private).startswith("/tmp")
+    assert private.name.startswith(f"ow-openshell-{os.getpid()}-")
+    if os.name != "nt":
+        assert (private.parent.stat().st_mode & 0o777) == 0o700
+    # A dead server's folders are swept; a live one's are kept.
+    stale = private.parent / "ow-openshell-424242-abc"
+    stale.mkdir()
+    assert openshell.reap_runtime_dirs(lambda pid: pid == os.getpid()) == [stale.name]
+    assert private.exists() and not stale.exists()
+    provider.destroy = lambda: shutil.rmtree(private, ignore_errors=True)  # no gateway here
+    provider.destroy()
+    assert not private.exists()
 
 
 def test_registry_reaps_rows_of_a_server_that_is_gone(tmp_path, monkeypatch):

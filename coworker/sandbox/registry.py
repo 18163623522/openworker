@@ -164,6 +164,13 @@ class SandboxRegistry:
                     removed.append(name)
                 except Exception:
                     pass
+        if _openshell_present():
+            from .providers import openshell
+
+            try:
+                openshell.reap_runtime_dirs(_alive)  # copied credentials of dead servers
+            except Exception:
+                pass
         for row in dead:
             self.close(row["name"])
             if row["name"] not in removed and row["provider"] != "openshell":

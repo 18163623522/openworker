@@ -33,6 +33,7 @@ from typing import Any, Callable, Optional, Sequence
 
 import yaml
 
+from ...secrets import state_dir
 from ..bundle import build_runner_zipapp
 from ..transport import Transport
 from .. import credentials as creds
@@ -157,6 +158,41 @@ def image_present(image: Optional[str] = None) -> Optional[bool]:
     return done.returncode == 0
 
 
+RUNTIME_DIR_NAME = "sandbox-runtime"  # a sibling of `sandbox/`, which is mounted into sandboxes
+
+
+def runtime_dir() -> Path:
+    """Where a session's private folder lives: on the real filesystem (the gateway can see
+    it), owner-only, and mounted into no sandbox as a whole."""
+    path = state_dir() / RUNTIME_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
+def reap_runtime_dirs(alive: Callable[[int], bool]) -> list[str]:
+    """Remove the private folders of servers that are gone (`ow-openshell-<pid>-...`).
+    Their sandboxes are removed by the registry's reap; this is the matching sweep for the
+    copied credentials, which the OS would have cleared from /tmp and no longer does."""
+    removed: list[str] = []
+    try:
+        entries = list(runtime_dir().iterdir())
+    except OSError:
+        return removed
+    for entry in entries:
+        parts = entry.name.split("-")
+        if len(parts) < 4 or parts[0] != "ow" or parts[1] != "openshell" or not parts[2].isdigit():
+            continue
+        if alive(int(parts[2])):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        removed.append(entry.name)
+    return removed
+
+
 def _gateway() -> tuple[str, Path]:
     """(host:port, folder with the client certificate) of the active gateway."""
     home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "openshell"
@@ -192,7 +228,14 @@ class OpenShellProvider:
         self.sandbox_name = f"ow-{uuid.uuid4().hex[:12]}"
         self.sandbox_id: Optional[str] = None
         self._runner = build_runner_zipapp()
-        self._tmp = tempfile.mkdtemp(prefix="ow-openshell-")
+        # The session's private folder (copied credentials, the policy file). NOT under
+        # /tmp: the gateway installed by NVIDIA's installer is a systemd service with
+        # PrivateTmp=true, so a bind-mount source under /tmp does not exist for it and the
+        # sandbox fails to create (OPE-208). NOT under the state dir's `sandbox/` either:
+        # that whole folder is mounted read-only into every sandbox for the runner, and
+        # copied keys must never be readable from another session's sandbox. The server's
+        # pid is in the name so the registry's reap can remove folders of a dead server.
+        self._tmp = tempfile.mkdtemp(prefix=f"ow-openshell-{os.getpid()}-", dir=runtime_dir())
         self.grants = list(credentials)
         self.copied: Optional[creds.CopiedCredentials] = None
 

@@ -135,7 +135,9 @@ You can add your own entries (a name, a path under your home folder, the hosts i
 
 An enabled entry is **copied** into a private home that is mounted into the sandbox when
 it starts, owner-only, and deleted with the sandbox; the real files are never opened for
-writing. For `ssh`, the copy is wired so that `ssh` and `git` inside use the copied keys
+writing. The copy lives under `~/.config/coworker/sandbox-runtime/`, never under `/tmp`:
+the gateway NVIDIA's installer sets up runs with a private `/tmp` and could not mount a
+folder there. For `ssh`, the copy is wired so that `ssh` and `git` inside use the copied keys
 and known hosts, with no agent. Connectors always run in OpenWorker itself, outside every
 sandbox, with their own tokens.
 
