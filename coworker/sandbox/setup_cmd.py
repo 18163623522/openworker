@@ -84,7 +84,14 @@ class Step:
 
 
 def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    """A command that hangs past `timeout` (`docker info` does while Docker Desktop is
+    installed but not running) or cannot start counts as failed, never as an error."""
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", f"timed out after {timeout:g} s")
+    except OSError as exc:
+        return subprocess.CompletedProcess(argv, 127, "", str(exc))
 
 
 def _openshell_home() -> Path:
@@ -166,7 +173,7 @@ def steps() -> list[Step]:
     docker_ok = bool(docker) and _run(["docker", "info", "--format", "{{.ServerVersion}}"], 30).returncode == 0
     out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, then add this user to the `docker` group and log in again", docs="" if docker_ok else DOCKER_INSTALL_URL))
     exe = shutil.which("openshell")
-    version = _run([exe, "--version"], 15).stdout.strip().split()[-1] if exe else ""
+    version = (_run([exe, "--version"], 15).stdout.split() or [""])[-1] if exe else ""
     openshell_ok = version == PINNED_VERSION
     # The app installs it when it can run as an administrator without a password (or
     # needs none, on a Mac); otherwise the row carries the one command to run.

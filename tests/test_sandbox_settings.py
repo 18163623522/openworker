@@ -27,10 +27,13 @@ def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     assert next(p for p in snap["providers"] if p["name"] == "direct")["usable"]
     from coworker.sandbox import network_profiles
 
-    assert snap["network_profile"] == network_profiles.default_profile()  # strict; `open` on Windows
-    assert [n["name"] for n in snap["network_profiles"]] == ["strict", "standard", "open"]
-    assert [(e["name"], e["enabled"]) for e in snap["credentials"]] == [("ssh", False), ("gh", False), ("aws", False), ("kube", False)]
-    assert all(e["shipped"] and "kind" in e and e["label"] in ("credential", "configuration") for e in snap["credentials"])
+    assert snap["network_profile"] == network_profiles.default_profile()  # standard; `open` on Windows
+    assert [n["name"] for n in snap["network_profiles"]] == ["standard", "open"] and snap["network_extra_hosts"] == []
+    assert snap["credentials"] == []  # nothing is listed until added (UX-053 v5)
+    from coworker.sandbox import credentials
+
+    assert [e["name"] for e in snap["credential_presets"]] == [e["name"] for e in credentials.DEFAULT_ENTRIES]
+    assert all(e["shipped"] and "kind" in e and e["label"] in ("credential", "configuration") for e in snap["credential_presets"])
     assert snap["config_path"] == str(config_file)
     assert (snap["windows_setup"] is None) == (sys.platform != "win32")
     from coworker.sandbox import toolchains
@@ -73,12 +76,31 @@ def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):
     assert out["ok"], out
     text = config_file.read_text()
     assert 'sandbox_network_profile = "standard"' in text
-    assert text.count("[[sandbox_credentials]]") == 3  # gh is untouched, so not written
-    assert 'path = "~/.aws-work"' in text and 'hosts = ["registry.npmjs.org:443"]' in text
+    assert text.count("[[sandbox_credentials]]") == 4  # gh is listed, switched off, by name only
+    assert 'path = "~/.aws-work"' in text and 'hosts = ["registry.npmjs.org:443"]' not in text  # npm's own hosts
     snap = settings.snapshot()
     by = {e["name"]: e for e in snap["credentials"]}
-    assert by["ssh"]["enabled"] and not by["gh"]["enabled"] and by["aws"]["path"] == "~/.aws-work" and by["npm"]["title"] == "npm"
+    assert [e["name"] for e in snap["credentials"]] == ["ssh", "gh", "aws", "npm"]
+    assert by["ssh"]["enabled"] and not by["gh"]["enabled"] and by["aws"]["path"] == "~/.aws-work" and by["npm"]["shipped"]
+    assert {e["name"] for e in snap["credential_presets"]}.isdisjoint(by)  # an added one leaves the picker
     assert app_config.load_config().sandbox_credentials[0] == {"name": "ssh", "enabled": True}
+    assert settings.update({"credentials": [{"name": "gh", "enabled": False}]})["credentials"][0]["name"] == "gh"
+    assert [e["name"] for e in settings.snapshot()["credentials"]] == ["gh"]  # removing is leaving it out
+
+
+def test_network_choice_and_the_machines_own_hosts(config_file):
+    out = settings.update({"network_profile": "strict", "network_extra_hosts": ["Registry.Acme.dev", "sentry.io:443", "sentry.io"]})
+    assert out["ok"], out
+    assert out["network_profile"] == "standard" and out["network_extra_hosts"] == ["registry.acme.dev:443", "sentry.io:443"]
+    text = config_file.read_text()
+    assert 'sandbox_network_profile = "standard"' in text
+    assert 'sandbox_network_extra_hosts = ["registry.acme.dev:443", "sentry.io:443"]' in text
+    assert app_config.load_config().sandbox_network_extra_hosts == ["registry.acme.dev:443", "sentry.io:443"]
+    assert settings.update({"network_extra_hosts": ["not a host"]})["ok"] is False
+    assert settings.update({"network_extra_hosts": []})["network_extra_hosts"] == []
+    assert "sandbox_network_extra_hosts" not in config_file.read_text()
+    config_file.write_text('sandbox_network_profile = "strict"\n')  # a machine set before v5
+    assert settings.snapshot()["network_profile"] == "standard"
 
 
 def test_update_refuses_bad_input_without_writing(config_file):
@@ -96,7 +118,7 @@ def test_a_label_is_written_and_read_back(config_file):
     assert out["ok"], out
     by = {e["name"]: e for e in settings.snapshot()["credentials"]}
     assert by["aws"]["label"] == "credential" and by["aws"]["path"] == "~/.aws" and by["npmrc"]["label"] == "configuration"
-    assert by["gh"]["label"] == "credential" and by["gh"]["shipped"] and not by["npmrc"]["shipped"]
+    assert "gh" not in by and not by["npmrc"]["shipped"] and by["aws"]["shipped"]
 
 
 def test_windows_setup_runs_checks_and_only_then_chooses_the_sandbox(config_file, monkeypatch):

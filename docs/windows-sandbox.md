@@ -60,19 +60,20 @@ A few things are true by design:
 ## Turn it on
 
 Settings ▸ Sandbox has one switch, "Run agents in a sandbox". Turning it on shows the
-sandbox types this PC can use; choosing "Windows sandbox" shows what the one-time setup
-changes and runs it on one administrator prompt. Once the type is ready its options
-appear: the network mode, the files an agent may be given, and the tools from your profile
-the sandbox may read. In `config.toml`:
+sandbox types this PC can use. Until the one-time setup has run, "Windows sandbox" looks
+disabled with a **Set up** button, which shows what setup changes and runs it on one
+administrator prompt. Once the type is chosen its options appear: the network, the config
+and keys exposed to agents, and the tools shown to agents with read-only access. In `config.toml`:
 
 ```toml
 sandbox_provider = "windows"        # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "open"    # the Windows default; or "strict", "standard"
+sandbox_network_profile = "open"    # the Windows default; or "standard"
+sandbox_network_extra_hosts = ["registry.acme.dev:443"]  # optional, for "standard"
 ```
 
 The setting is per machine; a project's own config cannot change it.
 
-Choosing the Windows sandbox is choosing to set it up (the command line form is
+Setting up the Windows sandbox also chooses it (the command line form is
 `openworker machine sandbox setup`). Setup ends by opening a throwaway sandbox and proving
 the wall from inside; only then does the choice take effect. Until setup has run, the type
 cannot be chosen and the switch goes back off. There is no weaker mode. If setup is later
@@ -110,7 +111,7 @@ One elevated PowerShell script, one prompt. It:
                                       │
              ┌────────────────────────┴────────────────────────┐
              │                                                 │
-           Open (default)                             Strict / Standard
+     Allow everything (default)              Package registries and search
              │                                                 │
              ▼                                                 ▼
    runs as OWSandboxOpenNet                          runs as OWSandboxClosedNet
@@ -130,14 +131,15 @@ One elevated PowerShell script, one prompt. It:
                                                      only listed hosts
 ```
 
-- **Open** — any host. Nothing to configure. The files are still the wall. This is the
-  default on Windows.
-- **Strict** — GitHub, GitLab and the package registries (PyPI, npm, crates.io, the Go
-  proxy), through the proxy. A program that ignores the proxy variables has no network at
-  all, because the account's direct traffic is blocked in the kernel.
-- **Standard** — Strict plus the search APIs.
+- **Allow everything** (`open`) — any host. Nothing to configure. The files are still the
+  wall. This is the default on Windows, and the page shows it in amber.
+- **Package registries and search** (`standard`) — GitHub, GitLab, the package registries
+  (PyPI, npm, crates.io, the Go proxy) and the search APIs, through the proxy.
+  **Customize…** adds hosts of your own. A program that ignores the proxy variables has no
+  network at all, because the account's direct traffic is blocked in the kernel.
 
-Credentials shared on purpose (below) add the hosts their tools need.
+`strict`, the list without the search APIs, was folded into `standard`. A credential entry
+(below) adds the hosts its tool needs.
 
 Choosing a mode never touches the firewall. The rules are written once at setup; OpenWorker
 picks the account. In the closed mode a sandbox can still **listen** on a local port (a dev
@@ -180,17 +182,27 @@ Not readable:
 ## Sharing a credential on purpose
 
 By default the sandbox has none of your logins, which also means `git push` over SSH has
-nothing to push with. Settings ▸ Sandbox lists files you can share, all off by default:
+nothing to push with. Settings ▸ Sandbox ▸ **Explicit config and keys exposed to Agent**
+lists only what you added, each with a switch; nothing is copied until you add it.
+**Add… ▸ A CLI's login** offers these, marked found or not found on this machine:
 
 | Entry | Copied from | What it is | Lets the agent | Hosts added to the allow list |
 |---|---|---|---|---|
-| `ssh` | `~/.ssh` | folder, credential | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
-| `gh` | `~/.config/gh` | folder, credential | use `gh` as you: pull requests, issues, releases | `api.github.com:443`, `github.com:443` |
-| `aws` | `~/.aws/config` | file, configuration | use `aws` with your profiles; `~/.aws/credentials` stays out unless you add it | `*.amazonaws.com:443` |
-| `kube` | `~/.kube/config` | file, credential | use `kubectl` with your clusters | the servers named in the kubeconfig |
+| SSH keys | `~/.ssh` | folder, credential | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
+| GitHub CLI | `~/.config/gh` | folder, credential | pull requests, issues and releases as you | `api.github.com:443`, `github.com:443` |
+| AWS profiles | `~/.aws/config` | file, configuration | regions and profile names, no keys | `*.amazonaws.com:443` |
+| AWS credentials | `~/.aws/credentials` | file, credential | your access keys | `*.amazonaws.com:443` |
+| kubectl | `~/.kube/config` | file, credential | your clusters | the servers named in the kubeconfig |
+| npm | `~/.npmrc` | file, credential | install and publish private packages | `registry.npmjs.org:443` |
+| Docker registries | `~/.docker/config.json` | file, credential | push and pull images with the logins saved in the file (not those kept by a credential helper) | Docker Hub, `ghcr.io` |
+| gcloud | `~/AppData/Roaming/gcloud` | folder, credential | your Google Cloud accounts and projects | `*.googleapis.com:443`, `accounts.google.com:443` |
+| Terraform Cloud | `~/AppData/Roaming/terraform.d/credentials.tfrc.json` | file, credential | runs and state in Terraform Cloud as you | `app.terraform.io:443`, `registry.terraform.io:443`, `releases.hashicorp.com:443` |
 
-An entry is a single file or a whole folder, your choice; you can add either, and each is
-labelled *credential* (a secret inside) or *configuration* (host names, profiles, options).
+Each one also sets the variable its tool reads to find the copy (`GH_CONFIG_DIR`,
+`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `KUBECONFIG`, `NPM_CONFIG_USERCONFIG`,
+`DOCKER_CONFIG`, `CLOUDSDK_CONFIG`). **Add… ▸ A file or folder** adds anything else under
+your home folder: a single file or a whole folder, labelled *credential* (a secret inside)
+or *configuration* (host names, profiles, options), with the hosts its tool needs.
 
 A copy is written into the sandbox account's own profile by the runner, so that Windows
 OpenSSH accepts the key's permissions, and removed when the runner leaves. In the closed
@@ -225,4 +237,4 @@ expire on their own limit what that is worth.
 | Install | one administrator prompt | nothing | OpenShell and Docker |
 | Files | session folders; profile invisible except the tool list; outside-profile folders readable | session folders; home invisible except the tool list | session folders; nothing else |
 | Network | open (default), or the allow list through the proxy | the allow list through the proxy, or open | the allow list in the policy, or open |
-| Default | open | strict | strict |
+| Default | open | standard | standard |

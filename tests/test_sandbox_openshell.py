@@ -44,12 +44,13 @@ def test_policy_is_plain_yaml_without_shared_objects():
 
 
 def test_network_profiles():
-    strict = policy.render(ROOTS, profile="strict")["network_policies"]
     standard = policy.render(ROOTS, profile="standard")["network_policies"]
     hosts = lambda p: {e["host"] for entry in p.values() for e in entry["endpoints"]}  # noqa: E731
-    assert {"github.com", "pypi.org", "registry.npmjs.org"} <= hosts(strict)
-    assert "api.tavily.com" not in hosts(strict) and "api.tavily.com" in hosts(standard)
-    assert all(entry["binaries"] for entry in strict.values())  # OpenShell requires the field
+    assert {"github.com", "pypi.org", "registry.npmjs.org", "api.tavily.com"} <= hosts(standard)
+    assert policy.render(ROOTS, profile="strict")["network_policies"] == standard  # the old name
+    assert all(entry["binaries"] for entry in standard.values())  # OpenShell requires the field
+    added = policy.render(ROOTS, profile="standard", extra_hosts=["registry.acme.dev:443"])["network_policies"]
+    assert {"host": "registry.acme.dev", "port": 443} in added["credentials"]["endpoints"]
     opened = policy.render(ROOTS, profile="open")["network_policies"]
     assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
     with pytest.raises(ValueError):

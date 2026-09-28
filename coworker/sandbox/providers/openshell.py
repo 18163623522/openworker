@@ -214,14 +214,17 @@ class OpenShellProvider:
         image: Optional[str] = None,
         label: str = "",
         credentials: Sequence[creds.Grant] = (),
+        extra_hosts: Sequence[str] = (),
     ) -> None:
         """`roots`: [{"path", "writable"}], primary first. `label`: who this sandbox is for
-        (session and agent), stored on the sandbox so leftovers can be found."""
+        (session and agent), stored on the sandbox so leftovers can be found. `extra_hosts`:
+        the machine's own additions to the network list ("host:port")."""
         if not roots:
             raise ValueError("an OpenShell sandbox needs at least one folder")
         self.roots = [{"path": str(Path(r["path"]).expanduser().resolve()), "writable": bool(r.get("writable"))} for r in roots]
         self.cwd = str(Path(cwd).expanduser().resolve()) if cwd else self.roots[0]["path"]
-        self.profile = profile
+        self.profile = policy.network_profiles.check(profile)
+        self.extra_hosts = list(extra_hosts)
         self.image = image or sandbox_image()
         # A label value may hold letters, digits, '-', '_' and '.', and at most 63 characters.
         self.label = "".join(c if c.isalnum() or c in "-_." else "-" for c in label)[:63].strip("-_.")
@@ -268,7 +271,7 @@ class OpenShellProvider:
         # git's settings, and HOME stays the runtime folder.
         self.copied = creds.copy_in(self.grants, self._tmp) if self.grants else None
         home = self.copied.home if self.copied is not None else None
-        extra_hosts = self.copied.hosts if self.copied is not None else []
+        extra_hosts = sorted({*self.extra_hosts, *(self.copied.hosts if self.copied is not None else [])})
         policy_file = Path(self._tmp) / "policy.yaml"
         policy_file.write_text(yaml.safe_dump(policy.render(self.roots, profile=self.profile, uid=uid, gid=gid, home=home, extra_hosts=extra_hosts), sort_keys=False), encoding="utf-8")
         driver_config = json.dumps(policy.mounts(self.roots, str(self._runner.parent), home))

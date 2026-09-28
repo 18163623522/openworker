@@ -88,9 +88,12 @@ class WindowsProvider:
         relay_silence_seconds: Optional[float] = None,
         credentials: Sequence[creds.Grant] = (),
         tool_dirs: Sequence[str] = (),
+        extra_hosts: Sequence[str] = (),
     ) -> None:
         """`credentials`: the grants (credentials.granted) to copy into the sandbox.
-        `tool_dirs`: developer tool folders under the profile the account may read."""
+        `tool_dirs`: developer tool folders under the profile the account may read.
+        `extra_hosts`: the machine's own additions to the network list ("host:port")."""
+        self.extra_hosts = list(extra_hosts)
         self.roots = _clean_roots(roots)
         self.grants = list(credentials)
         self.tool_dirs = [os.path.realpath(p) for p in tool_dirs]
@@ -152,7 +155,7 @@ class WindowsProvider:
         preflight()
         from .. import winsec
 
-        hosts = sorted({h for g in self.grants for h in g.hosts})
+        hosts = sorted({*self.extra_hosts, *(h for g in self.grants for h in g.hosts)})
         if self.network and not self.open_network:
             self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
         for entry in self._wanted_entries():

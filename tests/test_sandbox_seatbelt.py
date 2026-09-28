@@ -151,16 +151,32 @@ def test_proxy_tunnels_a_listed_host(monkeypatch):
 
 
 def test_every_profile_has_hosts_and_an_unknown_one_is_refused():
-    assert "github.com" in network_profiles.hosts("strict")
-    assert set(network_profiles.hosts("strict")) < set(network_profiles.hosts("standard"))
+    assert {"github.com", "pypi.org", "api.tavily.com"} <= set(network_profiles.hosts("standard"))
+    assert network_profiles.check("strict") == "standard"  # folded in (UX-053 v5), the name still works
     with pytest.raises(ValueError):
         netproxy.AllowListProxy("wide-open")
+
+
+def test_a_machines_own_hosts_are_cleaned_and_join_the_list():
+    clean = network_profiles.clean_host
+    assert clean("Registry.Acme.dev") == "registry.acme.dev:443"
+    assert clean("sentry.io:8443") == "sentry.io:8443" and clean("*.acme.dev") == "*.acme.dev:443"
+    assert clean("https://api.acme.dev/v1") == "api.acme.dev:443"
+    for bad in ("", "localhost", "acme dev", "api.acme.dev:0", "api.acme.dev:http", "a..b"):
+        with pytest.raises(ValueError):
+            clean(bad)
+    assert network_profiles.clean_hosts(["a.dev", "A.dev:443", "nope"]) == ["a.dev:443"]
+    proxy = netproxy.AllowListProxy("standard", extra_hosts=["registry.acme.dev:443"])
+    try:
+        assert proxy.allows("registry.acme.dev", 443) and not proxy.allows("other.acme.dev", 443)
+    finally:
+        proxy.close()
 
 
 def test_the_open_profile_has_no_list_and_is_the_default_on_windows_only(tmp_path):
     assert network_profiles.hosts("open") == [] and network_profiles.is_open("open")
     assert network_profiles.default_profile("win32") == "open"
-    assert network_profiles.default_profile("darwin") == "strict" and network_profiles.default_profile("linux") == "strict"
+    assert network_profiles.default_profile("darwin") == "standard" and network_profiles.default_profile("linux") == "standard"
     # Seatbelt: the files stay confined, the network clause opens
     text = seatbelt_profile.render([{"path": str(tmp_path), "writable": True}], runtime_dir=str(tmp_path), open_network=True, home=str(tmp_path))
     assert "(allow network*)" in text and "localhost:" not in text and "(deny default)" in text

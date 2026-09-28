@@ -1,12 +1,13 @@
-// Settings ▸ Sandbox (UX-051 A, UX-053 v3, OPE-207): one switch first; on reveals the
-// sandbox type; a ready type reveals only its own options (network, the files an agent may
-// be given, the tool folders the sandbox may read). Choosing the Windows sandbox opens its
-// setup dialog, which runs the one-time elevated setup and proves the wall before the
-// choice takes effect. OpenShell shows its readiness checklist with the guided "Set up
-// sandbox" job (fixes what the app may fix, never as root; hands the rest over as
-// commands; downloads the image with progress). Everything here is machine-level (the
-// machine's config.toml through /v1/settings/sandbox); nothing is per project. A provider
-// change rebuilds live sessions under the new rule (onProviderChanged carries their ids).
+// Settings ▸ Sandbox (UX-051 A, UX-053 v5, OPE-207): one switch first; on reveals the
+// sandbox type; a type that is the machine's choice reveals its options: the network
+// (package registries and search, with the machine's own hosts; or everything), the config
+// and keys copied into sandboxes, and the tool folders agents may read. A type that is not
+// set up yet looks disabled and carries one "Set up" button: the Windows sandbox's opens its
+// one-time elevated setup, OpenShell's opens the guided setup job (fixes what the app may
+// fix, never as root; hands the rest over as commands; downloads the image with progress).
+// Everything here is machine-level (the machine's config.toml through /v1/settings/sandbox);
+// nothing is per project. A provider change rebuilds live sessions under the new rule
+// (onProviderChanged carries their ids).
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -31,53 +32,60 @@ import { chooseFolder } from "../tauri";
 import { Toggle } from "./Toggle";
 import { PanelHead } from "./IntegrationsView";
 
+type T = (k: string, o?: Record<string, unknown>) => string;
+
 const CARD = "rounded-xl2 border border-line bg-panel";
 const FIELD_LABEL = "text-ui font-medium text-ink";
-const FIELD_HELP = "text-meta text-muted mt-1.5 leading-relaxed";
 const INPUT =
   "flex-1 min-w-0 px-3 py-2 rounded-lg border border-line bg-paper text-ui text-ink outline-none focus:border-accent";
 const BTN_ACCENT = "text-ui px-3 py-2 rounded-lg bg-accent text-white shrink-0 disabled:opacity-40";
-const BTN_BORDERED = "text-ui px-3 py-2 rounded-lg border border-line bg-paper hover:border-lineStrong shrink-0";
+const BTN_BORDERED = "text-ui px-3 py-2 rounded-lg border border-line bg-paper hover:border-lineStrong shrink-0 disabled:opacity-40";
+const BTN_SMALL = "text-meta px-2.5 py-1 rounded-lg border border-line bg-paper hover:border-lineStrong shrink-0";
 const TAG = "inline-flex items-center rounded px-1.5 text-label font-medium leading-5";
+const FOOT = "flex items-center gap-3.5 pl-6 pr-4 py-3 bg-chrome border-t border-line rounded-b-xl2";
 
 type SetupStage = "ask" | "working" | "done" | "failed";
 
 function Chevron({ open }: { open: boolean }) {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      className={"w-5 h-5 text-faint transition-transform shrink-0 " + (open ? "rotate-90" : "")}
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={"w-5 h-5 text-faint transition-transform shrink-0 " + (open ? "rotate-90" : "")} aria-hidden="true">
       <path d="M8 5l5 5-5 5" />
     </svg>
   );
 }
 
-// A card that is one line until opened: chevron, title, one sentence, and a summary on
-// the right. The body is the card's own list plus a foot with its action.
-function DisclosureCard({
+const KEY_ICON = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="8" cy="15" r="4" />
+    <path d="M11 12l9-9M17 6l3 3M14 9l2 2" />
+  </svg>
+);
+const TOOL_ICON = (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2-2z" />
+  </svg>
+);
+
+// A panel that is one line until opened: chevron, icon, title and a one-line summary.
+function Panel({
   id,
   open,
   onToggle,
+  icon,
   title,
-  desc,
   summary,
   children,
 }: {
   id: string;
   open: boolean;
   onToggle: () => void;
+  icon: React.ReactNode;
   title: string;
-  desc: string;
-  summary: React.ReactNode;
+  summary: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={CARD + " mb-2.5"} data-testid={`sandbox-card-${id}`}>
+    <div className={CARD + " mb-2.5 relative"} data-testid={`sandbox-card-${id}`}>
       <button
         type="button"
         className={"w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-chrome rounded-xl2 " + (open ? "border-b border-line rounded-b-none" : "")}
@@ -86,38 +94,63 @@ function DisclosureCard({
         data-testid={`sandbox-card-${id}-toggle`}
       >
         <Chevron open={open} />
+        <span className={"w-[34px] h-[34px] rounded-[9px] flex items-center justify-center shrink-0 " + (open ? "bg-accentSoft text-accent" : "bg-paper text-muted")}>{icon}</span>
         <span className="flex-1 min-w-0">
           <span className="block text-ui font-medium text-ink">{title}</span>
-          <span className="block text-meta text-muted">{desc}</span>
+          <span className="block text-meta text-muted" data-testid={`sandbox-card-${id}-summary`}>
+            {summary}
+          </span>
         </span>
-        <span className="text-meta text-faint text-right shrink-0 max-w-[360px] flex flex-wrap justify-end gap-1.5">{summary}</span>
       </button>
       {open ? <div data-testid={`sandbox-card-${id}-body`}>{children}</div> : null}
     </div>
   );
 }
 
-function Chip({ on, children }: { on: boolean; children: React.ReactNode }) {
-  return (
-    <span className={"inline-flex items-center gap-1.5 rounded-full border px-2 py-px text-meta whitespace-nowrap " + (on ? "border-lineStrong text-muted" : "border-dashed border-lineStrong text-faint")}>
-      {on ? <span className="w-1.5 h-1.5 rounded-full bg-ok" /> : null}
-      {children}
-    </span>
-  );
-}
-
-function Modal({ children, testid }: { children: React.ReactNode; testid: string }) {
+function Modal({ children, testid, wide }: { children: React.ReactNode; testid: string; wide?: boolean }) {
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" data-testid={testid}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-[1px]" />
-      <div className="absolute left-1/2 top-[12vh] -translate-x-1/2 w-[640px] max-w-[94vw] max-h-[80vh] rounded-xl2 border border-line bg-panel shadow-2xl overflow-auto p-6">
+      <div className={"absolute left-1/2 top-[10vh] -translate-x-1/2 max-w-[94vw] max-h-[80vh] rounded-xl2 border border-line bg-panel shadow-2xl overflow-auto p-6 " + (wide ? "w-[680px]" : "w-[640px]")}>
         {children}
       </div>
     </div>
   );
 }
 
+// The small square before an entry: the tool's own mark for a known CLI, else a file or folder.
+const BADGES: Record<string, [string, string]> = {
+  gh: ["gh", "bg-[#24292f] text-white"],
+  aws: ["aws", "bg-[#232f3e] text-[#ff9900]"],
+  "aws-credentials": ["aws", "bg-[#232f3e] text-[#ff9900]"],
+  kube: ["K8s", "bg-[#326ce5] text-white"],
+  npm: ["npm", "bg-[#cb3837] text-white"],
+  docker: ["dkr", "bg-[#1d63ed] text-white"],
+  gcloud: ["G", "bg-white text-[#4285f4] border border-lineStrong"],
+  terraform: ["tf", "bg-[#7b42bc] text-white"],
+};
+function Badge({ name }: { name: string }) {
+  const known = BADGES[name];
+  if (known) {
+    return <span className={"w-[26px] h-[26px] rounded-[7px] inline-flex items-center justify-center text-[9.5px] font-bold shrink-0 " + known[1]}>{known[0]}</span>;
+  }
+  return (
+    <span className="w-[26px] h-[26px] rounded-[7px] inline-flex items-center justify-center shrink-0 bg-paper text-muted border border-line">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      </svg>
+    </span>
+  );
+}
+
 const SETUP_CHANGES = ["accounts", "rules", "folder", "record"] as const;
+
+// "a, b and c", or "a, b, c and 5 more" past `max`.
+function listText(t: T, names: string[], max: number): string {
+  if (names.length <= 1) return names.join("");
+  if (names.length > max) return t("settingsx.sandbox.list_more", { list: names.slice(0, max).join(", "), count: names.length - max });
+  return t("settingsx.sandbox.list_and", { list: names.slice(0, -1).join(", "), last: names[names.length - 1] });
+}
 
 export function SandboxSection({ machine, onProviderChanged }: { machine?: Machine | null; onProviderChanged?: (sessionIds: string[]) => void }) {
   const { t } = useTranslation();
@@ -128,14 +161,19 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   const [job, setJob] = useState<SandboxSetupState | null>(null);
   const [copied, setCopied] = useState<string>("");
   const notifiedRef = useRef(false);
-  const [wantOn, setWantOn] = useState(false); // the switch is on, no type is ready yet
-  const [openCard, setOpenCard] = useState<"files" | "tools" | null>(null);
+  const [wantOn, setWantOn] = useState(false); // the switch is on, no type is the choice yet
+  const [openFiles, setOpenFiles] = useState(false);
+  const [openTools, setOpenTools] = useState(false);
+  const [menu, setMenu] = useState(false); // the "Add…" menu of the files panel
+  const [picking, setPicking] = useState(false); // the "A CLI's login" picker
   const [editing, setEditing] = useState<string | null>(null); // credential name being edited, "" = new
-  const [addingTool, setAddingTool] = useState(false); // the "Add a folder" editor of the toolchain list
+  const [hostsOpen, setHostsOpen] = useState(false);
+  const [addingTool, setAddingTool] = useState(false);
   const [toolTitle, setToolTitle] = useState("");
   const [toolPath, setToolPath] = useState("~/");
   const [setupStage, setSetupStage] = useState<SetupStage | null>(null);
   const [setupOutcome, setSetupOutcome] = useState<{ checked?: string; error?: string }>({});
+  const [openshellDialog, setOpenshellDialog] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
 
@@ -147,33 +185,33 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
     const res = await setSandboxSettings(patch, mid);
     if (!res.ok) {
       setError(res.error || "could not save");
-      return;
+      return false;
     }
     setError("");
     setCfg(res as SandboxSettings);
     if ("provider" in patch) onProviderChanged?.(res.rebuilt_sessions ?? []);
+    return true;
   };
 
-  // OpenShell's readiness checklist (Seatbelt and the Windows sandbox need none of this):
-  // loaded when OpenShell is the choice, and again after a setup run.
-  const openshellChosen = Boolean(cfg) && (cfg!.provider || cfg!.effective_provider || "direct") === "openshell";
+  // OpenShell's checklist, loaded when its setup dialog opens and again after a run.
   const loadReadiness = () => {
-    if (!cfg || !openshellChosen) return;
     setReadiness(null);
     getSandboxReadiness(mid)
       .then(setReadiness)
-      .catch(() => setReadiness({ platform: cfg.platform, supported: false, steps: [], all_ok: false }));
+      .catch(() => setReadiness({ platform: cfg?.platform ?? "", supported: false, steps: [], all_ok: false }));
   };
-  useEffect(loadReadiness, [mid, openshellChosen, cfg?.platform]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (openshellDialog) loadReadiness();
+  }, [openshellDialog, mid]); // eslint-disable-line react-hooks/exhaustive-deps
   // A setup job may be running from before (the page was closed and reopened): adopt it.
   useEffect(() => {
-    if (!openshellChosen) return;
+    if (!cfg || cfg.platform === "win32") return;
     getSandboxSetup(mid)
       .then((s) => setJob(s.status === "idle" ? null : s))
       .catch(() => {});
-  }, [mid, openshellChosen]);
+  }, [mid, cfg?.platform]); // eslint-disable-line react-hooks/exhaustive-deps
   // Poll the job while it runs; on the way out, reload the checklist and the settings
-  // (the job may have written the config line) and say so once.
+  // (the job writes the config line last) and say so once.
   useEffect(() => {
     if (!job || job.status !== "running") return;
     const timer = window.setInterval(() => {
@@ -229,32 +267,23 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   const providerNames: Record<string, [string, string]> = {
     seatbelt: [t("settingsx.sandbox.provider_seatbelt"), t("settingsx.sandbox.provider_seatbelt_desc")],
     windows: [t("settingsx.sandbox.provider_windows"), t("settingsx.sandbox.provider_windows_desc")],
-    openshell: [t("settingsx.sandbox.provider_openshell"), t("settingsx.sandbox.provider_openshell_desc")],
+    openshell: [t("settingsx.sandbox.provider_openshell"), isMac ? t("settingsx.sandbox.provider_openshell_desc_mac") : t("settingsx.sandbox.provider_openshell_desc")],
   };
   const chosen = cfg.provider || cfg.effective_provider || "direct";
-  const active = chosen !== "direct"; // a type is the machine's choice (OpenShell counts even while its image downloads)
+  const active = chosen !== "direct"; // a type is the machine's choice
   const on = active || wantOn;
   const setup = cfg.windows_setup;
   const setupReady = setup?.state === "ready";
   const types = cfg.providers.filter((p) => p.name !== "direct" && (p.name !== "seatbelt" || isMac) && (p.name !== "windows" || isWindows));
-  const anyType = types.some((p) => p.usable || (p.name === "windows" && setup?.can_elevate));
   const shipped = (name: string, key: "title" | "does", fallback?: string) => {
     const k = `settingsx.sandbox.${key}_${name}`;
     const v = t(k);
     return v === k ? fallback || "" : v;
   };
-  const updateCredentials = (rows: SandboxCredentialEntry[]) =>
-    save({ credentials: rows.map(({ kind: _k, shipped: _s, ...row }) => row) });
-  const updateToolchains = (rows: SandboxToolchainEntry[]) =>
-    save({ toolchains: rows.map(({ exists: _e, shipped: _s, ...row }) => row) });
-
-  const switchStatus = !on
-    ? t("settingsx.sandbox.switch_off")
-    : active
-      ? t("settingsx.sandbox.switch_on", { type: providerNames[chosen]?.[0] ?? chosen })
-      : anyType
-        ? t("settingsx.sandbox.switch_choose")
-        : t("settingsx.sandbox.switch_none");
+  const titleOf = (c: SandboxCredentialEntry) => c.title || shipped(c.name, "title", c.name);
+  const doesOf = (c: SandboxCredentialEntry) => c.does || shipped(c.name, "does");
+  const updateCredentials = (rows: SandboxCredentialEntry[]) => save({ credentials: rows.map(({ kind: _k, shipped: _s, ...row }) => row) });
+  const updateToolchains = (rows: SandboxToolchainEntry[]) => save({ toolchains: rows.map(({ exists: _e, shipped: _s, ...row }) => row) });
 
   const flip = (next: boolean) => {
     if (next) {
@@ -265,15 +294,9 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
     if (active) void save({ provider: "direct" });
   };
 
-  const chooseType = (name: string) => {
-    if (name === "windows" && !setupReady) {
-      if (setup?.can_elevate) {
-        setSetupOutcome({});
-        setSetupStage("ask");
-      }
-      return;
-    }
-    void save({ provider: name });
+  const openWindowsSetup = () => {
+    setSetupOutcome({});
+    setSetupStage("ask");
   };
 
   const runSetup = async () => {
@@ -308,21 +331,56 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   const setUpOn = setup?.set_up_at ? new Date(setup.set_up_at) : null;
   const setUpOnText = setUpOn && !Number.isNaN(setUpOn.getTime()) ? setUpOn.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
 
-  // The network list: Open first where it is the default (Windows).
-  const profiles = isWindows ? [...cfg.network_profiles].sort((a, b) => (a.name === "open" ? -1 : b.name === "open" ? 1 : 0)) : cfg.network_profiles;
+  const extraHosts = cfg.network_extra_hosts ?? [];
+  const presets = cfg.credential_presets ?? [];
   const showTools = cfg.platform !== "linux" && chosen !== "openshell" && Boolean(cfg.toolchains);
   const toolsOn = (cfg.toolchains || []).filter((x) => x.enabled);
+  const filesOn = cfg.credentials.filter((c) => c.enabled);
+  const filesSummary = filesOn.length ? t("settingsx.sandbox.files_sum", { list: listText(t, filesOn.map(titleOf), 3) }) : t("settingsx.sandbox.files_sum_none");
+  const toolsSummary = toolsOn.length ? t("settingsx.sandbox.tools_sum", { list: listText(t, toolsOn.map((x) => x.title || x.name), 3) }) : t("settingsx.sandbox.tools_sum_none");
+  const keyNote = isWindows ? t("settingsx.sandbox.credman_note") : isMac ? t("settingsx.sandbox.keychain_note") : t("settingsx.sandbox.files_foot");
+  const addMenu = (
+    <span className="relative">
+      <button className={BTN_SMALL} onClick={() => setMenu(!menu)} aria-expanded={menu} data-testid="sandbox-credential-add">
+        {t("settingsx.sandbox.add_menu")}
+      </button>
+      {menu ? (
+        <>
+          <span className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
+          <span className="absolute right-0 bottom-9 z-20 w-[300px] rounded-xl border border-line bg-panel shadow-xl p-1.5 text-left" role="menu" data-testid="sandbox-add-menu">
+            {(
+              [
+                ["cli", () => setPicking(true)],
+                ["file", () => setEditing("")],
+              ] as const
+            ).map(([k, go]) => (
+              <button
+                key={k}
+                role="menuitem"
+                className="block w-full text-left px-3 py-2 rounded-lg hover:bg-chrome"
+                onClick={() => {
+                  setMenu(false);
+                  go();
+                }}
+                data-testid={`sandbox-add-${k}`}
+              >
+                <span className="block text-ui font-medium text-ink">{t(`settingsx.sandbox.add_${k}`)}</span>
+                <span className="block text-meta text-muted">{t(`settingsx.sandbox.add_${k}_desc`)}</span>
+              </button>
+            ))}
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
 
   return (
     <section data-testid="sandbox-section">
-      <PanelHead
-        title={t("settingsx.sandbox.title")}
-        sub={machine ? t("settingsx.sandbox.sub_machine", { name: machine.name }) : isWindows ? t("settingsx.sandbox.sub_windows") : t("settingsx.sandbox.sub")}
-      />
+      <PanelHead title={t("settingsx.sandbox.title")} sub={machine ? t("settingsx.sandbox.sub_machine", { name: machine.name }) : t("settingsx.sandbox.sub")} />
       {error ? <div className="mb-3 text-meta text-danger">{error}</div> : null}
 
       {/* 1. The switch */}
-      <div className={CARD + " mb-1"}>
+      <div className={CARD + " mb-5"}>
         <div className="flex items-start gap-3.5 px-4 py-3.5">
           <span className="mt-0.5">
             <Toggle checked={on} onChange={flip} title={t("settingsx.sandbox.switch_title")} />
@@ -331,258 +389,193 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
             <span className="block text-ui font-medium text-ink">{t("settingsx.sandbox.switch_title")}</span>
             <span className="block text-meta text-muted max-w-[640px]">{t("settingsx.sandbox.switch_desc")}</span>
           </span>
-          <span
-            className={"text-meta shrink-0 whitespace-nowrap pt-0.5 " + (active ? "text-ok" : on && !anyType ? "text-warnInk" : "text-faint")}
-            data-testid="sandbox-switch-status"
-          >
-            {switchStatus}
-          </span>
         </div>
       </div>
-      {!on ? <div className={FIELD_HELP + " mb-4"}>{t("settingsx.sandbox.switch_help_off")}</div> : <div className="mb-4" />}
-      {cfg.refused ? <div className="mb-4 text-meta text-danger">{t("settingsx.sandbox.refused", { why: cfg.refused })}</div> : null}
+      {cfg.refused ? <div className="-mt-3 mb-4 text-meta text-danger">{t("settingsx.sandbox.refused", { why: cfg.refused })}</div> : null}
 
       {/* 2. The type, once the switch is on */}
       {on ? (
         <>
           <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.type")}</div>
-          <div className={CARD + " mb-1 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.type")}>
+          <div className={CARD + " mb-5 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.type")}>
             {types.map((p) => {
               const [label, desc] = providerNames[p.name] ?? [p.name, ""];
               const isActive = chosen === p.name;
               const win = p.name === "windows";
-              const needsDownload = p.state === "needs_download"; // OpenShell in place except the base image: still choosable
-              const canPick = p.usable || needsDownload || (win && Boolean(setup?.can_elevate));
-              const why = !p.usable && !needsDownload ? (win && setup && !setup.can_elevate ? t("settingsx.sandbox.needs_admin_why", { command: setup.command }) : win && setup?.can_elevate ? "" : p.why) : "";
-              const status = win
-                ? setupReady
-                  ? t("settingsx.sandbox.status_ready")
-                  : setup?.can_elevate
-                    ? t("settingsx.sandbox.status_setup")
-                    : t("settingsx.sandbox.status_needs_admin")
-                : needsDownload
-                  ? t("settingsx.sandbox.status_needs_download")
-                  : p.usable
-                    ? t("settingsx.sandbox.status_ready")
-                    : t("settingsx.sandbox.status_unavailable");
+              const os = p.name === "openshell";
+              // Ready to choose: usable, and for Windows set up. Otherwise the row looks
+              // disabled and its one button sets it up, where this machine can.
+              const ready = win ? setupReady && p.usable : p.usable;
+              const canSetUp = win ? !setupReady && Boolean(setup?.can_elevate) : os && !isWindows && !p.usable;
+              const why = ready || canSetUp ? "" : win && setup && !setup.can_elevate ? t("settingsx.sandbox.needs_admin_why", { command: setup.command }) : p.why;
+              const osRunning = os && job?.status === "running";
               return (
-                <label key={p.name} className={"flex items-start gap-3 px-4 py-3 " + (canPick ? "cursor-pointer" : "opacity-60")}>
-                  <input
-                    type="radio"
-                    name="sandbox-provider"
-                    className="mt-1"
-                    checked={isActive}
-                    disabled={!canPick && !isActive}
-                    onChange={() => chooseType(p.name)}
-                    data-testid={`sandbox-provider-${p.name}`}
-                  />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-ui text-ink">{label}</span>
-                    <span className="block text-meta text-muted">{desc}</span>
-                    {why ? (
-                      <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-why`}>
-                        {why}
-                      </span>
-                    ) : null}
-                    {needsDownload ? (
-                      <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-hint`}>
-                        {t("settingsx.sandbox.needs_download_hint")}
-                      </span>
-                    ) : null}
-                    {win && setupReady ? (
-                      <span className="block text-meta text-muted mt-1.5" data-testid="sandbox-windows-setup-line">
-                        {setUpOnText ? t("settingsx.sandbox.set_up_on", { date: setUpOnText }) : t("settingsx.sandbox.set_up")}
-                        <span className="mx-1.5 text-faint">·</span>
-                        <button type="button" className="text-accent hover:underline" onClick={() => setRemoving(true)} data-testid="sandbox-remove-setup">
-                          {t("settingsx.sandbox.remove_setup")}
-                        </button>
-                      </span>
-                    ) : null}
-                  </span>
-                  <span
-                    className={"text-meta shrink-0 whitespace-nowrap pt-0.5 " + ((win && !setupReady && setup && !setup.can_elevate) || needsDownload ? "text-warnInk" : isActive || (win ? setupReady : p.usable) ? "text-ok" : "text-faint")}
-                    data-testid={`sandbox-provider-${p.name}-status`}
-                  >
-                    {status}
-                  </span>
-                </label>
+                <div key={p.name} className="flex items-start gap-3 px-4 py-3" data-testid={`sandbox-type-${p.name}`}>
+                  <label className={"flex items-start gap-3 flex-1 min-w-0 " + (ready ? "cursor-pointer" : "")}>
+                    <input
+                      type="radio"
+                      name="sandbox-provider"
+                      className={"mt-1 " + (ready || isActive ? "" : "opacity-50")}
+                      checked={isActive}
+                      disabled={!ready && !isActive}
+                      onChange={() => void save({ provider: p.name })}
+                      data-testid={`sandbox-provider-${p.name}`}
+                    />
+                    <span className="flex-1 min-w-0">
+                      <span className={"block text-ui " + (ready || isActive ? "text-ink" : "text-ink/50")}>{label}</span>
+                      <span className={"block text-meta " + (ready || isActive ? "text-muted" : "text-muted/60")}>{desc}</span>
+                      {why ? (
+                        <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-why`}>
+                          {why}
+                        </span>
+                      ) : null}
+                      {isActive && os && p.state === "needs_download" ? (
+                        <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-hint`}>
+                          {t("settingsx.sandbox.needs_download_hint")}
+                        </span>
+                      ) : null}
+                      {win && setupReady ? (
+                        <span className="block text-meta text-muted mt-1.5" data-testid="sandbox-windows-setup-line">
+                          {setUpOnText ? t("settingsx.sandbox.set_up_on", { date: setUpOnText }) : t("settingsx.sandbox.set_up_done")}
+                          <span className="mx-1.5 text-faint">·</span>
+                          <button type="button" className="text-accent hover:underline" onClick={() => setRemoving(true)} data-testid="sandbox-remove-setup">
+                            {t("settingsx.sandbox.remove_setup")}
+                          </button>
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                  {canSetUp ? (
+                    <button
+                      className={BTN_SMALL + " self-center"}
+                      onClick={() => (win ? openWindowsSetup() : setOpenshellDialog(true))}
+                      data-testid={`sandbox-setup-${p.name}`}
+                    >
+                      {osRunning ? t("settingsx.sandbox.setup_running") : t("settingsx.sandbox.set_up")}
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
           </div>
-          <div className={FIELD_HELP + " mb-4"}>
-            {!active ? (anyType ? t("settingsx.sandbox.type_help") : t("settingsx.sandbox.type_help_admin")) : ""}
-          </div>
         </>
       ) : null}
-
-      {/* 2b. OpenShell: the readiness checklist and the guided setup job (OPE-207) */}
-      {active && chosen === "openshell" ? <OpenShellReadiness t={t} readiness={readiness} job={job} onStart={startJob} onCancel={cancelJob} copy={copy} copied={copied} /> : null}
 
       {/* 3. The type's own options */}
       {active ? (
         <>
           <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.network")}</div>
-          <div className={CARD + " divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
-            {profiles.map((np) => (
-              <label key={np.name} className="flex items-start gap-3 px-4 py-2.5 cursor-pointer">
+          <div className={CARD + " mb-5 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
+            {(["standard", "open"] as const).map((name) => (
+              <label key={name} className="flex items-start gap-3 px-4 py-2.5 cursor-pointer">
                 <input
                   type="radio"
                   name="sandbox-network"
                   className="mt-1"
-                  checked={cfg.network_profile === np.name}
-                  onChange={() => save({ network_profile: np.name })}
-                  data-testid={`sandbox-network-${np.name}`}
+                  checked={cfg.network_profile === name}
+                  onChange={() => save({ network_profile: name })}
+                  data-testid={`sandbox-network-${name}`}
                 />
-                <span className="flex-1 min-w-0 flex items-baseline gap-3">
-                  <span className="text-ui text-ink">{t(`settingsx.sandbox.profile_${np.name}`)}</span>
-                  <span className="text-meta text-muted ml-auto text-right">
-                    {t(`settingsx.sandbox.profile_${np.name}_desc`)}
-                    {np.name === "open" && isWindows ? " " + t("settingsx.sandbox.profile_open_default") : ""}
+                <span className="flex-1 min-w-0">
+                  <span className={"block text-ui " + (name === "open" ? "text-warnInk" : "text-ink")}>{t(`settingsx.sandbox.profile_${name}`)}</span>
+                  <span className="block text-meta text-muted">
+                    {t(`settingsx.sandbox.profile_${name}_desc`)}
+                    {name === "standard" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ml-1.5 text-accent hover:underline"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setHostsOpen(true);
+                          }}
+                          data-testid="sandbox-network-customize"
+                        >
+                          {t("settingsx.sandbox.customize")}
+                        </button>
+                        {extraHosts.length ? <span className="text-faint"> · {t("settingsx.sandbox.hosts_added", { count: extraHosts.length })}</span> : null}
+                      </>
+                    ) : null}
                   </span>
                 </span>
               </label>
             ))}
           </div>
-          <div className={FIELD_HELP + " mb-5"}>
-            {chosen === "windows" ? t("settingsx.sandbox.network_help_windows") : chosen === "openshell" ? t("settingsx.sandbox.network_help_openshell") : t("settingsx.sandbox.network_help")}
-          </div>
 
-          <div className={FIELD_LABEL}>{t("settingsx.sandbox.credentials")}</div>
-          <div className={FIELD_HELP + " mb-2.5 mt-0.5"}>{t("settingsx.sandbox.credentials_intro")}</div>
-          <DisclosureCard
-            id="files"
-            open={openCard === "files"}
-            onToggle={() => setOpenCard(openCard === "files" ? null : "files")}
-            title={isWindows ? t("settingsx.sandbox.files_title_windows") : isMac ? t("settingsx.sandbox.files_title_mac") : t("settingsx.sandbox.files_title")}
-            desc={t("settingsx.sandbox.files_desc")}
-            summary={
-              cfg.credentials.length ? (
-                cfg.credentials.map((c) => (
-                  <Chip key={c.name} on={c.enabled}>
-                    {c.title || shipped(c.name, "title", c.name)}
-                  </Chip>
-                ))
-              ) : (
-                <span>{t("settingsx.sandbox.none_yet")}</span>
-              )
-            }
-          >
-            <div className="divide-y divide-line">
-              {cfg.credentials.map((c) => (
-                <div key={c.name} className="flex items-start gap-3 pl-6 pr-4 py-3" data-testid={`sandbox-credential-${c.name}`}>
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={c.enabled}
-                    onChange={(e) => updateCredentials(cfg.credentials.map((x) => (x.name === c.name ? { ...x, enabled: e.target.checked } : x)))}
-                    aria-label={c.title || shipped(c.name, "title", c.name)}
-                  />
-                  <span className="flex-1 min-w-0">
-                    <span className="flex items-center flex-wrap gap-2 text-ui text-ink">
-                      {c.title || shipped(c.name, "title", c.name)}
-                      <code className="text-meta text-muted font-mono">{c.path}</code>
-                      {c.kind ? (
-                        <span className={TAG + " bg-accentSoft text-accent"} data-testid={`sandbox-credential-${c.name}-kind`}>
-                          {t(c.kind === "folder" ? "settingsx.sandbox.kind_folder" : "settingsx.sandbox.kind_file")}
+          <Panel id="files" open={openFiles} onToggle={() => setOpenFiles(!openFiles)} icon={KEY_ICON} title={t("settingsx.sandbox.files_panel")} summary={filesSummary}>
+            {cfg.credentials.length ? (
+              <div className="divide-y divide-line">
+                {cfg.credentials.map((c) => (
+                  <div key={c.name} className="group flex items-start gap-3 pl-6 pr-4 py-3" data-testid={`sandbox-credential-${c.name}`}>
+                    <span className="mt-0.5">
+                      <Toggle checked={c.enabled} onChange={(next) => updateCredentials(cfg.credentials.map((x) => (x.name === c.name ? { ...x, enabled: next } : x)))} title={titleOf(c)} />
+                    </span>
+                    <Badge name={c.name} />
+                    <span className="flex-1 min-w-0">
+                      <span className="flex items-center flex-wrap gap-2 text-ui text-ink">
+                        {titleOf(c)}
+                        <code className="text-meta text-muted font-mono">{c.path}</code>
+                        {c.kind ? (
+                          <span className={TAG + " bg-accentSoft text-accent"} data-testid={`sandbox-credential-${c.name}-kind`}>
+                            {t(c.kind === "folder" ? "settingsx.sandbox.kind_folder" : "settingsx.sandbox.kind_file")}
+                          </span>
+                        ) : (
+                          <span className="text-meta text-faint">{t("settingsx.sandbox.credential_missing")}</span>
+                        )}
+                        <span className={TAG + " " + (c.label === "configuration" ? "bg-paper text-muted" : "bg-warnSoft text-warnInk")}>
+                          {t(c.label === "configuration" ? "settingsx.sandbox.label_configuration" : "settingsx.sandbox.label_credential")}
                         </span>
-                      ) : (
-                        <span className="text-meta text-faint">{t("settingsx.sandbox.credential_missing")}</span>
-                      )}
-                      <span className={TAG + " " + (c.label === "configuration" ? "bg-paper text-muted" : "bg-warnSoft text-warnInk")}>
-                        {t(c.label === "configuration" ? "settingsx.sandbox.label_configuration" : "settingsx.sandbox.label_credential")}
+                      </span>
+                      <span className="block text-meta text-muted">
+                        {doesOf(c)}{" "}
+                        {c.hosts && c.hosts.length && cfg.network_profile !== "open" ? <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span> : null}
                       </span>
                     </span>
-                    <span className="block text-meta text-muted">
-                      {c.does ? c.does : shipped(c.name, "does")}{" "}
-                      {c.hosts && c.hosts.length && cfg.network_profile !== "open" ? (
-                        <span className="text-faint">{t("settingsx.sandbox.also_allows", { hosts: c.hosts.join(", ") })}</span>
-                      ) : null}
+                    <span className="text-meta text-muted shrink-0 whitespace-nowrap opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                      <button className="hover:text-ink" onClick={() => setEditing(c.name)} data-testid={`sandbox-credential-${c.name}-edit`}>
+                        {t("settingsx.sandbox.edit")}
+                      </button>
+                      <span className="mx-1.5 text-faint">·</span>
+                      <button className="hover:text-ink" onClick={() => updateCredentials(cfg.credentials.filter((x) => x.name !== c.name))} data-testid={`sandbox-credential-${c.name}-remove`}>
+                        {t("settingsx.sandbox.remove")}
+                      </button>
                     </span>
-                  </span>
-                  <span className="text-meta text-muted shrink-0 whitespace-nowrap">
-                    <button className="hover:text-ink" onClick={() => setEditing(c.name)}>
-                      {t("settingsx.sandbox.edit")}
-                    </button>
-                    <span className="mx-1.5 text-faint">·</span>
-                    <button className="hover:text-ink" onClick={() => updateCredentials(cfg.credentials.filter((x) => x.name !== c.name))}>
-                      {t("settingsx.sandbox.remove")}
-                    </button>
-                  </span>
-                </div>
-              ))}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="px-6 py-4 text-ui text-muted" data-testid="sandbox-files-empty">
+                {t("settingsx.sandbox.files_empty")}
+              </div>
+            )}
+            <div className={FOOT}>
+              <span className="text-meta text-faint flex-1">{cfg.credentials.length ? keyNote : t("settingsx.sandbox.files_foot")}</span>
+              {addMenu}
             </div>
-            <div className="flex items-center gap-3.5 pl-6 pr-4 py-3 bg-chrome border-t border-line rounded-b-xl2">
-              <span className="text-meta text-faint flex-1">
-                {t("settingsx.sandbox.files_foot")} {isWindows ? t("settingsx.sandbox.credman_note") : isMac ? t("settingsx.sandbox.keychain_note") : ""}
-              </span>
-              <button className={BTN_BORDERED + " text-meta px-2.5 py-1"} onClick={() => setEditing("")} data-testid="sandbox-credential-add">
-                {t("settingsx.sandbox.add")}
-              </button>
-            </div>
-          </DisclosureCard>
-          {editing !== null ? (
-            <CredentialEditor
-              entry={editing ? cfg.credentials.find((c) => c.name === editing) ?? null : null}
-              onCancel={() => setEditing(null)}
-              onSave={(row) => {
-                const rows = editing ? cfg.credentials.map((x) => (x.name === editing ? row : x)) : [...cfg.credentials, row];
-                setEditing(null);
-                updateCredentials(rows);
-              }}
-            />
-          ) : null}
+          </Panel>
 
           {showTools ? (
-            <>
-              <div className={FIELD_LABEL + " mt-5 mb-2"}>{t("settingsx.sandbox.tools")}</div>
-              <DisclosureCard
-                id="tools"
-                open={openCard === "tools"}
-                onToggle={() => setOpenCard(openCard === "tools" ? null : "tools")}
-                title={t("settingsx.sandbox.toolchains")}
-                desc={t("settingsx.sandbox.tools_desc")}
-                summary={
-                  <span data-testid="sandbox-tools-summary">
-                    {t("settingsx.sandbox.tools_count", { on: toolsOn.length, total: (cfg.toolchains || []).length })}
-                    {toolsOn.length ? " · " + toolsOn.slice(0, 6).map((x) => x.title || x.name).join(", ") + (toolsOn.length > 6 ? "…" : "") : ""}
-                  </span>
-                }
-              >
-                <div className="divide-y divide-line">
-                  {cfg.toolchains.map((tc) => (
-                    <div key={tc.name} className="flex items-start gap-3 pl-6 pr-4 py-2.5" data-testid={`sandbox-toolchain-${tc.name}`}>
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={tc.enabled}
-                        onChange={(e) => updateToolchains(cfg.toolchains.map((x) => (x.name === tc.name ? { ...x, enabled: e.target.checked } : x)))}
-                        aria-label={tc.title || tc.name}
-                      />
-                      <span className="flex-1 min-w-0">
-                        <span className={"block text-ui " + (tc.exists === false ? "text-muted" : "text-ink")}>
-                          {tc.title || tc.name}
-                          {tc.exists === false ? <span className="text-meta text-faint"> · {t("settingsx.sandbox.toolchain_missing")}</span> : null}
-                          {!tc.shipped ? <span className="text-meta text-faint"> · {t("settingsx.sandbox.added_by_you")}</span> : null}
-                        </span>
-                      </span>
-                      <code className="text-meta text-muted font-mono shrink-0">{tc.path}</code>
-                      {!tc.shipped ? (
-                        <button className="text-meta text-muted hover:text-ink shrink-0" onClick={() => updateToolchains(cfg.toolchains.filter((x) => x.name !== tc.name))}>
-                          {t("settingsx.sandbox.remove")}
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center gap-3.5 pl-6 pr-4 py-3 bg-chrome border-t border-line rounded-b-xl2">
-                  <span className="text-meta text-faint flex-1">{isWindows ? t("settingsx.sandbox.tools_foot_windows") : t("settingsx.sandbox.toolchains_help")}</span>
-                  <button className={BTN_BORDERED + " text-meta px-2.5 py-1"} onClick={() => setAddingTool(true)} data-testid="sandbox-toolchain-add">
-                    {t("settingsx.sandbox.add_toolchain")}
-                  </button>
-                </div>
-              </DisclosureCard>
+            <Panel id="tools" open={openTools} onToggle={() => setOpenTools(!openTools)} icon={TOOL_ICON} title={t("settingsx.sandbox.tools_panel")} summary={toolsSummary}>
+              <div className="divide-y divide-line">
+                {cfg.toolchains.map((tc) => (
+                  <div key={tc.name} className="flex items-center gap-3 pl-6 pr-4 py-2" data-testid={`sandbox-toolchain-${tc.name}`}>
+                    <Toggle checked={tc.enabled} onChange={(next) => updateToolchains(cfg.toolchains.map((x) => (x.name === tc.name ? { ...x, enabled: next } : x)))} title={tc.title || tc.name} />
+                    <span className="flex-1 min-w-0 text-ui text-ink">
+                      {tc.title || tc.name}
+                      {tc.exists === false ? <span className="text-meta text-faint"> · {t("settingsx.sandbox.toolchain_missing")}</span> : null}
+                      {!tc.shipped ? <span className="text-meta text-faint"> · {t("settingsx.sandbox.added_by_you")}</span> : null}
+                    </span>
+                    <code className="text-meta text-muted font-mono shrink-0">{tc.path}</code>
+                    {!tc.shipped ? (
+                      <button className="text-meta text-muted hover:text-ink shrink-0" onClick={() => updateToolchains(cfg.toolchains.filter((x) => x.name !== tc.name))}>
+                        {t("settingsx.sandbox.remove")}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
               {addingTool ? (
-                <div className={CARD + " p-4 mt-3"} data-testid="sandbox-toolchain-editor">
+                <div className="pl-6 pr-4 py-3 border-t border-line" data-testid="sandbox-toolchain-editor">
                   <div className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-2 items-center">
                     <label className="text-ui text-muted">{t("settingsx.sandbox.field_title")}</label>
                     <input className={INPUT} value={toolTitle} onChange={(e) => setToolTitle(e.target.value)} />
@@ -615,15 +608,131 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
                         updateToolchains([...cfg.toolchains, { name: slug, title: toolTitle || undefined, path: toolPath, enabled: true }]);
                       }}
                     >
-                      {t("settingsx.sandbox.done")}
+                      {t("settingsx.sandbox.add_button")}
                     </button>
                   </div>
                 </div>
               ) : null}
-            </>
+              <div className={FOOT}>
+                <span className="text-meta text-faint flex-1">{t("settingsx.sandbox.tools_foot")}</span>
+                <button className={BTN_SMALL} onClick={() => setAddingTool(true)} data-testid="sandbox-toolchain-add">
+                  {t("settingsx.sandbox.add_toolchain")}
+                </button>
+              </div>
+            </Panel>
           ) : null}
-          <div className={FIELD_HELP + " mt-4"}>{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div>
+          <div className="text-meta text-faint mt-5">{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div>
         </>
+      ) : null}
+
+      {/* Customize: the machine's own hosts */}
+      {hostsOpen ? (
+        <HostsDialog
+          t={t}
+          hosts={extraHosts}
+          builtin={cfg.network_profiles.find((n) => n.name === "standard")?.hosts ?? []}
+          onCancel={() => setHostsOpen(false)}
+          onSave={async (next) => {
+            if (await save({ network_extra_hosts: next })) setHostsOpen(false);
+          }}
+          error={error}
+        />
+      ) : null}
+
+      {/* Add a CLI's login */}
+      {picking ? (
+        <Modal testid="sandbox-cli-picker" wide>
+          <h3 className="text-heading font-semibold mb-1.5">{t("settingsx.sandbox.cli_title")}</h3>
+          <p className="text-ui text-muted mb-3.5 leading-relaxed">{t("settingsx.sandbox.cli_intro")}</p>
+          <div className="rounded-lg border border-line divide-y divide-line">
+            {presets.length ? (
+              [...presets]
+                .sort((a, b) => Number(!a.kind) - Number(!b.kind))
+                .map((p) => (
+                  <div key={p.name} className="flex items-center gap-3 px-3 py-2.5" data-testid={`sandbox-preset-${p.name}`} data-found={p.kind ? "yes" : "no"}>
+                    <Badge name={p.name} />
+                    <span className="flex-1 min-w-0">
+                      <span className={"block text-ui font-medium " + (p.kind ? "text-ink" : "text-faint")}>{titleOf(p)}</span>
+                      <span className={"block text-meta " + (p.kind ? "text-muted" : "text-faint")}>
+                        {p.kind ? `${p.path} · ${doesOf(p).replace(/\.$/, "")}` : isMac ? t("settingsx.sandbox.not_on_mac") : isWindows ? t("settingsx.sandbox.not_on_pc") : t("settingsx.sandbox.credential_missing")}
+                      </span>
+                    </span>
+                    {p.kind ? (
+                      <button
+                        className={BTN_SMALL}
+                        onClick={() => updateCredentials([...cfg.credentials, { name: p.name, enabled: true }])}
+                        data-testid={`sandbox-preset-${p.name}-add`}
+                      >
+                        {t("settingsx.sandbox.add_button")}
+                      </button>
+                    ) : (
+                      <span className="text-meta text-faint">{t("settingsx.sandbox.not_found")}</span>
+                    )}
+                  </div>
+                ))
+            ) : (
+              <div className="px-3 py-3 text-ui text-muted">{t("settingsx.sandbox.cli_all_added")}</div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <span className="text-meta text-faint">{t("settingsx.sandbox.cli_not_listed")}</span>
+            <span className="flex-1" />
+            <button
+              className={BTN_BORDERED}
+              onClick={() => {
+                setPicking(false);
+                setEditing("");
+              }}
+            >
+              {t("settingsx.sandbox.cli_file_button")}
+            </button>
+            <button
+              className={BTN_ACCENT}
+              onClick={() => {
+                setPicking(false);
+                setOpenFiles(true);
+              }}
+              data-testid="sandbox-cli-done"
+            >
+              {t("settingsx.sandbox.done")}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Add or edit a file or folder */}
+      {editing !== null ? (
+        <CredentialEditor
+          entry={editing ? cfg.credentials.find((c) => c.name === editing) ?? null : null}
+          titleOf={titleOf}
+          doesOf={doesOf}
+          onCancel={() => setEditing(null)}
+          onSave={(row) => {
+            const rows = editing ? cfg.credentials.map((x) => (x.name === editing ? row : x)) : [...cfg.credentials, row];
+            setEditing(null);
+            setOpenFiles(true);
+            updateCredentials(rows);
+          }}
+        />
+      ) : null}
+
+      {/* OpenShell's setup dialog */}
+      {openshellDialog ? (
+        <OpenShellDialog
+          t={t}
+          readiness={readiness}
+          job={job}
+          ready={Boolean(cfg.providers.find((p) => p.name === "openshell")?.usable) && chosen === "openshell"}
+          onStart={startJob}
+          onCancel={cancelJob}
+          onCheck={() => {
+            setJob(null);
+            loadReadiness();
+          }}
+          onClose={() => setOpenshellDialog(false)}
+          copy={copy}
+          copied={copied}
+        />
       ) : null}
 
       {/* The Windows setup dialog */}
@@ -738,131 +847,251 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   );
 }
 
-// OpenShell's checklist: the rows `openworker machine sandbox status` prints, each with a
-// key and whether the app may fix it itself; the live job's rows while it runs or just ran.
-function OpenShellReadiness({
+// "Customize…": the hosts this machine adds to "Package registries and search", which the
+// user adds and removes, above the shipped ones, which are read-only.
+function HostsDialog({
+  t,
+  hosts,
+  builtin,
+  onCancel,
+  onSave,
+  error,
+}: {
+  t: T;
+  hosts: string[];
+  builtin: string[];
+  onCancel: () => void;
+  onSave: (hosts: string[]) => void;
+  error: string;
+}) {
+  const [list, setList] = useState<string[]>(hosts);
+  const [draft, setDraft] = useState("");
+  const [bad, setBad] = useState(false);
+  const add = () => {
+    const host = cleanHost(draft);
+    if (!host) {
+      setBad(true);
+      return;
+    }
+    setBad(false);
+    setDraft("");
+    if (!list.includes(host)) setList([...list, host]);
+  };
+  const rows: string[][] = [];
+  for (let i = 0; i < builtin.length; i += 4) rows.push(builtin.slice(i, i + 4));
+  return (
+    <Modal testid="sandbox-hosts-dialog" wide>
+      <h3 className="text-heading font-semibold mb-1.5">{t("settingsx.sandbox.hosts_title")}</h3>
+      <p className="text-ui text-muted mb-3.5 leading-relaxed">{t("settingsx.sandbox.hosts_intro")}</p>
+      <div className="text-label font-medium text-faint mb-1.5">{t("settingsx.sandbox.hosts_yours")}</div>
+      {list.length ? (
+        <div className="rounded-lg border border-line divide-y divide-line mb-2">
+          {list.map((h) => (
+            <div key={h} className="flex items-center gap-2.5 px-3 py-1.5 text-meta font-mono text-ink" data-testid={`sandbox-host-${h}`}>
+              {h}
+              <button className="ml-auto text-meta font-sans text-muted hover:text-ink" onClick={() => setList(list.filter((x) => x !== h))}>
+                {t("settingsx.sandbox.remove")}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex gap-2 mb-1">
+        <input
+          className={INPUT + " font-mono" + (bad ? " border-danger" : "")}
+          value={draft}
+          placeholder={t("settingsx.sandbox.hosts_placeholder")}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setBad(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+          data-testid="sandbox-host-input"
+        />
+        <button className={BTN_BORDERED} onClick={add} disabled={!draft.trim()} data-testid="sandbox-host-add">
+          {t("settingsx.sandbox.add_button")}
+        </button>
+      </div>
+      {bad ? <div className="text-meta text-danger mb-1">{t("settingsx.sandbox.hosts_bad")}</div> : null}
+      {error ? <div className="text-meta text-danger mb-1">{error}</div> : null}
+      <div className="text-label font-medium text-faint mt-3.5 mb-1.5">{t("settingsx.sandbox.hosts_builtin")}</div>
+      <div className="rounded-lg border border-line divide-y divide-line">
+        {rows.map((r) => (
+          <div key={r.join()} className="px-3 py-1.5 text-meta font-mono text-muted">
+            {r.join(" · ")}
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-4">
+        <span className="text-meta text-faint max-w-[340px]">{t("settingsx.sandbox.hosts_note")}</span>
+        <span className="flex-1" />
+        <button className={BTN_BORDERED} onClick={onCancel}>
+          {t("settingsx.sandbox.cancel")}
+        </button>
+        <button className={BTN_ACCENT} onClick={() => onSave(list)} data-testid="sandbox-hosts-save">
+          {t("settingsx.sandbox.save")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// The same rule as the server's network_profiles.clean_host: "host:port", 443 when bare.
+export function cleanHost(text: string): string {
+  let s = text.trim().toLowerCase().replace(/\.$/, "");
+  if (s.includes("://")) s = s.split("://", 2)[1].split("/", 1)[0];
+  let host = s;
+  let port = "443";
+  const at = s.lastIndexOf(":");
+  if (at >= 0) {
+    host = s.slice(0, at);
+    port = s.slice(at + 1);
+  }
+  const name = host.startsWith("*.") ? host.slice(2) : host;
+  const labels = name.split(".");
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535 || labels.length < 2 || !labels.every((l) => /^[a-z0-9-]+$/.test(l))) return "";
+  return `${host}:${Number(port)}`;
+}
+
+// OpenShell's setup (OPE-207, UX-053 v5): the steps first, then the job's rows with its
+// progress. A command with Copy shows only where the app cannot do the step itself.
+function OpenShellDialog({
   t,
   readiness,
   job,
+  ready,
   onStart,
   onCancel,
+  onCheck,
+  onClose,
   copy,
   copied,
 }: {
-  t: (k: string, o?: Record<string, unknown>) => string;
+  t: T;
   readiness: SandboxReadiness | null;
   job: SandboxSetupState | null;
+  ready: boolean;
   onStart: () => void;
   onCancel: () => void;
+  onCheck: () => void;
+  onClose: () => void;
   copy: (text: string) => void;
   copied: string;
 }) {
   const rows: (SandboxReadinessStep & { state?: SandboxSetupRowState })[] = job && job.status !== "idle" ? job.rows : readiness?.steps ?? [];
-  const missing = rows.filter((r) => !r.ok && r.state !== "fixed").length;
   const running = job?.status === "running";
+  const done = job?.status === "done" || (ready && !job);
+  const needsYou = job?.status === "needs_you";
+  const stopped = job?.status === "failed" || job?.status === "cancelled";
   const elapsed = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`);
+  const [title, intro] = done
+    ? [t("settingsx.sandbox.os_done_title"), t("settingsx.sandbox.os_done_intro")]
+    : running
+      ? [t("settingsx.sandbox.os_running_title"), t("settingsx.sandbox.os_running_intro")]
+      : needsYou
+        ? [t("settingsx.sandbox.os_needs_you_title"), t("settingsx.sandbox.os_needs_you_intro")]
+        : stopped
+          ? [t("settingsx.sandbox.os_stopped_title"), job?.status === "cancelled" ? t("settingsx.sandbox.setup_cancelled") : t("settingsx.sandbox.setup_failed", { error: job?.error })]
+          : [t("settingsx.sandbox.os_title"), t("settingsx.sandbox.os_intro")];
   return (
-    <div className={CARD + " mb-4"} data-testid="sandbox-readiness">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-line">
-        <span className="flex-1 min-w-0">
-          <span className="block text-ui font-medium text-ink">{t("settingsx.sandbox.readiness")}</span>
-          <span className={"block text-meta " + (rows.length && missing === 0 ? "text-ok" : "text-muted")}>
-            {!readiness && !job
-              ? t("settingsx.sandbox.readiness_loading")
-              : missing === 0
-                ? t("settingsx.sandbox.readiness_all_ok")
-                : missing === 1
-                  ? t("settingsx.sandbox.readiness_missing_one")
-                  : t("settingsx.sandbox.readiness_missing", { count: missing })}
-          </span>
-        </span>
-        {running ? (
-          <button className={BTN_BORDERED} onClick={onCancel} data-testid="sandbox-setup-cancel">
-            {t("settingsx.sandbox.setup_cancel")}
-          </button>
-        ) : (
-          <button
-            className={BTN_ACCENT}
-            disabled={!rows.length || (missing === 0 && job?.status !== "needs_you" && job?.status !== "failed")}
-            onClick={onStart}
-            data-testid="sandbox-setup-start"
-          >
-            {job && job.status !== "idle" ? t("settingsx.sandbox.setup_again") : t("settingsx.sandbox.setup_start")}
-          </button>
-        )}
-      </div>
-      <ul className="divide-y divide-line">
-        {rows.map((r) => {
-          const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
-          const good = state === "ok" || state === "fixed";
-          // A command is something to run in a terminal on that machine (with Copy); a hint
-          // is a note about what was found. A row the app fixes itself shows its command
-          // only once the app could not (handed over, or failed).
-          const showCommand = !good && r.command && (!r.fixable || state === "needs_you" || state === "failed");
-          return (
-            <li key={r.key} className="px-4 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
-              <div className="flex items-start gap-2">
-                <span className={"shrink-0 w-4 " + (good ? "text-ok" : state === "fixing" ? "text-muted" : "text-warnInk")} aria-hidden>
-                  {good ? "✓" : state === "fixing" ? "⟳" : "✗"}
-                </span>
-                <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
-                <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${state}`)}</span>
-              </div>
-              {r.key === "openshell" && running && state === "fixing" && job?.progress ? (
-                <div className="mt-1 ml-6 text-meta text-muted font-mono break-all" data-testid="sandbox-install-progress">
-                  {t("settingsx.sandbox.install_progress", { elapsed: elapsed(job.progress.elapsed_s) })}
-                  {job.progress.last_line ? ` · ${job.progress.last_line}` : ""}
+    <Modal testid="sandbox-openshell-dialog">
+      <h3 className="text-heading font-semibold mb-1.5">{title}</h3>
+      <p className="text-ui text-muted mb-3.5 leading-relaxed" data-testid={job && job.status !== "idle" ? `sandbox-setup-${job.status}` : undefined}>
+        {intro}
+      </p>
+      {!running && !done && !job ? <div className="text-label font-medium text-faint mb-1.5">{t("settingsx.sandbox.os_steps")}</div> : null}
+      {!readiness && !job ? (
+        <div className="rounded-lg border border-line bg-paper px-3 py-2.5 text-ui text-muted flex items-center gap-2.5">
+          <span className="w-4 h-4 rounded-full border-2 border-lineStrong border-t-accent animate-spin shrink-0" />
+          {t("settingsx.sandbox.readiness_loading")}
+        </div>
+      ) : (
+        <ul className="rounded-lg border border-line divide-y divide-line" data-testid="sandbox-readiness">
+          {rows.map((r) => {
+            const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
+            const good = state === "ok" || state === "fixed";
+            const showCommand = !good && r.command && (!r.fixable || state === "needs_you" || state === "failed");
+            return (
+              <li key={r.key} className="px-3 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
+                <div className="flex items-start gap-2">
+                  <span className={"shrink-0 w-4 " + (good ? "text-ok" : state === "fixing" ? "text-accent" : state === "pending" ? "text-faint" : "text-warnInk")} aria-hidden>
+                    {good ? "✓" : state === "fixing" ? "⟳" : state === "pending" ? "○" : "!"}
+                  </span>
+                  <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
+                  <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${!job && state === "pending" ? "todo" : state}`)}</span>
                 </div>
-              ) : null}
-              {r.key === "image" && running && state === "fixing" && job?.progress ? (
-                <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
-                  <div className="h-1.5 rounded bg-line overflow-hidden">
-                    <div
-                      className="h-full bg-accent transition-all"
-                      style={{ width: job.progress.layers_total ? `${Math.round((100 * job.progress.layers_done) / job.progress.layers_total)}%` : "5%" }}
-                    />
+                {r.key === "openshell" && running && state === "fixing" && job?.progress ? (
+                  <div className="mt-1 ml-6 text-meta text-muted font-mono break-all" data-testid="sandbox-install-progress">
+                    {t("settingsx.sandbox.install_progress", { elapsed: elapsed(job.progress.elapsed_s) })}
+                    {job.progress.last_line ? ` · ${job.progress.last_line}` : ""}
                   </div>
-                  <div className="text-meta text-muted mt-1">
-                    {job.progress.layers_total
-                      ? t("settingsx.sandbox.download_progress", { done: job.progress.layers_done, total: job.progress.layers_total, elapsed: elapsed(job.progress.elapsed_s) })
-                      : t("settingsx.sandbox.download_progress_unknown", { elapsed: elapsed(job.progress.elapsed_s) })}
+                ) : null}
+                {r.key === "image" && running && state === "fixing" && job?.progress ? (
+                  <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
+                    <div className="h-1.5 rounded bg-line overflow-hidden">
+                      <div className="h-full bg-accent transition-all" style={{ width: job.progress.layers_total ? `${Math.round((100 * job.progress.layers_done) / job.progress.layers_total)}%` : "5%" }} />
+                    </div>
+                    <div className="text-meta text-muted mt-1">
+                      {job.progress.layers_total
+                        ? t("settingsx.sandbox.download_progress", { done: job.progress.layers_done, total: job.progress.layers_total, elapsed: elapsed(job.progress.elapsed_s) })
+                        : t("settingsx.sandbox.download_progress_unknown", { elapsed: elapsed(job.progress.elapsed_s) })}
+                    </div>
                   </div>
-                </div>
-              ) : null}
-              {!good && r.hint ? <div className="mt-1 ml-6 text-meta text-muted">{r.hint}</div> : null}
-              {showCommand ? (
-                <div className="mt-1 ml-6" data-testid={`sandbox-readiness-command-${r.key}`}>
-                  <div className="text-meta text-muted">{t("settingsx.sandbox.run_in_terminal")}</div>
-                  <div className="flex items-start gap-2">
+                ) : null}
+                {!good && r.hint ? <div className="mt-1 ml-6 text-meta text-muted">{r.hint}</div> : null}
+                {showCommand ? (
+                  <div className="mt-1.5 ml-6 flex items-start gap-2 rounded-lg border border-line bg-paper px-2.5 py-1.5" data-testid={`sandbox-readiness-command-${r.key}`}>
                     <code className="text-meta font-mono text-ink break-all flex-1 min-w-0">{r.command}</code>
                     <button className="text-meta text-accent shrink-0" onClick={() => copy(r.command)}>
                       {copied === r.command ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
                     </button>
                   </div>
-                </div>
-              ) : null}
-              {!good && r.docs ? (
-                <a className="mt-1 ml-6 inline-block text-meta text-accent" href={r.docs} target="_blank" rel="noreferrer" data-testid={`sandbox-readiness-docs-${r.key}`}>
-                  {t("settingsx.sandbox.guide")}
-                </a>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-      {job && job.status !== "idle" && job.status !== "running" ? (
-        <div className={"px-4 py-3 border-t border-line text-ui " + (job.status === "done" ? "text-ok" : "text-warnInk")} data-testid={`sandbox-setup-${job.status}`}>
-          {job.status === "done"
-            ? t("settingsx.sandbox.setup_done", { provider: t("settingsx.sandbox.provider_openshell") })
-            : job.status === "needs_you"
-              ? t("settingsx.sandbox.setup_needs_you")
-              : job.status === "cancelled"
-                ? t("settingsx.sandbox.setup_cancelled")
-                : t("settingsx.sandbox.setup_failed", { error: job.error })}
-        </div>
-      ) : null}
-      <div className={FIELD_HELP + " px-4 pb-3"}>{t("settingsx.sandbox.setup_never_root")}</div>
-    </div>
+                ) : null}
+                {!good && r.docs ? (
+                  <a className="mt-1 ml-6 inline-block text-meta text-accent" href={r.docs} target="_blank" rel="noreferrer" data-testid={`sandbox-readiness-docs-${r.key}`}>
+                    {r.key === "docker" ? t("settingsx.sandbox.get_docker") : t("settingsx.sandbox.guide")}
+                  </a>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="flex items-center gap-2 mt-4">
+        <span className="text-meta text-faint max-w-[340px] leading-relaxed">{done ? "" : running ? t("settingsx.sandbox.os_close_note") : t("settingsx.sandbox.setup_never_root")}</span>
+        <span className="flex-1" />
+        {done ? (
+          <button className={BTN_ACCENT} onClick={onClose} data-testid="sandbox-openshell-done">
+            {t("settingsx.sandbox.done")}
+          </button>
+        ) : running ? (
+          <>
+            <button className={BTN_BORDERED} onClick={onCancel} data-testid="sandbox-setup-cancel">
+              {t("settingsx.sandbox.setup_cancel")}
+            </button>
+            <button className={BTN_ACCENT} onClick={onClose}>
+              {t("settingsx.sandbox.close")}
+            </button>
+          </>
+        ) : (
+          <>
+            <button className={BTN_BORDERED} onClick={onClose} data-testid="sandbox-openshell-close">
+              {job ? t("settingsx.sandbox.close") : t("settingsx.sandbox.cancel")}
+            </button>
+            {job ? (
+              <button className={BTN_BORDERED} onClick={onCheck} data-testid="sandbox-setup-check">
+                {t("settingsx.sandbox.setup_again")}
+              </button>
+            ) : null}
+            <button className={BTN_ACCENT} onClick={onStart} disabled={!rows.length} data-testid="sandbox-setup-start">
+              {job ? t("settingsx.sandbox.try_again") : t("settingsx.sandbox.set_up")}
+            </button>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -874,66 +1103,77 @@ function validPath(path: string): boolean {
 // hosts its tool needs, and what it lets the agent do.
 export function CredentialEditor({
   entry,
+  titleOf,
+  doesOf,
   onCancel,
   onSave,
 }: {
   entry: SandboxCredentialEntry | null;
+  titleOf?: (c: SandboxCredentialEntry) => string;
+  doesOf?: (c: SandboxCredentialEntry) => string;
   onCancel: () => void;
   onSave: (row: SandboxCredentialEntry) => void;
 }) {
   const { t } = useTranslation();
-  const [title, setTitle] = useState(entry?.title ?? "");
-  const [name, setName] = useState(entry?.name ?? "");
+  const [title, setTitle] = useState(entry ? (titleOf ? titleOf(entry) : entry.title ?? "") : "");
   const [path, setPath] = useState(entry?.path ?? "~/");
   const [hosts, setHosts] = useState((entry?.hosts ?? []).join("\n"));
-  const [does, setDoes] = useState(entry?.does ?? "");
+  const [does, setDoes] = useState(entry ? (doesOf ? doesOf(entry) : entry.does ?? "") : "");
   const [label, setLabel] = useState<"credential" | "configuration">(entry?.label === "configuration" ? "configuration" : "credential");
-  const slug = entry?.name || name || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const slug = entry?.name || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const valid = Boolean(slug) && validPath(path);
   return (
-    <div className={CARD + " p-4 mt-3"} data-testid="sandbox-credential-editor">
-      <div className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-2 items-center">
-        <label className="text-ui text-muted">{t("settingsx.sandbox.field_title")}</label>
-        <input
-          className={INPUT}
-          value={title}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            if (!entry) setName("");
-          }}
-        />
-        <label className="text-ui text-muted">{t("settingsx.sandbox.field_path")}</label>
-        <div className="flex gap-2">
-          <input className={INPUT + " font-mono"} value={path} onChange={(e) => setPath(e.target.value)} />
-          <button
-            className={BTN_BORDERED}
-            onClick={async () => {
-              const picked = await chooseFolder();
-              if (picked) setPath(picked);
-            }}
-          >
-            {t("settingsx.sandbox.browse")}
-          </button>
+    <Modal testid="sandbox-credential-editor" wide>
+      <h3 className="text-heading font-semibold mb-1.5">{entry ? t("settingsx.sandbox.file_title_edit") : t("settingsx.sandbox.file_title")}</h3>
+      <p className="text-ui text-muted mb-3.5 leading-relaxed">{t("settingsx.sandbox.file_intro")}</p>
+      <div className="grid gap-3">
+        <label className="block">
+          <span className="block text-meta text-muted mb-1">
+            {t("settingsx.sandbox.field_path")} <span className="text-faint">{t("settingsx.sandbox.field_path_hint")}</span>
+          </span>
+          <span className="flex gap-2">
+            <input className={INPUT + " font-mono"} value={path} onChange={(e) => setPath(e.target.value)} data-testid="sandbox-credential-path" />
+            <button
+              className={BTN_BORDERED}
+              onClick={async (e) => {
+                e.preventDefault();
+                const picked = await chooseFolder();
+                if (picked) setPath(picked);
+              }}
+            >
+              {t("settingsx.sandbox.browse")}
+            </button>
+          </span>
+        </label>
+        <label className="block">
+          <span className="block text-meta text-muted mb-1">{t("settingsx.sandbox.field_title")}</span>
+          <input className={INPUT + " w-full"} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("settingsx.sandbox.field_title_example")} data-testid="sandbox-credential-title" />
+        </label>
+        <div>
+          <span className="block text-meta text-muted mb-1">{t("settingsx.sandbox.field_label")}</span>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t("settingsx.sandbox.field_label")}>
+            {(["credential", "configuration"] as const).map((k) => (
+              <label key={k} className={"flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer " + (label === k ? "border-accent bg-accentSoft" : "border-line")}>
+                <input type="radio" name="sandbox-credential-label" className="mt-1" checked={label === k} onChange={() => setLabel(k)} data-testid={`sandbox-credential-label-${k}`} />
+                <span>
+                  <span className="block text-ui text-ink font-medium">{t(`settingsx.sandbox.label_${k}_title`)}</span>
+                  <span className="block text-meta text-muted">{t(`settingsx.sandbox.label_${k}_desc`)}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
-        <label className="text-ui text-muted self-start pt-2">{t("settingsx.sandbox.field_label")}</label>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t("settingsx.sandbox.field_label")}>
-          {(["credential", "configuration"] as const).map((k) => (
-            <label key={k} className={"flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer " + (label === k ? "border-accent bg-accentSoft" : "border-line")}>
-              <input type="radio" name="sandbox-credential-label" className="mt-1" checked={label === k} onChange={() => setLabel(k)} data-testid={`sandbox-credential-label-${k}`} />
-              <span>
-                <span className="block text-ui text-ink">{t(`settingsx.sandbox.label_${k}_title`)}</span>
-                <span className="block text-meta text-muted">{t(`settingsx.sandbox.label_${k}_desc`)}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-        <label className="text-ui text-muted self-start pt-2">{t("settingsx.sandbox.field_hosts")}</label>
-        <textarea className={INPUT + " font-mono"} rows={3} value={hosts} onChange={(e) => setHosts(e.target.value)} />
-        <label className="text-ui text-muted">{t("settingsx.sandbox.field_does")}</label>
-        <input className={INPUT} value={does} onChange={(e) => setDoes(e.target.value)} />
+        <label className="block">
+          <span className="block text-meta text-muted mb-1">{t("settingsx.sandbox.field_hosts")}</span>
+          <textarea className={INPUT + " w-full font-mono"} rows={2} value={hosts} onChange={(e) => setHosts(e.target.value)} placeholder={t("settingsx.sandbox.field_hosts_example")} />
+        </label>
+        <label className="block">
+          <span className="block text-meta text-muted mb-1">{t("settingsx.sandbox.field_does")}</span>
+          <input className={INPUT + " w-full"} value={does} onChange={(e) => setDoes(e.target.value)} placeholder={t("settingsx.sandbox.field_does_example")} />
+        </label>
       </div>
-      <div className="flex items-center gap-2 mt-3">
-        <span className="text-meta text-faint">{t("settingsx.sandbox.editor_note")}</span>
+      <div className="flex items-center gap-2 mt-4">
+        <span className="text-meta text-faint max-w-[340px]">{t("settingsx.sandbox.editor_note")}</span>
         <span className="flex-1" />
         <button className={BTN_BORDERED} onClick={onCancel}>
           {t("settingsx.sandbox.cancel")}
@@ -941,24 +1181,25 @@ export function CredentialEditor({
         <button
           className={BTN_ACCENT}
           disabled={!valid}
+          data-testid="sandbox-credential-save"
           onClick={() =>
             onSave({
               name: slug,
-              title: title || undefined,
+              title: title && title !== (entry && titleOf ? titleOf({ ...entry, title: undefined }) : "") ? title : entry?.title,
               path,
               hosts: hosts
-                .split(/\s+/)
-                .map((h) => h.trim())
+                .split(/[\s,]+/)
+                .map((h) => cleanHost(h) || h.trim())
                 .filter(Boolean),
-              does: does || undefined,
+              does: does && does !== (entry && doesOf ? doesOf({ ...entry, does: undefined }) : "") ? does : entry?.does,
               label,
               enabled: entry?.enabled ?? true,
             })
           }
         >
-          {t("settingsx.sandbox.done")}
+          {entry ? t("settingsx.sandbox.save") : t("settingsx.sandbox.add_button")}
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -218,10 +218,12 @@ def open_workspace(
     credentials: Optional[list] = None,
     network_profile: Optional[str] = None,
     toolchains: Optional[list] = None,
+    extra_hosts: Optional[list] = None,
 ) -> Workspace:
     """The session's workspace for the configured provider. `credentials`: the machine's
     `sandbox_credentials` setting; the enabled entries are copied into the sandbox
     (design doc, section 11b). Ignored in `direct` mode, where nothing is hidden anyway. `direct` unless told otherwise.
+    `extra_hosts`: the machine's `sandbox_network_extra_hosts`, joined to the network list.
     `toolchains`: the machine's `sandbox_toolchains` setting; the switched-on folders that
     exist are readable inside (Seatbelt, Windows full mode).
     `roots`: the session's RootDir list (primary first); without it the workspace folder is
@@ -239,9 +241,10 @@ def open_workspace(
     from .credentials import granted
 
     grants = granted(credentials)
-    from .network_profiles import check, default_profile
+    from .network_profiles import check, clean_hosts, default_profile
 
     profile = check((network_profile or "").strip().lower() or default_profile())
+    added = clean_hosts(extra_hosts)
     from . import toolchains as toolchain_list
 
     tool_dirs = toolchain_list.granted(toolchains)
@@ -250,7 +253,7 @@ def open_workspace(
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
+            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
@@ -263,7 +266,7 @@ def open_workspace(
 
         label = "-".join(part for part in (session_id[:24], agent[:24]) if part)
         return RunnerWorkspace(
-            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile),
+            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
@@ -275,7 +278,7 @@ def open_workspace(
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
+            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,

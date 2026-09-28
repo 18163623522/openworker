@@ -49,6 +49,23 @@ def test_steps_carry_keys_and_say_which_the_app_may_fix(monkeypatch):
     assert [(w, ok) for w, ok, _ in setup_cmd.checks()] == [(s.what, s.ok) for s in setup_cmd.steps()]
 
 
+def test_a_hung_check_counts_as_not_ok_instead_of_failing_the_checklist(monkeypatch):
+    """`docker info` hangs while Docker Desktop is installed but not running (seen on a Mac,
+    2026-09-28): the row says Docker is missing, and the checklist still loads."""
+    import subprocess
+
+    def hang(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr(setup_cmd.subprocess, "run", hang)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    rows = {s.key: s for s in setup_cmd.steps()}
+    assert not rows["docker"].ok and not rows["openshell"].ok
+    assert setup_cmd._run(["docker", "info"], 1).returncode == 124
+
+
 def test_on_linux_the_install_is_the_apps_when_it_can_run_as_an_administrator(monkeypatch):
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
     monkeypatch.setattr(setup_cmd.sys, "platform", "linux")

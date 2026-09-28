@@ -348,6 +348,7 @@ def build_engine(
             agent=agent.name,
             credentials=config.sandbox_credentials,
             network_profile=config.sandbox_network_profile,
+            extra_hosts=config.sandbox_network_extra_hosts,
             toolchains=config.sandbox_toolchains,
         )
         if ws is not None

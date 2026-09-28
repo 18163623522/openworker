@@ -31,7 +31,8 @@ Settings ▸ Sandbox ▸ "macOS sandbox", or in `config.toml`:
 
 ```toml
 sandbox_provider = "seatbelt"       # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "strict"  # or "standard", or "open" (any host; files still confined)
+sandbox_network_profile = "standard"  # or "open" (any host; files still confined)
+sandbox_network_extra_hosts = ["registry.acme.dev:443"]  # optional, your own additions
 ```
 
 The setting is per machine; a project's own config cannot change it.
@@ -60,30 +61,40 @@ follow the proxy variables; a program that ignores them has no network at all.
 
 ## The network allow list
 
-Three profiles, shared with the OpenShell and Windows sandboxes:
+Two choices, shared with the other sandboxes:
 
-- **strict** (default): GitHub, GitLab, and the package registries — PyPI, npm, crates.io,
-  the Go proxy.
-- **standard**: strict plus the search APIs (Brave, Tavily, DuckDuckGo).
-- **open**: any host, no proxy. The files are still the wall.
+- **Package registries and search** (`standard`, the default): GitHub, GitLab, the package
+  registries — PyPI, npm, crates.io, the Go proxy — and the search APIs (Brave, Tavily,
+  DuckDuckGo). **Customize…** adds hosts of your own; the shipped ones stay.
+- **Allow everything** (`open`): any host, no proxy. The files are still the wall.
 
-Credentials shared on purpose (below) add the hosts their tools need.
+`strict`, the list without the search APIs, was folded into `standard`; a machine set to it
+now uses `standard`. A credential entry (below) adds the hosts its tool needs.
 
 ## Sharing a credential on purpose
 
 By default the sandbox has none of your logins, which also means `git push` over SSH has
-nothing to push with. Settings ▸ Sandbox lists files you can share, all off by default:
+nothing to push with. Settings ▸ Sandbox ▸ **Explicit config and keys exposed to Agent**
+lists only what you added, each with a switch; nothing is copied until you add it.
+**Add… ▸ A CLI's login** offers these, marked found or not found on this machine:
 
-| Entry | Copied from | Lets the agent | Hosts added to the allow list |
-|---|---|---|---|
-| `ssh` | `~/.ssh` | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
-| `gh` | `~/.config/gh` | use `gh` as you: pull requests, issues, releases | `api.github.com:443`, `github.com:443` |
-| `aws` | `~/.aws/config` | use `aws` with your profiles; `~/.aws/credentials` stays out unless you add it | `*.amazonaws.com:443` |
-| `kube` | `~/.kube/config` | use `kubectl` with your clusters | the servers named in the kubeconfig |
+| Entry | Copied from | What it is | Lets the agent | Hosts added to the allow list |
+|---|---|---|---|---|
+| SSH keys | `~/.ssh` | folder, credential | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
+| GitHub CLI | `~/.config/gh` | folder, credential | pull requests, issues and releases as you | `api.github.com:443`, `github.com:443` |
+| AWS profiles | `~/.aws/config` | file, configuration | regions and profile names, no keys | `*.amazonaws.com:443` |
+| AWS credentials | `~/.aws/credentials` | file, credential | your access keys | `*.amazonaws.com:443` |
+| kubectl | `~/.kube/config` | file, credential | your clusters | the servers named in the kubeconfig |
+| npm | `~/.npmrc` | file, credential | install and publish private packages | `registry.npmjs.org:443` |
+| Docker registries | `~/.docker/config.json` | file, credential | push and pull images with the logins saved in the file (not those kept by a credential helper) | Docker Hub, `ghcr.io` |
+| gcloud | `~/.config/gcloud` | folder, credential | your Google Cloud accounts and projects | `*.googleapis.com:443`, `accounts.google.com:443` |
+| Terraform Cloud | `~/.terraform.d/credentials.tfrc.json` | file, credential | runs and state in Terraform Cloud as you | `app.terraform.io:443`, `registry.terraform.io:443`, `releases.hashicorp.com:443` |
 
-An entry is a single file or a whole folder, your choice; each is labelled *credential* or
-*configuration*. Settings ▸ Sandbox shows them once the sandbox is on: one switch first,
-then the type, then the type's own options.
+Each one also sets the variable its tool reads to find the copy (`GH_CONFIG_DIR`,
+`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `KUBECONFIG`, `NPM_CONFIG_USERCONFIG`,
+`DOCKER_CONFIG`, `CLOUDSDK_CONFIG`). **Add… ▸ A file or folder** adds anything else under
+your home folder: a single file or a whole folder, labelled *credential* (a secret inside)
+or *configuration* (host names, profiles, options), with the hosts its tool needs.
 
 An enabled entry is **copied** into the sandbox's private home when the sandbox starts,
 owner-only, and deleted with the sandbox; the real files are never opened for writing.
@@ -121,7 +132,7 @@ itself, outside every sandbox, with their own tokens.
   (macOS does not nest them). `openworker machine sandbox status` says why.
 - **A tool cannot be found inside the sandbox** — it lives somewhere under your home folder
   that is not on the toolchain list.
-- **A host is refused** — it is not on the profile; switch to `standard` if it is a search
-  API, or share the credential entry whose hosts include it.
+- **A host is refused** — it is not on the list; add it with **Customize…**, or add the
+  credential entry whose hosts include it.
 - **`git push` says permission denied inside the sandbox** — no credential is shared.
   Switch the `ssh` (or `gh`) entry on in Settings ▸ Sandbox.

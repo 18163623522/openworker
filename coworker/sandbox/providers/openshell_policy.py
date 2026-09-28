@@ -66,8 +66,7 @@ def render(
     """`roots`: [{"path": absolute path, "writable": bool}], primary first. `home`: the
     sandbox's private home folder with the copied credentials (section 11b), read-write.
     `extra_hosts`: "host:port" entries the grants need; `*.example.com` is a wildcard."""
-    if profile not in PROFILES:
-        raise ValueError(f"unknown network profile {profile!r} (known: {', '.join(sorted(PROFILES))})")
+    profile = network_profiles.check(profile)
     read_write = [RUNTIME_DIR, "/dev/null", "/dev/pts", *([home] if home else []), *[str(r["path"]) for r in roots if r.get("writable")]]
     read_only = [*_SYSTEM_READ_ONLY, *_IMAGE_TOOLS_READ_ONLY, RUNNER_MOUNT, *[str(r["path"]) for r in roots if not r.get("writable")]]
     policy: dict[str, Any] = {
