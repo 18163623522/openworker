@@ -1,9 +1,9 @@
-// Settings ▸ Sandbox (UX-051 A, UX-053 v5, OPE-207): one switch first; on reveals the type;
+// Settings ▸ Sandbox (UX-051 A, UX-053 v5 and v6, OPE-207): one switch first; on reveals the type;
 // a chosen type reveals its options. The page shows what the machine reports and writes back
-// the changes: provider, network profile and the machine's own hosts, the credential list,
+// the changes: provider, network profile and the machine's ticked sites, the credential list,
 // the toolchain list. A type that is not set up looks disabled with one "Set up" button: on
 // Windows it opens the setup dialog, which calls the Windows setup route; for OpenShell it
-// opens the dialog with the readiness checklist and the guided setup job.
+// opens three rows: Docker running, OpenShell installed, and the app's own setup job.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -18,12 +18,14 @@ const base = {
     { name: "openshell", usable: false, why: "OpenShell is not installed" },
   ],
   windows_setup: null as any,
-  network_profile: "standard",
-  network_profiles: [
-    { name: "standard", hosts: ["github.com", "pypi.org", "api.tavily.com"] },
-    { name: "open", hosts: [] },
+  network_profile: "allowlist",
+  network_profiles: [{ name: "allowlist" }, { name: "open" }],
+  network_sites: [
+    { group: "code-hosts", hosts: ["github.com:443", "gitlab.com:443"] },
+    { group: "package-registries", hosts: ["pypi.org:443", "registry.npmjs.org:443"] },
+    { group: "search-apis", hosts: ["api.tavily.com:443"] },
   ],
-  network_extra_hosts: [] as string[],
+  network_hosts: [] as string[],
   credentials: [
     { name: "ssh", path: "~/.ssh", hosts: ["github.com:22"], label: "credential", enabled: true, kind: "folder", shipped: true },
     { name: "aws", path: "~/.aws/config", hosts: ["*.amazonaws.com:443"], label: "configuration", enabled: true, kind: "file", shipped: true },
@@ -53,6 +55,7 @@ const readiness = {
     { key: "image", what: "the sandbox base image is downloaded (about 5 GB, one time)", ok: false, hint: "", fixable: true, command: "docker pull img", docs: "" },
   ],
 };
+let readinessNow: any = readiness;
 let setupState: any = { status: "idle", rows: [], progress: null, error: "", elapsed_s: 0 };
 
 // Like the backend: a provider change names the sessions it dropped for a rebuild.
@@ -70,7 +73,7 @@ vi.mock("../api", async (importOriginal) => {
     setSandboxSettings: (patch: any) => setSandboxSettings(patch),
     runSandboxSetup: () => runSandboxSetup(),
     runSandboxRemove: () => runSandboxRemove(),
-    getSandboxReadiness: vi.fn(async () => readiness),
+    getSandboxReadiness: vi.fn(async () => readinessNow),
     getSandboxSetup: vi.fn(async () => setupState),
     startSandboxSetup: () => startSandboxSetup(),
     cancelSandboxSetup: vi.fn(async () => setupState),
@@ -103,6 +106,7 @@ describe("Settings ▸ Sandbox", () => {
     startSandboxSetup.mockClear();
     onSandboxProviderChanged.mockClear();
     setupState = { status: "idle", rows: [], progress: null, error: "", elapsed_s: 0 };
+    readinessNow = readiness;
   });
   afterEach(cleanup);
 
@@ -120,14 +124,14 @@ describe("Settings ▸ Sandbox", () => {
     expect((screen.getByTestId("sandbox-provider-openshell") as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByTestId("sandbox-setup-openshell").textContent).toBe("Set up");
     expect(screen.queryByTestId("sandbox-provider-openshell-why")).toBeNull(); // the button says it all
-    expect(screen.queryByTestId("sandbox-network-standard")).toBeNull(); // no type is chosen yet
+    expect(screen.queryByTestId("sandbox-network-allowlist")).toBeNull(); // no type is chosen yet
     expect(setSandboxSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("sandbox-provider-seatbelt"));
     await waitFor(() => expect(setSandboxSettings).toHaveBeenCalledWith({ provider: "seatbelt" }));
     await waitFor(() => expect(onSandboxProviderChanged).toHaveBeenCalledWith(["s-open"])); // live sessions rebuilt under the new rule
   });
 
-  it("OpenShell's Set up opens its dialog: the steps first, the handover command with Copy, then the job", async () => {
+  it("OpenShell's Set up: three rows; a failed check says what to do; the app never installs it", async () => {
     snapshot = {
       ...base,
       platform: "linux",
@@ -142,26 +146,37 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByText("One Linux container per agent. Needs Docker.")).toBeTruthy();
     fireEvent.click(screen.getByTestId("sandbox-setup-openshell"));
     const dialog = await screen.findByTestId("sandbox-openshell-dialog");
-    await within(dialog).findByTestId("sandbox-readiness-row-openshell");
+    await within(dialog).findByTestId("sandbox-setup-row-openshell");
     expect(within(dialog).getByText("Set up OpenShell")).toBeTruthy();
-    expect(screen.getByTestId("sandbox-readiness-row-docker").getAttribute("data-state")).toBe("ok");
-    expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("pending");
-    expect(within(screen.getByTestId("sandbox-readiness-row-image")).getByText("to do")).toBeTruthy();
-    // Only the handed-over row shows its command with Copy; the image row is the app's to
-    // do, and a note (the gateway row) gets neither.
-    expect(within(dialog).getByText("curl -LsSf https://example/install.sh | sh")).toBeTruthy();
-    expect(within(dialog).getAllByText("Copy").length).toBe(1);
-    expect(screen.queryByTestId("sandbox-readiness-command-gateway")).toBeNull();
-    expect((screen.getByTestId("sandbox-readiness-docs-openshell") as HTMLAnchorElement).href).toBe("https://example/guide");
-    expect(screen.queryByTestId("sandbox-readiness")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("sandbox-setup-start"));
-    await waitFor(() => expect(startSandboxSetup).toHaveBeenCalled());
+    expect(dialog.querySelectorAll("li").length).toBe(3); // the server's finer steps fold into the third row
+    expect(screen.getByTestId("sandbox-setup-row-docker").getAttribute("data-state")).toBe("ok");
+    expect(screen.getByTestId("sandbox-setup-row-openshell").getAttribute("data-state")).toBe("bad");
+    expect(within(screen.getByTestId("sandbox-setup-row-openshell")).getByText(/Install OpenShell 0\.0\.116, then check again/)).toBeTruthy();
+    expect((screen.getByTestId("sandbox-setup-docs-openshell") as HTMLAnchorElement).href).toBe("https://example/guide");
+    expect(screen.getByTestId("sandbox-setup-row-setup").getAttribute("data-state")).toBe("wait");
+    expect(within(dialog).queryByText(/curl/)).toBeNull(); // no installer command
+    expect(within(dialog).queryByText("to do")).toBeNull();
+    expect(screen.queryByTestId("sandbox-setup-start")).toBeNull(); // a check failed: Check again, not Set up
+    fireEvent.click(screen.getByTestId("sandbox-setup-check"));
     fireEvent.click(screen.getByTestId("sandbox-openshell-close"));
     expect(screen.queryByTestId("sandbox-openshell-dialog")).toBeNull();
   });
 
-  it("OpenShell: a running job shows progress in the dialog; needs_you offers Check again and Try again", async () => {
-    snapshot = { ...base, platform: "linux", providers: [{ name: "direct", usable: true, why: "", state: "ready" }, { name: "openshell", usable: false, why: "", state: "needs_download" }] };
+  it("OpenShell: both checks pass, Set up runs; the rows stay and the third shows the download", async () => {
+    snapshot = { ...base, platform: "darwin", providers: [{ name: "direct", usable: true, why: "" }, { name: "seatbelt", usable: true, why: "" }, { name: "openshell", usable: false, why: "", state: "needs_download" }] };
+    readinessNow = { ...readiness, steps: [{ ...readiness.steps[0], ok: true }, { ...readiness.steps[1], ok: true }, { ...readiness.steps[2], ok: true }, readiness.steps[3]] };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    fireEvent.click(masterSwitch());
+    fireEvent.click(screen.getByTestId("sandbox-setup-openshell"));
+    await screen.findByTestId("sandbox-setup-row-setup");
+    expect(screen.getByText("Docker Desktop is running")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-setup-row-setup").getAttribute("data-state")).toBe("todo");
+    expect(screen.getByText("Downloads the base image, about 5 GB, once.")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("sandbox-setup-start"));
+    await waitFor(() => expect(startSandboxSetup).toHaveBeenCalled());
+    cleanup();
+
     setupState = {
       status: "running",
       rows: [
@@ -181,34 +196,22 @@ describe("Settings ▸ Sandbox", () => {
     fireEvent.click(screen.getByTestId("sandbox-setup-openshell"));
     await screen.findByTestId("sandbox-download-progress");
     expect(screen.getByText("Setting up OpenShell")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-setup-row-docker").getAttribute("data-state")).toBe("ok");
+    expect(screen.getByTestId("sandbox-setup-row-setup").getAttribute("data-state")).toBe("run");
     expect(screen.getByText("Downloading the base image: 3 of 8 layers, 1 min 15 s elapsed")).toBeTruthy();
-    expect(screen.getByTestId("sandbox-setup-cancel")).toBeTruthy();
-    expect(screen.getByTestId("sandbox-readiness-row-image").getAttribute("data-state")).toBe("fixing");
+    expect(screen.getByTestId("sandbox-setup-cancel").textContent).toBe("Cancel setup");
+    expect(screen.getByTestId("sandbox-openshell-hide").textContent).toBe("Hide");
     cleanup();
 
-    setupState = {
-      status: "needs_you",
-      rows: [
-        { ...readiness.steps[0], state: "ok" },
-        { ...readiness.steps[1], state: "needs_you" },
-        { ...readiness.steps[2], state: "pending" },
-        { ...readiness.steps[3], state: "pending" },
-      ],
-      progress: null,
-      error: "",
-      elapsed_s: 3,
-    };
+    setupState = { ...setupState, status: "done", progress: null, rows: setupState.rows.map((r: any) => ({ ...r, ok: true, state: r.state === "fixing" ? "fixed" : r.state })) };
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-section");
     fireEvent.click(masterSwitch());
     await waitFor(() => expect(screen.getByTestId("sandbox-setup-openshell")).toBeTruthy());
     fireEvent.click(screen.getByTestId("sandbox-setup-openshell"));
-    await screen.findByTestId("sandbox-setup-needs_you");
-    expect(screen.getByText("One step needs you")).toBeTruthy();
-    expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("needs_you");
-    expect(screen.getByTestId("sandbox-setup-check").textContent).toBe("Check again");
-    fireEvent.click(screen.getByTestId("sandbox-setup-start"));
-    await waitFor(() => expect(startSandboxSetup).toHaveBeenCalled());
+    await screen.findByText("OpenShell is ready");
+    expect(screen.getByTestId("sandbox-setup-row-setup").getAttribute("data-state")).toBe("ok");
+    expect(screen.getByTestId("sandbox-openshell-done")).toBeTruthy();
   });
 
   it("OpenShell chosen with the base image missing: selected, with the hint and the Set up button", async () => {
@@ -231,13 +234,14 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByTestId("sandbox-card-files")).toBeTruthy();
   });
 
-  it("a chosen type shows two network choices, Customize, and two closed panels; off writes direct", async () => {
+  it("a chosen type shows two network choices and two closed panels; off writes direct", async () => {
     snapshot = chosenSeatbelt();
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-section");
     expect(document.querySelectorAll('input[name="sandbox-network"]').length).toBe(2);
-    expect((screen.getByTestId("sandbox-network-standard") as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText("Package registries and search")).toBeTruthy();
+    expect((screen.getByTestId("sandbox-network-allowlist") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("Only the sites you allow")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-network-allowlist-desc").textContent).toBe("None yet.Choose sites…");
     expect(screen.getByText("Allow everything").className).toContain("text-warnInk");
     fireEvent.click(screen.getByTestId("sandbox-network-open"));
     await waitFor(() => expect(setSandboxSettings).toHaveBeenCalledWith({ network_profile: "open" }));
@@ -250,25 +254,34 @@ describe("Settings ▸ Sandbox", () => {
     await waitFor(() => expect(setSandboxSettings).toHaveBeenLastCalledWith({ provider: "direct" }));
   });
 
-  it("Customize: add a host, refuse a bad one, remove one, save the machine's list", async () => {
-    snapshot = { ...chosenSeatbelt(), network_extra_hosts: ["sentry.io:443"] };
+  it("Allowed sites: nothing ticked; tick a group and a site, add one, refuse a bad one, save the ticked", async () => {
+    snapshot = { ...chosenSeatbelt(), network_hosts: ["sentry.io:443"] };
     render(<SettingsView initialTab="sandbox" />);
     await screen.findByTestId("sandbox-section");
-    expect(screen.getByText(/1 added/)).toBeTruthy();
-    fireEvent.click(screen.getByTestId("sandbox-network-customize"));
-    const dialog = screen.getByTestId("sandbox-hosts-dialog");
-    expect(within(dialog).getByText(/github\.com · pypi\.org · api\.tavily\.com/)).toBeTruthy(); // the shipped list, read-only
-    const input = screen.getByTestId("sandbox-host-input");
-    fireEvent.change(input, { target: { value: "not a host" } });
-    fireEvent.click(screen.getByTestId("sandbox-host-add"));
-    expect(within(dialog).getByText(/That is not a host name/)).toBeTruthy();
+    expect(screen.getByTestId("sandbox-network-allowlist-desc").textContent).toBe("sentry.io.Choose sites…");
+    fireEvent.click(screen.getByTestId("sandbox-network-sites"));
+    const dialog = screen.getByTestId("sandbox-sites-dialog");
+    expect(within(dialog).getByText("Allowed sites")).toBeTruthy();
+    expect(within(dialog).getByText("Agents can reach only the sites you tick. Applies to new sessions.")).toBeTruthy();
+    expect(within(screen.getByTestId("sandbox-sites-group-added")).getByText("sentry.io")).toBeTruthy(); // a site the user added earlier
+    const box = (host: string) => within(screen.getByTestId(`sandbox-site-${host}`)).getByRole("checkbox") as HTMLInputElement;
+    expect(box("github.com:443").checked).toBe(false); // nothing from the catalogue is ticked
+    fireEvent.click(screen.getByTestId("sandbox-sites-group-code-hosts-box"));
+    expect(box("github.com:443").checked && box("gitlab.com:443").checked).toBe(true);
+    fireEvent.click(box("pypi.org:443"));
+    expect((screen.getByTestId("sandbox-sites-group-package-registries-box") as HTMLInputElement).indeterminate).toBe(true);
+    const input = screen.getByTestId("sandbox-site-input");
+    fireEvent.change(input, { target: { value: "not a site" } });
+    fireEvent.click(screen.getByTestId("sandbox-site-add"));
+    expect(within(dialog).getByText(/That is not a site name/)).toBeTruthy();
     fireEvent.change(input, { target: { value: "Registry.Acme.dev" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(screen.getByTestId("sandbox-host-registry.acme.dev:443")).toBeTruthy();
-    fireEvent.click(within(screen.getByTestId("sandbox-host-sentry.io:443")).getByText("Remove"));
-    fireEvent.click(screen.getByTestId("sandbox-hosts-save"));
-    await waitFor(() => expect(setSandboxSettings).toHaveBeenLastCalledWith({ network_extra_hosts: ["registry.acme.dev:443"] }));
-    await waitFor(() => expect(screen.queryByTestId("sandbox-hosts-dialog")).toBeNull());
+    expect(box("registry.acme.dev:443").checked).toBe(true);
+    fireEvent.click(within(screen.getByTestId("sandbox-site-sentry.io:443")).getByText("Remove"));
+    expect(screen.getByTestId("sandbox-sites-total").textContent).toBe("4 allowed");
+    fireEvent.click(screen.getByTestId("sandbox-sites-save"));
+    await waitFor(() => expect(setSandboxSettings).toHaveBeenLastCalledWith({ network_hosts: ["github.com:443", "gitlab.com:443", "pypi.org:443", "registry.acme.dev:443"] }));
+    await waitFor(() => expect(screen.queryByTestId("sandbox-sites-dialog")).toBeNull());
   });
 
   it("the files panel lists only added entries: switch, tags, remove; Add… offers a CLI's login or a file", async () => {

@@ -125,10 +125,11 @@ class Config:
     # coworker/sandbox/credentials.py; an entry here edits or adds by name.
     sandbox_credentials: list[dict[str, Any]] = field(default_factory=list)
     # Which hosts a sandbox may reach: a profile name from coworker/sandbox/network_profiles.py
-    # ("standard" when unset, "open" on Windows). Machine-level, like the provider.
+    # ("allowlist" when unset, "open" on Windows). Machine-level, like the provider.
     sandbox_network_profile: Optional[str] = None
-    # The machine's own additions to that list, "host:port" (a bare host means 443).
-    sandbox_network_extra_hosts: list[str] = field(default_factory=list)
+    # The sites an `allowlist` sandbox may reach, "host:port" (a bare host means 443).
+    # Empty until the user ticks some in Settings ▸ Sandbox.
+    sandbox_network_hosts: list[str] = field(default_factory=list)
     # Developer tool folders under the home folder a sandbox may read (design doc, Windows
     # 3d.4): `[[sandbox_toolchains]]` tables with name, path, enabled, editing or adding to
     # the shipped list in coworker/sandbox/toolchains.py by name. Machine-level.
@@ -145,7 +146,7 @@ _FIELDS = {
     "sandbox_provider",
     "sandbox_credentials",
     "sandbox_network_profile",
-    "sandbox_network_extra_hosts",
+    "sandbox_network_hosts",
     "sandbox_toolchains",
     "compaction_cap_tokens",
     "compaction_summary_max_tokens",
@@ -173,7 +174,7 @@ _GLOBAL_ONLY_FIELDS = {
     "sandbox_provider",
     "sandbox_credentials",
     "sandbox_network_profile",
-    "sandbox_network_extra_hosts",
+    "sandbox_network_hosts",
     "sandbox_toolchains",
     "allowed_commands",
     "auto_allow",

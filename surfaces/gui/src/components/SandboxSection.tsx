@@ -1,10 +1,11 @@
 // Settings ▸ Sandbox (UX-051 A, UX-053 v5, OPE-207): one switch first; on reveals the
 // sandbox type; a type that is the machine's choice reveals its options: the network
-// (package registries and search, with the machine's own hosts; or everything), the config
+// (only the sites the user ticks, none until they do; or everything), the config
 // and keys copied into sandboxes, and the tool folders agents may read. A type that is not
 // set up yet looks disabled and carries one "Set up" button: the Windows sandbox's opens its
-// one-time elevated setup, OpenShell's opens the guided setup job (fixes what the app may
-// fix, never as root; hands the rest over as commands; downloads the image with progress).
+// one-time elevated setup, OpenShell's opens its setup: two checks the user fixes (Docker
+// running, OpenShell installed) and one step the app does (the folder setting and the
+// base image download, with progress).
 // Everything here is machine-level (the machine's config.toml through /v1/settings/sandbox);
 // nothing is per project. A provider change rebuilds live sessions under the new rule
 // (onProviderChanged carries their ids).
@@ -167,7 +168,7 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   const [menu, setMenu] = useState(false); // the "Add…" menu of the files panel
   const [picking, setPicking] = useState(false); // the "A CLI's login" picker
   const [editing, setEditing] = useState<string | null>(null); // credential name being edited, "" = new
-  const [hostsOpen, setHostsOpen] = useState(false);
+  const [sitesOpen, setSitesOpen] = useState(false);
   const [addingTool, setAddingTool] = useState(false);
   const [toolTitle, setToolTitle] = useState("");
   const [toolPath, setToolPath] = useState("~/");
@@ -331,7 +332,8 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   const setUpOn = setup?.set_up_at ? new Date(setup.set_up_at) : null;
   const setUpOnText = setUpOn && !Number.isNaN(setUpOn.getTime()) ? setUpOn.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
 
-  const extraHosts = cfg.network_extra_hosts ?? [];
+  const ticked = cfg.network_hosts ?? [];
+  const bare = (h: string) => h.replace(/:443$/, "");
   const presets = cfg.credential_presets ?? [];
   const showTools = cfg.platform !== "linux" && chosen !== "openshell" && Boolean(cfg.toolchains);
   const toolsOn = (cfg.toolchains || []).filter((x) => x.enabled);
@@ -466,7 +468,7 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
         <>
           <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.network")}</div>
           <div className={CARD + " mb-5 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
-            {(["standard", "open"] as const).map((name) => (
+            {(["allowlist", "open"] as const).map((name) => (
               <label key={name} className="flex items-start gap-3 px-4 py-2.5 cursor-pointer">
                 <input
                   type="radio"
@@ -478,23 +480,24 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
                 />
                 <span className="flex-1 min-w-0">
                   <span className={"block text-ui " + (name === "open" ? "text-warnInk" : "text-ink")}>{t(`settingsx.sandbox.profile_${name}`)}</span>
-                  <span className="block text-meta text-muted">
-                    {t(`settingsx.sandbox.profile_${name}_desc`)}
-                    {name === "standard" ? (
-                      <>
-                        <button
-                          type="button"
-                          className="ml-1.5 text-accent hover:underline"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setHostsOpen(true);
-                          }}
-                          data-testid="sandbox-network-customize"
-                        >
-                          {t("settingsx.sandbox.customize")}
-                        </button>
-                        {extraHosts.length ? <span className="text-faint"> · {t("settingsx.sandbox.hosts_added", { count: extraHosts.length })}</span> : null}
-                      </>
+                  <span className="block text-meta text-muted" data-testid={`sandbox-network-${name}-desc`}>
+                    {name === "open"
+                      ? t("settingsx.sandbox.profile_open_desc")
+                      : ticked.length
+                        ? t("settingsx.sandbox.sites_sum", { list: listText(t, ticked.map(bare), 3) })
+                        : t("settingsx.sandbox.sites_none")}
+                    {name === "allowlist" ? (
+                      <button
+                        type="button"
+                        className="ml-1.5 text-accent hover:underline"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSitesOpen(true);
+                        }}
+                        data-testid="sandbox-network-sites"
+                      >
+                        {t("settingsx.sandbox.choose_sites")}
+                      </button>
                     ) : null}
                   </span>
                 </span>
@@ -625,15 +628,15 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
         </>
       ) : null}
 
-      {/* Customize: the machine's own hosts */}
-      {hostsOpen ? (
-        <HostsDialog
+      {/* Choose sites: the allow list, every site a tick box */}
+      {sitesOpen ? (
+        <SitesDialog
           t={t}
-          hosts={extraHosts}
-          builtin={cfg.network_profiles.find((n) => n.name === "standard")?.hosts ?? []}
-          onCancel={() => setHostsOpen(false)}
+          ticked={ticked}
+          catalogue={cfg.network_sites ?? []}
+          onCancel={() => setSitesOpen(false)}
           onSave={async (next) => {
-            if (await save({ network_extra_hosts: next })) setHostsOpen(false);
+            if (await save({ network_hosts: next })) setSitesOpen(false);
           }}
           error={error}
         />
@@ -720,6 +723,7 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
       {openshellDialog ? (
         <OpenShellDialog
           t={t}
+          platform={cfg.platform}
           readiness={readiness}
           job={job}
           ready={Boolean(cfg.providers.find((p) => p.name === "openshell")?.usable) && chosen === "openshell"}
@@ -847,26 +851,34 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
   );
 }
 
-// "Customize…": the hosts this machine adds to "Package registries and search", which the
-// user adds and removes, above the shipped ones, which are read-only.
-function HostsDialog({
+// "Choose sites…" (UX-053 v6): every site the allow list can hold, as a tick box in its
+// group, none ticked until the user ticks some. Sites the user adds join the list and can
+// be removed. Saving writes the ticked ones, "host:port".
+function SitesDialog({
   t,
-  hosts,
-  builtin,
+  ticked,
+  catalogue,
   onCancel,
   onSave,
   error,
 }: {
   t: T;
-  hosts: string[];
-  builtin: string[];
+  ticked: string[];
+  catalogue: { group: string; hosts: string[] }[];
   onCancel: () => void;
   onSave: (hosts: string[]) => void;
   error: string;
 }) {
-  const [list, setList] = useState<string[]>(hosts);
+  const known = new Set(catalogue.flatMap((g) => g.hosts));
+  const [on, setOn] = useState<Set<string>>(new Set(ticked));
+  const [added, setAdded] = useState<string[]>(ticked.filter((h) => !known.has(h)));
   const [draft, setDraft] = useState("");
   const [bad, setBad] = useState(false);
+  const flip = (hosts: string[], value: boolean) => {
+    const next = new Set(on);
+    hosts.forEach((h) => (value ? next.add(h) : next.delete(h)));
+    setOn(next);
+  };
   const add = () => {
     const host = cleanHost(draft);
     if (!host) {
@@ -875,32 +887,63 @@ function HostsDialog({
     }
     setBad(false);
     setDraft("");
-    if (!list.includes(host)) setList([...list, host]);
+    if (!known.has(host) && !added.includes(host)) setAdded([...added, host]);
+    flip([host], true);
   };
-  const rows: string[][] = [];
-  for (let i = 0; i < builtin.length; i += 4) rows.push(builtin.slice(i, i + 4));
+  const groups = [...(added.length ? [{ group: "added", hosts: added }] : []), ...catalogue];
+  const result = [...catalogue.flatMap((g) => g.hosts), ...added].filter((h) => on.has(h));
+  const bare = (h: string) => h.replace(/:443$/, "");
   return (
-    <Modal testid="sandbox-hosts-dialog" wide>
-      <h3 className="text-heading font-semibold mb-1.5">{t("settingsx.sandbox.hosts_title")}</h3>
-      <p className="text-ui text-muted mb-3.5 leading-relaxed">{t("settingsx.sandbox.hosts_intro")}</p>
-      <div className="text-label font-medium text-faint mb-1.5">{t("settingsx.sandbox.hosts_yours")}</div>
-      {list.length ? (
-        <div className="rounded-lg border border-line divide-y divide-line mb-2">
-          {list.map((h) => (
-            <div key={h} className="flex items-center gap-2.5 px-3 py-1.5 text-meta font-mono text-ink" data-testid={`sandbox-host-${h}`}>
-              {h}
-              <button className="ml-auto text-meta font-sans text-muted hover:text-ink" onClick={() => setList(list.filter((x) => x !== h))}>
-                {t("settingsx.sandbox.remove")}
-              </button>
+    <Modal testid="sandbox-sites-dialog" wide>
+      <h3 className="text-heading font-semibold mb-1.5">{t("settingsx.sandbox.sites_title")}</h3>
+      <p className="text-ui text-muted mb-3.5 leading-relaxed">{t("settingsx.sandbox.sites_intro")}</p>
+      <div className="rounded-lg border border-line max-h-[330px] overflow-auto">
+        {groups.map((g) => {
+          const count = g.hosts.filter((h) => on.has(h)).length;
+          const all = count === g.hosts.length;
+          return (
+            <div key={g.group} data-testid={`sandbox-sites-group-${g.group}`}>
+              <label className="sticky top-0 flex items-center gap-2.5 px-3 py-2 bg-chrome border-b border-line text-meta font-semibold text-ink cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={all}
+                  ref={(el) => {
+                    if (el) el.indeterminate = count > 0 && !all;
+                  }}
+                  onChange={() => flip(g.hosts, !all)}
+                  data-testid={`sandbox-sites-group-${g.group}-box`}
+                />
+                {t(`settingsx.sandbox.site_group_${g.group}`)}
+                <span className="ml-auto font-normal text-faint">{t("settingsx.sandbox.sites_count", { on: count, total: g.hosts.length })}</span>
+              </label>
+              {g.hosts.map((h) => (
+                <label key={h} className="flex items-center gap-2.5 pl-9 pr-3 py-1.5 border-b border-line text-meta font-mono text-ink cursor-pointer" data-testid={`sandbox-site-${h}`}>
+                  <input type="checkbox" checked={on.has(h)} onChange={() => flip([h], !on.has(h))} />
+                  {bare(h)}
+                  {g.group === "added" ? (
+                    <button
+                      type="button"
+                      className="ml-auto font-sans text-muted hover:text-ink"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setAdded(added.filter((x) => x !== h));
+                        flip([h], false);
+                      }}
+                    >
+                      {t("settingsx.sandbox.remove")}
+                    </button>
+                  ) : null}
+                </label>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : null}
-      <div className="flex gap-2 mb-1">
+          );
+        })}
+      </div>
+      <div className="flex gap-2 mt-2.5">
         <input
           className={INPUT + " font-mono" + (bad ? " border-danger" : "")}
           value={draft}
-          placeholder={t("settingsx.sandbox.hosts_placeholder")}
+          placeholder={t("settingsx.sandbox.sites_placeholder")}
           onChange={(e) => {
             setDraft(e.target.value);
             setBad(false);
@@ -908,29 +951,23 @@ function HostsDialog({
           onKeyDown={(e) => {
             if (e.key === "Enter") add();
           }}
-          data-testid="sandbox-host-input"
+          data-testid="sandbox-site-input"
         />
-        <button className={BTN_BORDERED} onClick={add} disabled={!draft.trim()} data-testid="sandbox-host-add">
+        <button className={BTN_BORDERED} onClick={add} disabled={!draft.trim()} data-testid="sandbox-site-add">
           {t("settingsx.sandbox.add_button")}
         </button>
       </div>
-      {bad ? <div className="text-meta text-danger mb-1">{t("settingsx.sandbox.hosts_bad")}</div> : null}
-      {error ? <div className="text-meta text-danger mb-1">{error}</div> : null}
-      <div className="text-label font-medium text-faint mt-3.5 mb-1.5">{t("settingsx.sandbox.hosts_builtin")}</div>
-      <div className="rounded-lg border border-line divide-y divide-line">
-        {rows.map((r) => (
-          <div key={r.join()} className="px-3 py-1.5 text-meta font-mono text-muted">
-            {r.join(" · ")}
-          </div>
-        ))}
-      </div>
+      {bad ? <div className="text-meta text-danger mt-1">{t("settingsx.sandbox.sites_bad")}</div> : null}
+      {error ? <div className="text-meta text-danger mt-1">{error}</div> : null}
       <div className="flex items-center gap-2 mt-4">
-        <span className="text-meta text-faint max-w-[340px]">{t("settingsx.sandbox.hosts_note")}</span>
+        <span className="text-meta text-faint" data-testid="sandbox-sites-total">
+          {t("settingsx.sandbox.sites_total", { count: result.length })}
+        </span>
         <span className="flex-1" />
         <button className={BTN_BORDERED} onClick={onCancel}>
           {t("settingsx.sandbox.cancel")}
         </button>
-        <button className={BTN_ACCENT} onClick={() => onSave(list)} data-testid="sandbox-hosts-save">
+        <button className={BTN_ACCENT} onClick={() => onSave(result)} data-testid="sandbox-sites-save">
           {t("settingsx.sandbox.save")}
         </button>
       </div>
@@ -955,10 +992,16 @@ export function cleanHost(text: string): string {
   return `${host}:${Number(port)}`;
 }
 
-// OpenShell's setup (OPE-207, UX-053 v5): the steps first, then the job's rows with its
-// progress. A command with Copy shows only where the app cannot do the step itself.
+type RowState = "ok" | "bad" | "run" | "todo" | "wait";
+type Row = SandboxReadinessStep & { state?: SandboxSetupRowState };
+
+// OpenShell's setup (OPE-207, UX-053 v6): three rows that stay put from start to finish.
+// Two are checks the user fixes (Docker running, OpenShell installed); the third is what
+// the app does (the folder setting, the image download, choosing OpenShell), with the
+// download's progress. The server's finer steps are folded into the third row.
 function OpenShellDialog({
   t,
+  platform,
   readiness,
   job,
   ready,
@@ -970,6 +1013,7 @@ function OpenShellDialog({
   copied,
 }: {
   t: T;
+  platform: string;
   readiness: SandboxReadiness | null;
   job: SandboxSetupState | null;
   ready: boolean;
@@ -980,28 +1024,55 @@ function OpenShellDialog({
   copy: (text: string) => void;
   copied: string;
 }) {
-  const rows: (SandboxReadinessStep & { state?: SandboxSetupRowState })[] = job && job.status !== "idle" ? job.rows : readiness?.steps ?? [];
   const running = job?.status === "running";
-  const done = job?.status === "done" || (ready && !job);
-  const needsYou = job?.status === "needs_you";
-  const stopped = job?.status === "failed" || job?.status === "cancelled";
+  const rows: Row[] = job && job.status !== "idle" && job.rows.length ? job.rows : readiness?.steps ?? [];
+  const byKey = (key: string) => rows.find((r) => r.key === key);
+  const good = (r?: Row) => Boolean(r) && (r!.state ? r!.state === "ok" || r!.state === "fixed" : r!.ok);
+  const docker = byKey("docker");
+  const openshell = byKey("openshell");
+  const rest = rows.filter((r) => r.key !== "docker" && r.key !== "openshell");
+  const blocked = rest.find((r) => r.state === "needs_you" || r.state === "failed");
+  const checksOk = good(docker) && good(openshell);
+  const allOk = rows.length > 0 && rows.every((r) => good(r));
+  const done = job?.status === "done" || (!job && ready && allOk);
+  const mark = (r?: Row): RowState => (!r ? "wait" : good(r) ? "ok" : "bad");
+  const third: RowState = done || (rows.length > 0 && rest.every((r) => good(r)) && checksOk) ? "ok" : blocked ? "bad" : running ? "run" : checksOk ? "todo" : "wait";
   const elapsed = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`);
-  const [title, intro] = done
-    ? [t("settingsx.sandbox.os_done_title"), t("settingsx.sandbox.os_done_intro")]
-    : running
-      ? [t("settingsx.sandbox.os_running_title"), t("settingsx.sandbox.os_running_intro")]
-      : needsYou
-        ? [t("settingsx.sandbox.os_needs_you_title"), t("settingsx.sandbox.os_needs_you_intro")]
-        : stopped
-          ? [t("settingsx.sandbox.os_stopped_title"), job?.status === "cancelled" ? t("settingsx.sandbox.setup_cancelled") : t("settingsx.sandbox.setup_failed", { error: job?.error })]
-          : [t("settingsx.sandbox.os_title"), t("settingsx.sandbox.os_intro")];
+  const mac = platform === "darwin";
+  const progress = running && job?.progress;
+  const title = done ? t("settingsx.sandbox.os_done_title") : running ? t("settingsx.sandbox.os_running_title") : t("settingsx.sandbox.os_title");
+  const intro = done ? t(mac ? "settingsx.sandbox.os_done_intro_mac" : "settingsx.sandbox.os_done_intro") : t("settingsx.sandbox.os_intro");
+  const Mark = ({ state }: { state: RowState }) =>
+    state === "ok" ? (
+      <span className="w-[18px] h-[18px] rounded-full bg-ok text-white text-[11px] flex items-center justify-center shrink-0 mt-px">✓</span>
+    ) : state === "bad" ? (
+      <span className="w-[18px] h-[18px] rounded-full border border-warnInk/40 bg-warnSoft text-warnInk text-[11px] font-bold flex items-center justify-center shrink-0 mt-px">!</span>
+    ) : state === "run" ? (
+      <span className="w-[18px] h-[18px] rounded-full border-2 border-lineStrong border-t-accent animate-spin shrink-0 mt-px" />
+    ) : (
+      <span className="w-[18px] h-[18px] rounded-full border-[1.5px] border-lineStrong shrink-0 mt-px" />
+    );
+  const line = (key: string, state: RowState, text: string, detail?: React.ReactNode) => (
+    <li className="flex items-start gap-3 px-3.5 py-3" data-testid={`sandbox-setup-row-${key}`} data-state={state}>
+      <Mark state={state} />
+      <span className="flex-1 min-w-0">
+        <span className={"block text-ui " + (state === "wait" ? "text-faint" : "text-ink")}>{text}</span>
+        {detail}
+      </span>
+    </li>
+  );
+  const link = (href: string, label: string, testid: string) => (
+    <a className="text-accent" href={href} target="_blank" rel="noreferrer" data-testid={testid}>
+      {label}
+    </a>
+  );
+  const blockedCommand = blocked?.command;
   return (
     <Modal testid="sandbox-openshell-dialog">
       <h3 className="text-heading font-semibold mb-1.5">{title}</h3>
       <p className="text-ui text-muted mb-3.5 leading-relaxed" data-testid={job && job.status !== "idle" ? `sandbox-setup-${job.status}` : undefined}>
         {intro}
       </p>
-      {!running && !done && !job ? <div className="text-label font-medium text-faint mb-1.5">{t("settingsx.sandbox.os_steps")}</div> : null}
       {!readiness && !job ? (
         <div className="rounded-lg border border-line bg-paper px-3 py-2.5 text-ui text-muted flex items-center gap-2.5">
           <span className="w-4 h-4 rounded-full border-2 border-lineStrong border-t-accent animate-spin shrink-0" />
@@ -1009,58 +1080,61 @@ function OpenShellDialog({
         </div>
       ) : (
         <ul className="rounded-lg border border-line divide-y divide-line" data-testid="sandbox-readiness">
-          {rows.map((r) => {
-            const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
-            const good = state === "ok" || state === "fixed";
-            const showCommand = !good && r.command && (!r.fixable || state === "needs_you" || state === "failed");
-            return (
-              <li key={r.key} className="px-3 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
-                <div className="flex items-start gap-2">
-                  <span className={"shrink-0 w-4 " + (good ? "text-ok" : state === "fixing" ? "text-accent" : state === "pending" ? "text-faint" : "text-warnInk")} aria-hidden>
-                    {good ? "✓" : state === "fixing" ? "⟳" : state === "pending" ? "○" : "!"}
-                  </span>
-                  <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
-                  <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${!job && state === "pending" ? "todo" : state}`)}</span>
-                </div>
-                {r.key === "openshell" && running && state === "fixing" && job?.progress ? (
-                  <div className="mt-1 ml-6 text-meta text-muted font-mono break-all" data-testid="sandbox-install-progress">
-                    {t("settingsx.sandbox.install_progress", { elapsed: elapsed(job.progress.elapsed_s) })}
-                    {job.progress.last_line ? ` · ${job.progress.last_line}` : ""}
-                  </div>
-                ) : null}
-                {r.key === "image" && running && state === "fixing" && job?.progress ? (
-                  <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
-                    <div className="h-1.5 rounded bg-line overflow-hidden">
-                      <div className="h-full bg-accent transition-all" style={{ width: job.progress.layers_total ? `${Math.round((100 * job.progress.layers_done) / job.progress.layers_total)}%` : "5%" }} />
-                    </div>
-                    <div className="text-meta text-muted mt-1">
-                      {job.progress.layers_total
-                        ? t("settingsx.sandbox.download_progress", { done: job.progress.layers_done, total: job.progress.layers_total, elapsed: elapsed(job.progress.elapsed_s) })
-                        : t("settingsx.sandbox.download_progress_unknown", { elapsed: elapsed(job.progress.elapsed_s) })}
-                    </div>
-                  </div>
-                ) : null}
-                {!good && r.hint ? <div className="mt-1 ml-6 text-meta text-muted">{r.hint}</div> : null}
-                {showCommand ? (
-                  <div className="mt-1.5 ml-6 flex items-start gap-2 rounded-lg border border-line bg-paper px-2.5 py-1.5" data-testid={`sandbox-readiness-command-${r.key}`}>
-                    <code className="text-meta font-mono text-ink break-all flex-1 min-w-0">{r.command}</code>
-                    <button className="text-meta text-accent shrink-0" onClick={() => copy(r.command)}>
-                      {copied === r.command ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
+          {line(
+            "docker",
+            mark(docker),
+            t(mac ? "settingsx.sandbox.os_row_docker_mac" : "settingsx.sandbox.os_row_docker"),
+            docker && !good(docker) ? (
+              <span className="block text-meta text-muted mt-0.5">
+                {t(mac ? "settingsx.sandbox.os_docker_fix_mac" : "settingsx.sandbox.os_docker_fix")}{" "}
+                {docker.docs ? link(docker.docs, t(mac ? "settingsx.sandbox.get_docker_mac" : "settingsx.sandbox.get_docker"), "sandbox-setup-docs-docker") : null}
+              </span>
+            ) : null,
+          )}
+          {line(
+            "openshell",
+            mark(openshell),
+            t("settingsx.sandbox.os_row_openshell"),
+            openshell && !good(openshell) ? (
+              <span className="block text-meta text-muted mt-0.5">
+                {openshell.hint ? openshell.hint + ". " : ""}
+                {t("settingsx.sandbox.os_openshell_fix")}{" "}
+                {openshell.docs ? link(openshell.docs, t("settingsx.sandbox.os_openshell_guide"), "sandbox-setup-docs-openshell") : null}
+              </span>
+            ) : null,
+          )}
+          {line(
+            "setup",
+            third,
+            t("settingsx.sandbox.os_row_setup"),
+            third === "bad" && blocked ? (
+              <span className="block mt-0.5">
+                <span className="block text-meta text-muted">{blocked.hint || blocked.what}</span>
+                {blockedCommand ? (
+                  <span className="mt-1.5 flex items-start gap-2 rounded-lg border border-line bg-paper px-2.5 py-1.5" data-testid="sandbox-setup-command">
+                    <code className="text-meta font-mono text-ink break-all flex-1 min-w-0">{blockedCommand}</code>
+                    <button className="text-meta text-accent shrink-0" onClick={() => copy(blockedCommand)}>
+                      {copied === blockedCommand ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
                     </button>
-                  </div>
+                  </span>
                 ) : null}
-                {!good && r.docs ? (
-                  <a className="mt-1 ml-6 inline-block text-meta text-accent" href={r.docs} target="_blank" rel="noreferrer" data-testid={`sandbox-readiness-docs-${r.key}`}>
-                    {r.key === "docker" ? t("settingsx.sandbox.get_docker") : t("settingsx.sandbox.guide")}
-                  </a>
-                ) : null}
-              </li>
-            );
-          })}
+              </span>
+            ) : progress && progress.layers_total ? (
+              <span className="block mt-0.5" data-testid="sandbox-download-progress">
+                <span className="block text-meta text-muted">
+                  {t("settingsx.sandbox.download_progress", { done: progress.layers_done, total: progress.layers_total, elapsed: elapsed(progress.elapsed_s) })}
+                </span>
+                <span className="block h-1.5 rounded bg-line overflow-hidden mt-2">
+                  <span className="block h-full bg-accent transition-all" style={{ width: `${Math.round((100 * progress.layers_done) / progress.layers_total)}%` }} />
+                </span>
+              </span>
+            ) : third === "ok" ? null : (
+              <span className="block text-meta text-muted mt-0.5">{t("settingsx.sandbox.os_row_setup_desc")}</span>
+            ),
+          )}
         </ul>
       )}
       <div className="flex items-center gap-2 mt-4">
-        <span className="text-meta text-faint max-w-[340px] leading-relaxed">{done ? "" : running ? t("settingsx.sandbox.os_close_note") : t("settingsx.sandbox.setup_never_root")}</span>
         <span className="flex-1" />
         {done ? (
           <button className={BTN_ACCENT} onClick={onClose} data-testid="sandbox-openshell-done">
@@ -1069,25 +1143,26 @@ function OpenShellDialog({
         ) : running ? (
           <>
             <button className={BTN_BORDERED} onClick={onCancel} data-testid="sandbox-setup-cancel">
-              {t("settingsx.sandbox.setup_cancel")}
+              {t("settingsx.sandbox.os_cancel_setup")}
             </button>
-            <button className={BTN_ACCENT} onClick={onClose}>
-              {t("settingsx.sandbox.close")}
+            <button className={BTN_BORDERED} onClick={onClose} data-testid="sandbox-openshell-hide">
+              {t("settingsx.sandbox.os_hide")}
             </button>
           </>
         ) : (
           <>
             <button className={BTN_BORDERED} onClick={onClose} data-testid="sandbox-openshell-close">
-              {job ? t("settingsx.sandbox.close") : t("settingsx.sandbox.cancel")}
+              {t("settingsx.sandbox.cancel")}
             </button>
-            {job ? (
-              <button className={BTN_BORDERED} onClick={onCheck} data-testid="sandbox-setup-check">
+            {checksOk && third !== "bad" ? (
+              <button className={BTN_ACCENT} onClick={onStart} data-testid="sandbox-setup-start">
+                {t("settingsx.sandbox.set_up")}
+              </button>
+            ) : (
+              <button className={BTN_BORDERED} onClick={onCheck} disabled={!readiness && !job} data-testid="sandbox-setup-check">
                 {t("settingsx.sandbox.setup_again")}
               </button>
-            ) : null}
-            <button className={BTN_ACCENT} onClick={onStart} disabled={!rows.length} data-testid="sandbox-setup-start">
-              {job ? t("settingsx.sandbox.try_again") : t("settingsx.sandbox.set_up")}
-            </button>
+            )}
           </>
         )}
       </div>

@@ -1,13 +1,12 @@
-"""Where an agent's commands may connect, in OUR words. Every provider renders these lists
-into its own mechanism: OpenShell into `network_policies`, Seatbelt into the allow-list
-proxy, Windows into the account it runs as. HTTPS (port 443) only.
+"""Where an agent's commands may connect, in OUR words. Every provider renders these into
+its own mechanism: OpenShell into `network_policies`, Seatbelt and Windows into the
+allow-list proxy.
 
-`open` is the profile with no list at all: files stay isolated, the network is the
-machine's own (ruling of 2026-09-25). It is the default on Windows for now.
-
-`strict` (code hosts and registries, no search) was folded into `standard` (UX-053 v5): the
-name is still accepted and means `standard`. A machine may add its own hosts to the list
-(`sandbox_network_extra_hosts`, see `clean_host`).
+Two profiles (UX-053 v6): `allowlist`, where only the sites the machine ticked are
+reachable (`sandbox_network_hosts`, "host:port"; empty until the user ticks some), and
+`open`, with no list at all: files stay isolated, the network is the machine's own
+(ruling of 2026-09-25). `open` is the default on Windows for now. `SITES` is the catalogue
+the page offers in groups; ticking one puts it on the machine's list.
 """
 
 from __future__ import annotations
@@ -18,20 +17,19 @@ CODE_HOSTS = ["github.com", "api.github.com", "codeload.github.com", "objects.gi
 PACKAGE_REGISTRIES = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "crates.io", "static.crates.io", "index.crates.io", "proxy.golang.org", "sum.golang.org"]
 SEARCH_APIS = ["api.search.brave.com", "api.tavily.com", "html.duckduckgo.com", "duckduckgo.com"]
 
-# name of the group -> hosts, per profile
-PROFILES: dict[str, dict[str, list[str]]] = {
-    # git, the package registries and the search APIs: enough to clone, install, push and search.
-    "standard": {"code-hosts": CODE_HOSTS, "package-registries": PACKAGE_REGISTRIES, "search-apis": SEARCH_APIS},
-    # any host: no proxy, no list. Files are still confined.
-    "open": {},
-}
+# The page's catalogue, by group. None is allowed until ticked.
+SITES: dict[str, list[str]] = {"code-hosts": CODE_HOSTS, "package-registries": PACKAGE_REGISTRIES, "search-apis": SEARCH_APIS}
+
+# name of the group -> hosts, per profile. Neither profile carries hosts of its own: the
+# allow list is the machine's, and `open` has none.
+PROFILES: dict[str, dict[str, list[str]]] = {"allowlist": {}, "open": {}}
+ALLOWLIST = "allowlist"
 OPEN = "open"
-DEFAULT_PROFILE = "standard"
-ALIASES = {"strict": "standard"}
+DEFAULT_PROFILE = ALLOWLIST
 
 
 def default_profile(platform: str = sys.platform) -> str:
-    """The profile a machine uses until it chooses one: `open` on Windows, `standard` elsewhere."""
+    """The profile a machine uses until it chooses one: `open` on Windows, `allowlist` elsewhere."""
     return OPEN if platform == "win32" else DEFAULT_PROFILE
 
 
@@ -40,8 +38,6 @@ def is_open(profile: str) -> bool:
 
 
 def check(profile: str) -> str:
-    """The profile's name, with an old name mapped to its current one."""
-    profile = ALIASES.get(profile, profile)
     if profile not in PROFILES:
         raise ValueError(f"unknown network profile {profile!r} (known: {', '.join(sorted(PROFILES))})")
     return profile

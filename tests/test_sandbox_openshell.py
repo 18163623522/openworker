@@ -44,13 +44,11 @@ def test_policy_is_plain_yaml_without_shared_objects():
 
 
 def test_network_profiles():
-    standard = policy.render(ROOTS, profile="standard")["network_policies"]
-    hosts = lambda p: {e["host"] for entry in p.values() for e in entry["endpoints"]}  # noqa: E731
-    assert {"github.com", "pypi.org", "registry.npmjs.org", "api.tavily.com"} <= hosts(standard)
-    assert policy.render(ROOTS, profile="strict")["network_policies"] == standard  # the old name
-    assert all(entry["binaries"] for entry in standard.values())  # OpenShell requires the field
-    added = policy.render(ROOTS, profile="standard", extra_hosts=["registry.acme.dev:443"])["network_policies"]
-    assert {"host": "registry.acme.dev", "port": 443} in added["credentials"]["endpoints"]
+    # An allow list holds only the machine's ticked sites: none, nothing gets out.
+    assert policy.render(ROOTS, profile="allowlist")["network_policies"] == {}
+    ticked = policy.render(ROOTS, profile="allowlist", extra_hosts=["github.com:443", "registry.acme.dev:443"])["network_policies"]
+    assert {"host": "registry.acme.dev", "port": 443} in ticked["credentials"]["endpoints"]
+    assert all(entry["binaries"] for entry in ticked.values())  # OpenShell requires the field
     opened = policy.render(ROOTS, profile="open")["network_policies"]
     assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
     with pytest.raises(ValueError):
@@ -170,7 +168,7 @@ def test_registry_counts_caps_and_forgets(tmp_path, monkeypatch):
     from coworker.sandbox.registry import SandboxLimitReached, SandboxRegistry
 
     reg = SandboxRegistry(tmp_path / "registry.db")
-    reg.record("ow-a", provider="openshell", session_id="s1", agent="lead", roots=ROOTS, profile="strict", enforcement="full")
+    reg.record("ow-a", provider="openshell", session_id="s1", agent="lead", roots=ROOTS, profile="allowlist", enforcement="full")
     reg.record("ow-b", provider="openshell", session_id="s1", agent="worker")
     assert reg.count() == 2 and reg.find("s1", "worker")["name"] == "ow-b"
     assert reg.list()[0]["roots"] == ROOTS and reg.list()[0]["machine_id"] == "local"
@@ -208,7 +206,7 @@ def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
     seen: dict = {}
 
     class Provider:
-        roots, profile = [{"path": str(tmp_path), "writable": True}], "strict"
+        roots, profile = [{"path": str(tmp_path), "writable": True}], "allowlist"
 
         def describe(self):
             return {"provider": "openshell", "enforcement": "full", "sandbox": "ow-reserved"}
@@ -300,7 +298,7 @@ def test_a_session_in_a_real_sandbox(folder):
     try:
         assert ws.describe()["enforcement"] == "full" and ws.describe()["runner"]["os"] == "Linux"
         row = ws.registry.find("s-test", "swe-lead")
-        assert row["name"] == ws.provider.sandbox_name and row["enforcement"] == "full" and row["profile"] == "strict"
+        assert row["name"] == ws.provider.sandbox_name and row["enforcement"] == "full" and row["profile"] == "allowlist"
         ex = ws.executor
         assert ex.run("cat hello.txt && cd /tmp && export KEEP=yes")["exit_code"] == 0
         assert ex.run("echo $KEEP $PWD")["output"].split() == ["yes", "/tmp"]  # one persistent shell

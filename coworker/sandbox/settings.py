@@ -79,10 +79,9 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         "providers": providers,
         "windows_setup": _windows_setup_info(),
         "network_profile": _profile_for_display(cfg.sandbox_network_profile),
-        "network_profiles": [
-            {"name": name, "hosts": network_profiles.hosts(name)} for name in network_profiles.PROFILES
-        ],
-        "network_extra_hosts": network_profiles.clean_hosts(cfg.sandbox_network_extra_hosts),
+        "network_profiles": [{"name": name} for name in network_profiles.PROFILES],
+        "network_sites": [{"group": group, "hosts": [f"{h}:443" for h in hosts]} for group, hosts in network_profiles.SITES.items()],
+        "network_hosts": network_profiles.clean_hosts(cfg.sandbox_network_hosts),
         "credentials": _for_display(credentials.listed(cfg.sandbox_credentials)),
         "credential_presets": _presets(cfg.sandbox_credentials),
         "toolchains": toolchains.for_display(cfg.sandbox_toolchains),
@@ -91,7 +90,7 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
 
 
 def _profile_for_display(configured: Optional[str]) -> str:
-    """The machine's profile by its current name (an old `strict` shows as `standard`)."""
+    """The machine's profile, or the default rule's when it has none."""
     try:
         return network_profiles.check((configured or "").strip().lower() or network_profiles.default_profile())
     except ValueError:
@@ -219,10 +218,10 @@ def update(body: dict[str, Any]) -> dict[str, Any]:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         app_config.set_global_value("sandbox_network_profile", profile)
-    if "network_extra_hosts" in body:
-        items = body.get("network_extra_hosts")
+    if "network_hosts" in body:
+        items = body.get("network_hosts")
         if not isinstance(items, list):
-            return {"ok": False, "error": "network_extra_hosts must be a list"}
+            return {"ok": False, "error": "network_hosts must be a list"}
         added: list[str] = []
         for item in items:
             try:
@@ -231,7 +230,7 @@ def update(body: dict[str, Any]) -> dict[str, Any]:
                 return {"ok": False, "error": str(exc)}
             if host not in added:
                 added.append(host)
-        app_config.set_global_list("sandbox_network_extra_hosts", added)
+        app_config.set_global_list("sandbox_network_hosts", added)
     if "credentials" in body:
         rows = body.get("credentials")
         if not isinstance(rows, list):

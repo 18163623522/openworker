@@ -36,12 +36,11 @@ port = 8765
 # the default), "openshell" (one NVIDIA OpenShell container per agent) or "seatbelt"
 # (the sandbox built into macOS). See docs/openshell.md and docs/macos-sandbox.md.
 # sandbox_provider = "openshell"
-# Network inside a sandbox: "standard" (code hosts, package registries and the search
-# APIs) or "open" (any host; the files are still confined). The default is "standard", or
-# "open" on Windows. "strict" is an older name for "standard".
-# sandbox_network_profile = "standard"
-# Hosts of your own added to "standard" (host:port; a bare host means 443).
-# sandbox_network_extra_hosts = ["registry.acme.dev:443"]
+# Network inside a sandbox: "allowlist" (only the sites listed below) or "open" (any
+# site; the files are still confined). The default is "allowlist", or "open" on Windows.
+# sandbox_network_profile = "allowlist"
+# The sites an allow list lets through (host:port; a bare host means 443). None by default.
+# sandbox_network_hosts = ["github.com:443", "pypi.org:443"]
 # Config and keys exposed to agents, copied into the sandbox for the session and deleted
 # with it. Only the entries named here are listed in Settings ▸ Sandbox; the shipped ones
 # (ssh, gh, aws, aws-credentials, kube, npm, docker, gcloud, terraform) are added by name.

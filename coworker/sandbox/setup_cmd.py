@@ -64,8 +64,8 @@ ROWS = {
     "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
     "image": IMAGE_ROW,
 }
-# Steps the app may fix on its own without an administrator. `openshell` joins them at
-# run time when `admin_prefix()` finds a way to run as one; see `steps()`.
+# Steps the app may fix on its own. Installing OpenShell is never one of them: the user
+# installs it (UX-053 v6).
 FIXABLE = {"bind_mounts", "config", "image", "linger"}
 
 
@@ -128,15 +128,6 @@ def admin_prefix() -> Optional[list[str]]:
     return None
 
 
-def install_handover_command() -> str:
-    """The ONE command a user runs in a terminal when the app cannot run the administrator
-    steps itself: linger first (the installer needs the user's systemd manager, which does
-    not run without it on WSL), then the installer. On a Mac, the installer alone."""
-    if sys.platform.startswith("linux"):
-        return f"sudo loginctl enable-linger {getpass.getuser()} && {installer_command()}"
-    return installer_command()
-
-
 def landlock_available() -> Optional[bool]:
     """Whether this kernel has Landlock: True/False on Linux, None elsewhere (a Mac's
     sandboxes run in Docker Desktop's own Linux VM, which cannot be asked from here).
@@ -175,17 +166,14 @@ def steps() -> list[Step]:
     exe = shutil.which("openshell")
     version = (_run([exe, "--version"], 15).stdout.split() or [""])[-1] if exe else ""
     openshell_ok = version == PINNED_VERSION
-    # The app installs it when it can run as an administrator without a password (or
-    # needs none, on a Mac); otherwise the row carries the one command to run.
-    can_install = sys.platform == "darwin" or (sys.platform.startswith("linux") and admin_prefix() is not None)
+    # The user installs OpenShell (UX-053 v6): the app points at NVIDIA's guide and checks
+    # again; it never runs their installer. `setup` in a terminal still offers to.
     out.append(
         Step(
             "openshell",
             ROWS["openshell"],
             openshell_ok,
             "" if openshell_ok or not version else f"found {version}, not the tested release",
-            fixable=not openshell_ok and can_install,
-            command="" if openshell_ok or can_install else install_handover_command(),
             docs="" if openshell_ok else GUIDE_URL,
         )
     )
@@ -271,49 +259,6 @@ def enable_linger() -> Optional[str]:
     if prefix is not None and _run(prefix + ["loginctl", "enable-linger", user], 120).returncode == 0:
         return None
     return f"sudo loginctl enable-linger {user}"
-
-
-def _stream(argv: list[str], on_line: Optional[Callable[[str], None]], cancel: Optional[threading.Event]) -> tuple[Optional[int], str]:
-    """Run `argv` with stdin closed, feeding each output line to `on_line`. Returns the
-    exit code (None when cancelled) and the last line seen."""
-    last = ""
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    except OSError as exc:
-        return 127, f"could not run {argv[0]}: {exc}"
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        if cancel is not None and cancel.is_set():
-            proc.kill()
-            proc.wait()
-            return None, last
-        line = line.strip()
-        if line:
-            last = line[:160]
-            if on_line is not None:
-                on_line(last)
-    return proc.wait(), last
-
-
-def install_openshell(on_line: Optional[Callable[[str], None]] = None, cancel: Optional[threading.Event] = None) -> Optional[str]:
-    """Install the pinned OpenShell from the app (Settings ▸ Set up sandbox). On a Mac the
-    installer runs as the user. On Linux it runs as an administrator through
-    `admin_prefix()`, with linger enabled FIRST in the same run (the installer needs the
-    user's systemd manager, which does not run without linger on WSL and on a headless
-    box). Returns an error text, or None when it succeeded."""
-    if sys.platform == "darwin":
-        argv = ["sh", "-c", installer_command()]
-    else:
-        prefix = admin_prefix()
-        if prefix is None:
-            return "this machine has no way to run an administrator step without a password; run: " + install_handover_command()
-        argv = prefix + ["sh", "-c", f"loginctl enable-linger {getpass.getuser()} && {installer_command()}"]
-    code, last = _stream(argv, on_line, cancel)
-    if code is None:
-        return "installation cancelled"
-    if code != 0:
-        return f"the installer exited with {code}: {last}"
-    return None
 
 
 def apply_config() -> None:

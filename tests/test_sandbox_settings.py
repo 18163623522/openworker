@@ -27,8 +27,10 @@ def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     assert next(p for p in snap["providers"] if p["name"] == "direct")["usable"]
     from coworker.sandbox import network_profiles
 
-    assert snap["network_profile"] == network_profiles.default_profile()  # standard; `open` on Windows
-    assert [n["name"] for n in snap["network_profiles"]] == ["standard", "open"] and snap["network_extra_hosts"] == []
+    assert snap["network_profile"] == network_profiles.default_profile()  # allowlist; `open` on Windows
+    assert [n["name"] for n in snap["network_profiles"]] == ["allowlist", "open"] and snap["network_hosts"] == []  # nothing ticked
+    assert [g["group"] for g in snap["network_sites"]] == ["code-hosts", "package-registries", "search-apis"]
+    assert "github.com:443" in snap["network_sites"][0]["hosts"]
     assert snap["credentials"] == []  # nothing is listed until added (UX-053 v5)
     from coworker.sandbox import credentials
 
@@ -64,7 +66,7 @@ def test_toolchain_switches_and_additions_are_written_slim(config_file):
 def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):
     out = settings.update(
         {
-            "network_profile": "standard",
+            "network_profile": "open",
             "credentials": [
                 {"name": "ssh", "enabled": True},
                 {"name": "gh", "enabled": False},
@@ -75,7 +77,7 @@ def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):
     )
     assert out["ok"], out
     text = config_file.read_text()
-    assert 'sandbox_network_profile = "standard"' in text
+    assert 'sandbox_network_profile = "open"' in text
     assert text.count("[[sandbox_credentials]]") == 4  # gh is listed, switched off, by name only
     assert 'path = "~/.aws-work"' in text and 'hosts = ["registry.npmjs.org:443"]' not in text  # npm's own hosts
     snap = settings.snapshot()
@@ -88,20 +90,18 @@ def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):
     assert [e["name"] for e in settings.snapshot()["credentials"]] == ["gh"]  # removing is leaving it out
 
 
-def test_network_choice_and_the_machines_own_hosts(config_file):
-    out = settings.update({"network_profile": "strict", "network_extra_hosts": ["Registry.Acme.dev", "sentry.io:443", "sentry.io"]})
+def test_network_choice_and_the_machines_ticked_sites(config_file):
+    out = settings.update({"network_profile": "allowlist", "network_hosts": ["GitHub.com", "registry.acme.dev:443", "github.com:443"]})
     assert out["ok"], out
-    assert out["network_profile"] == "standard" and out["network_extra_hosts"] == ["registry.acme.dev:443", "sentry.io:443"]
+    assert out["network_profile"] == "allowlist" and out["network_hosts"] == ["github.com:443", "registry.acme.dev:443"]
     text = config_file.read_text()
-    assert 'sandbox_network_profile = "standard"' in text
-    assert 'sandbox_network_extra_hosts = ["registry.acme.dev:443", "sentry.io:443"]' in text
-    assert app_config.load_config().sandbox_network_extra_hosts == ["registry.acme.dev:443", "sentry.io:443"]
-    assert settings.update({"network_extra_hosts": ["not a host"]})["ok"] is False
-    assert settings.update({"network_extra_hosts": []})["network_extra_hosts"] == []
-    assert "sandbox_network_extra_hosts" not in config_file.read_text()
-    config_file.write_text('sandbox_network_profile = "strict"\n')  # a machine set before v5
-    assert settings.snapshot()["network_profile"] == "standard"
-
+    assert 'sandbox_network_profile = "allowlist"' in text
+    assert 'sandbox_network_hosts = ["github.com:443", "registry.acme.dev:443"]' in text
+    assert app_config.load_config().sandbox_network_hosts == ["github.com:443", "registry.acme.dev:443"]
+    assert settings.update({"network_hosts": ["not a host"]})["ok"] is False
+    assert settings.update({"network_profile": "strict"})["ok"] is False  # gone, not an alias
+    assert settings.update({"network_hosts": []})["network_hosts"] == []
+    assert "sandbox_network_hosts" not in config_file.read_text()
 
 def test_update_refuses_bad_input_without_writing(config_file):
     assert settings.update({"provider": "bwrap"})["ok"] is False
@@ -255,5 +255,5 @@ def test_changing_the_provider_rebuilds_live_engines_built_under_the_old_rule(tm
     assert res["ok"] and res["rebuilt_sessions"] == ["boxed"] and closed[-1] == "Boxed"
     # A save that does not touch the provider rebuilds nothing.
     mgr._engines["d"] = Engine(Direct())
-    res = client.post("/v1/settings/sandbox", json={"network_profile": "strict"}).json()
+    res = client.post("/v1/settings/sandbox", json={"network_profile": "open"}).json()
     assert res["ok"] and "rebuilt_sessions" not in res and "d" in mgr._engines

@@ -78,31 +78,23 @@ OpenShell, and downloads the base image sandboxes are built from.
 
 The base image is about 5 GB and is downloaded once. Until it is on the machine, Settings ▸
 Sandbox shows OpenShell as **needs download** and a session is refused with the same
-message, rather than hanging on the download. `setup` and the **Set up** button on the
-OpenShell row download it with Docker's own progress; the command is also `docker pull` of the image
+message, rather than hanging on the download. `setup` and the app's setup download it with Docker's own progress; the command is also `docker pull` of the image
 named in the refusal.
 
-Settings ▸ Sandbox does the same from the app: one switch, **Run agents in a sandbox**,
-and under it the provider, a readiness checklist (the rows `status` prints, each with a
-Guide link and, where the app cannot do it, the one command to run), and a **Set up
-sandbox** button that walks the list and does each step itself. The two steps that need
-an administrator on Linux (the OpenShell install and linger) go through `sudo` when your
-user may use it without a password, or through the system's own password prompt on a
-Linux desktop; the app never sees or stores the password. On a Mac, Homebrew installs
-OpenShell as you, so nothing needs an administrator. Where there is no prompt to use
-(WSL), both steps are folded into ONE command shown with Copy, and **Check again**
-continues once you have run it. The install and the image download show their progress
-and can be cancelled. The network allow list and the shared credentials appear only while
-the switch is on: they apply behind a wall and nowhere else. On Windows the switch is off
-and disabled; run OpenWorker on a Linux machine (a WSL Ubuntu counts) added under
-Settings ▸ Machines.
+In the app, Settings ▸ Sandbox shows OpenShell with a **Set up** button until it is ready.
+The setup has three rows: **Docker Desktop is running** and **OpenShell is installed**,
+which you fix yourself (each says what to do, with a link; the app installs neither), and
+**Set up OpenShell for OpenWorker**, which the app does: it allows bind mounts, downloads
+the base image with its progress, and sets the machine to use OpenShell. Each row gets a
+tick as it finishes. The network choice and the shared credentials appear once a sandbox
+type is chosen. OpenShell is not available on Windows yet.
 
 The setting is per machine, in Settings ▸ Sandbox or in `config.toml`:
 
 ```toml
 sandbox_provider = "openshell"      # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "standard"  # or "open" (any host; files still confined)
-sandbox_network_extra_hosts = ["registry.acme.dev:443"]  # optional, your own additions
+sandbox_network_profile = "allowlist"  # or "open" (any site; files still confined)
+sandbox_network_hosts = ["github.com:443", "pypi.org:443"]  # the sites you ticked; none by default
 ```
 
 A project's own config cannot change it. When a machine is set to OpenShell and OpenShell
@@ -129,13 +121,13 @@ the agent is told.
 
 Two choices, shared with the other sandboxes:
 
-- **Package registries and search** (`standard`, the default): GitHub, GitLab, the package
-  registries — PyPI, npm, crates.io, the Go proxy — and the search APIs (Brave, Tavily,
-  DuckDuckGo). **Customize…** adds hosts of your own; the shipped ones stay.
-- **Allow everything** (`open`): any host, no allow list. The files are still the wall.
+- **Only the sites you allow** (`allowlist`, the default): nothing until you tick sites
+  under **Choose sites…**. The list offers code hosting (GitHub, GitLab), the package
+  registries (PyPI, npm, crates.io, the Go proxy) and the search APIs (Brave, Tavily,
+  DuckDuckGo), each with a tick box, and you can add any site of your own.
+- **Allow everything** (`open`): any site, no allow list. The files are still the wall.
 
-`strict`, the list without the search APIs, was folded into `standard`; a machine set to it
-now uses `standard`. A credential entry (below) adds the hosts its tool needs.
+A credential entry (below) also lets through the sites its tool needs.
 
 OpenShell enforces the list in the container.
 
@@ -198,7 +190,7 @@ enabled = true
 - **"The sandbox base image is not downloaded yet"** — the one-time 5 GB download has
   not happened. Run `openworker machine sandbox setup` and accept the download, or run the
   `docker pull` command from the message; then start the session again.
-- **A host is refused** — it is not on the list; add it with **Customize…**, or add the
+- **A site is refused** — it is not ticked; tick or add it under **Choose sites…**, or add the
   credential entry whose hosts include it.
 - **`git push` says permission denied inside the sandbox** — no credential is shared.
   Switch the `ssh` (or `gh`) entry on in Settings ▸ Sandbox.

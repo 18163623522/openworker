@@ -31,8 +31,8 @@ Settings ▸ Sandbox ▸ "macOS sandbox", or in `config.toml`:
 
 ```toml
 sandbox_provider = "seatbelt"       # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "standard"  # or "open" (any host; files still confined)
-sandbox_network_extra_hosts = ["registry.acme.dev:443"]  # optional, your own additions
+sandbox_network_profile = "allowlist"  # or "open" (any site; files still confined)
+sandbox_network_hosts = ["github.com:443", "pypi.org:443"]  # the sites you ticked; none by default
 ```
 
 The setting is per machine; a project's own config cannot change it.
@@ -63,13 +63,13 @@ follow the proxy variables; a program that ignores them has no network at all.
 
 Two choices, shared with the other sandboxes:
 
-- **Package registries and search** (`standard`, the default): GitHub, GitLab, the package
-  registries — PyPI, npm, crates.io, the Go proxy — and the search APIs (Brave, Tavily,
-  DuckDuckGo). **Customize…** adds hosts of your own; the shipped ones stay.
-- **Allow everything** (`open`): any host, no proxy. The files are still the wall.
+- **Only the sites you allow** (`allowlist`, the default): nothing until you tick sites
+  under **Choose sites…**. The list offers code hosting (GitHub, GitLab), the package
+  registries (PyPI, npm, crates.io, the Go proxy) and the search APIs (Brave, Tavily,
+  DuckDuckGo), each with a tick box, and you can add any site of your own.
+- **Allow everything** (`open`): any site, no proxy. The files are still the wall.
 
-`strict`, the list without the search APIs, was folded into `standard`; a machine set to it
-now uses `standard`. A credential entry (below) adds the hosts its tool needs.
+A credential entry (below) also lets through the sites its tool needs.
 
 ## Sharing a credential on purpose
 
@@ -132,7 +132,7 @@ itself, outside every sandbox, with their own tokens.
   (macOS does not nest them). `openworker machine sandbox status` says why.
 - **A tool cannot be found inside the sandbox** — it lives somewhere under your home folder
   that is not on the toolchain list.
-- **A host is refused** — it is not on the list; add it with **Customize…**, or add the
+- **A site is refused** — it is not ticked; tick or add it under **Choose sites…**, or add the
   credential entry whose hosts include it.
 - **`git push` says permission denied inside the sandbox** — no credential is shared.
   Switch the `ssh` (or `gh`) entry on in Settings ▸ Sandbox.

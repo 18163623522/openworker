@@ -1,12 +1,9 @@
 """The guided setup behind Settings ▸ Sandbox ▸ "Set up sandbox" (OPE-207).
 
 One job per machine, on a worker thread. It walks `setup_cmd.steps()` top to bottom and
-fixes each step it may: the OpenShell install (through `sudo` without a password or the
-system's password prompt, see `setup_cmd.admin_prefix`; as the user on a Mac), bind
-mounts, linger, the config line, the image download. The two slow ones (install,
-download) stream progress and can be cancelled. A step the app cannot do on this machine
-is handed over as ONE command to run in a terminal, and the job stops there until the
-user says "check again". The job never holds a password and never lowers protection: a
+fixes each step it may: bind mounts, linger, the config line, the image download (which
+streams progress and can be cancelled). It never installs Docker or OpenShell: a step the
+app cannot do stops the job with what the user should do, until they say "check again". The job never holds a password and never lowers protection: a
 failure leaves the machine "not ready, here is what to do", and sessions stay refused.
 """
 
@@ -139,8 +136,6 @@ class SetupJob:
             self.progress = {"layers_total": 0, "layers_done": 0, "last_line": line, "elapsed_s": int(time.time() - self.started_at), **more}
 
     def _fix(self, step: setup_cmd.Step) -> Optional[str]:
-        if step.key == "openshell":
-            return setup_cmd.install_openshell(self._progress, self._cancel)
         if step.key == "bind_mounts":
             return setup_cmd.apply_bind_mounts()
         if step.key == "config":

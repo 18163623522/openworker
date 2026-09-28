@@ -67,8 +67,8 @@ and keys exposed to agents, and the tools shown to agents with read-only access.
 
 ```toml
 sandbox_provider = "windows"        # or "direct": commands run in the OpenWorker process
-sandbox_network_profile = "open"    # the Windows default; or "standard"
-sandbox_network_extra_hosts = ["registry.acme.dev:443"]  # optional, for "standard"
+sandbox_network_profile = "open"    # the Windows default; or "allowlist"
+sandbox_network_hosts = ["github.com:443"]  # for "allowlist": the sites you ticked
 ```
 
 The setting is per machine; a project's own config cannot change it.
@@ -111,7 +111,7 @@ One elevated PowerShell script, one prompt. It:
                                       │
              ┌────────────────────────┴────────────────────────┐
              │                                                 │
-     Allow everything (default)              Package registries and search
+     Allow everything (default)                Only the sites you allow
              │                                                 │
              ▼                                                 ▼
    runs as OWSandboxOpenNet                          runs as OWSandboxClosedNet
@@ -133,13 +133,12 @@ One elevated PowerShell script, one prompt. It:
 
 - **Allow everything** (`open`) — any host. Nothing to configure. The files are still the
   wall. This is the default on Windows, and the page shows it in amber.
-- **Package registries and search** (`standard`) — GitHub, GitLab, the package registries
-  (PyPI, npm, crates.io, the Go proxy) and the search APIs, through the proxy.
-  **Customize…** adds hosts of your own. A program that ignores the proxy variables has no
-  network at all, because the account's direct traffic is blocked in the kernel.
+- **Only the sites you allow** (`allowlist`) — the sites you tick under **Choose sites…**
+  (code hosting, package registries, search APIs, or any site you add), through the proxy;
+  nothing until you tick some. A program that ignores the proxy variables has no network
+  at all, because the account's direct traffic is blocked in the kernel.
 
-`strict`, the list without the search APIs, was folded into `standard`. A credential entry
-(below) adds the hosts its tool needs.
+A credential entry (below) also lets through the sites its tool needs.
 
 Choosing a mode never touches the firewall. The rules are written once at setup; OpenWorker
 picks the account. In the closed mode a sandbox can still **listen** on a local port (a dev
@@ -237,4 +236,4 @@ expire on their own limit what that is worth.
 | Install | one administrator prompt | nothing | OpenShell and Docker |
 | Files | session folders; profile invisible except the tool list; outside-profile folders readable | session folders; home invisible except the tool list | session folders; nothing else |
 | Network | open (default), or the allow list through the proxy | the allow list through the proxy, or open | the allow list in the policy, or open |
-| Default | open | standard | standard |
+| Default | open | only the sites you allow | only the sites you allow |

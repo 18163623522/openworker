@@ -223,7 +223,7 @@ def open_workspace(
     """The session's workspace for the configured provider. `credentials`: the machine's
     `sandbox_credentials` setting; the enabled entries are copied into the sandbox
     (design doc, section 11b). Ignored in `direct` mode, where nothing is hidden anyway. `direct` unless told otherwise.
-    `extra_hosts`: the machine's `sandbox_network_extra_hosts`, joined to the network list.
+    `extra_hosts`: the machine's `sandbox_network_hosts`, the sites an allow list lets through.
     `toolchains`: the machine's `sandbox_toolchains` setting; the switched-on folders that
     exist are readable inside (Seatbelt, Windows full mode).
     `roots`: the session's RootDir list (primary first); without it the workspace folder is

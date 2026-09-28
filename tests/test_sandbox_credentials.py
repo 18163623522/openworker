@@ -148,9 +148,9 @@ def test_no_grants_means_no_lines_for_the_agent(tmp_path):
 
 # -- the network ------------------------------------------------------------------------
 def test_proxy_allows_the_grants_hosts_including_ssh_and_wildcards():
-    proxy = netproxy.AllowListProxy("strict", extra_hosts=["github.com:22", "*.amazonaws.com:443", "k8s.example.com:6443"])
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["github.com:22", "*.amazonaws.com:443", "k8s.example.com:6443"])
     try:
-        assert proxy.allows("github.com", 22) and proxy.allows("github.com", 443)
+        assert proxy.allows("github.com", 22) and not proxy.allows("github.com", 443)  # only what is listed
         assert proxy.allows("s3.us-east-1.amazonaws.com", 443) and not proxy.allows("amazonaws.com", 443)
         assert proxy.allows("k8s.example.com", 6443) and not proxy.allows("k8s.example.com", 443)
         assert not proxy.allows("gitlab.com", 22) and not proxy.allows("example.com", 443)
