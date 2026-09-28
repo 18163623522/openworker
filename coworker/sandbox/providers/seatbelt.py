@@ -87,6 +87,7 @@ class SeatbeltProvider:
         roots: Sequence[dict[str, Any]],
         cwd: str | Path,
         profile: str = network_profiles.DEFAULT_PROFILE,
+        tool_dirs: Optional[Sequence[str]] = None,
         network: bool = True,
         runner_path: Optional[Path] = None,
         relay_silence_seconds: Optional[float] = None,
@@ -98,6 +99,7 @@ class SeatbeltProvider:
         self.copied: Optional[creds.CopiedCredentials] = None
         self.cwd = seatbelt_profile.real(cwd)
         self.profile = network_profiles.check(profile)
+        self.tool_dirs = list(tool_dirs) if tool_dirs is not None else None  # None: the shipped list
         self.network = network
         self._runner = Path(runner_path) if runner_path is not None else build_runner_zipapp()
         self._relay_silence = relay_silence_seconds
@@ -110,7 +112,12 @@ class SeatbeltProvider:
         self._proxy: Optional[netproxy.AllowListProxy] = None
 
     def describe(self) -> dict[str, Any]:
-        network = f"only the hosts of the '{self.profile}' profile, through the allow-list proxy" if self.network else "none"
+        if not self.network:
+            network = "none"
+        elif network_profiles.is_open(self.profile):
+            network = "open (any host; the files are still confined)"
+        else:
+            network = f"only the hosts of the '{self.profile}' profile, through the allow-list proxy"
         return {
             "provider": self.name,
             "sandbox": self.sandbox,
@@ -127,6 +134,8 @@ class SeatbeltProvider:
             runtime_dir=self._dir,
             read_only=[str(self._runner), *read_paths(), str(toolchain.bin_dir())],
             proxy_port=self._proxy.port if self._proxy is not None else None,
+            open_network=self.network and network_profiles.is_open(self.profile),
+            tool_dirs=self.tool_dirs,
         )
 
     def _environment(self) -> dict[str, str]:
@@ -151,12 +160,12 @@ class SeatbeltProvider:
     def _create(self) -> None:
         preflight()
         os.makedirs(os.path.join(self._dir, "tmp", "cache"), exist_ok=True)
-        if self.network:
+        if self.network and not network_profiles.is_open(self.profile):
             hosts = sorted({h for g in self.grants for h in g.hosts})
             # A session with grants gets its own proxy, because its allow list is its own.
             self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
         else:
-            self._proxy = None
+            self._proxy = None  # `open`: the profile lets everything out, nothing to route
         self.copied = creds.copy_in(
             self.grants,
             self._dir,

@@ -2092,10 +2092,29 @@ export async function getReviewerStats(sessionId: string): Promise<ReviewerStats
 export interface SandboxCredentialEntry {
   name: string;
   title?: string;
-  path?: string;
+  path?: string; // a file or a folder under the home folder
   hosts?: string[];
   does?: string;
+  label?: "credential" | "configuration"; // what is in it
   enabled: boolean;
+  kind?: "file" | "folder" | ""; // display only: what the path is on this machine ("" = missing)
+  shipped?: boolean; // display only: in the default list
+}
+// UX-053: the Windows one-time setup, as the page sees it (null off Windows).
+export interface WindowsSetupInfo {
+  state: "not_set_up" | "older" | "broken" | "ready";
+  set_up_at: string; // ISO date, "" when unknown
+  problem: string;
+  can_elevate: boolean; // this user can answer the administrator prompt
+  command: string; // to hand to an administrator
+}
+export interface SandboxToolchainEntry {
+  name: string;
+  title?: string;
+  path: string;
+  enabled: boolean;
+  exists?: boolean; // on this machine
+  shipped?: boolean; // in the default list (cannot be removed, only switched off)
 }
 export interface SandboxSettings {
   platform: string;
@@ -2105,9 +2124,11 @@ export interface SandboxSettings {
   // `state` is what the page shows next to a provider. "needs_download": OpenShell is in
   // place except for the base image (about 5 GB, pulled once); the radio stays enabled.
   providers: { name: string; usable: boolean; why: string; state?: "ready" | "needs_download" | "unavailable" }[];
+  windows_setup: WindowsSetupInfo | null;
   network_profile: string;
   network_profiles: { name: string; hosts: string[] }[];
   credentials: SandboxCredentialEntry[];
+  toolchains: SandboxToolchainEntry[];
   config_path: string;
 }
 
@@ -2117,7 +2138,7 @@ export async function getSandboxSettings(machineId?: string | null): Promise<San
 }
 
 export async function setSandboxSettings(
-  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials">>,
+  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials" | "toolchains">>,
   machineId?: string | null,
 ): Promise<{ ok: boolean; error?: string; rebuilt_sessions?: string[] } & Partial<SandboxSettings>> {
   // `rebuilt_sessions`: after a provider change, the sessions whose engine the server
@@ -2174,6 +2195,22 @@ export async function startSandboxSetup(machineId?: string | null): Promise<Sand
 
 export async function cancelSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
   const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup/cancel`, { method: "POST" });
+  return res.json();
+}
+
+// UX-053: "Set up now" in the Windows setup dialog. The server runs the elevated setup
+// (Windows shows its own prompt), proves the wall in a throwaway sandbox, and makes the
+// Windows sandbox the machine's choice. Blocks until Windows answers, unlike the OpenShell
+// setup job above, which is polled.
+export async function runSandboxSetup(
+  machineId?: string | null,
+): Promise<{ ok: boolean; error?: string; said?: string; checked?: string } & Partial<SandboxSettings>> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/windows/setup`, { method: "POST" });
+  return res.json();
+}
+
+export async function runSandboxRemove(machineId?: string | null): Promise<{ ok: boolean; error?: string; said?: string } & Partial<SandboxSettings>> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/windows/remove`, { method: "POST" });
   return res.json();
 }
 

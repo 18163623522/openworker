@@ -2437,6 +2437,21 @@ def create_app(manager: SessionManager) -> FastAPI:
 
         return setup_job.job().cancel()
 
+    @app.post("/v1/settings/sandbox/windows/setup")
+    def settings_sandbox_windows_setup() -> dict[str, Any]:
+        # UX-053: the Windows setup dialog. Runs the elevated setup (Windows shows its own
+        # prompt), proves the wall in a throwaway sandbox, then makes it the choice. Blocks
+        # until Windows answers, unlike the OpenShell setup job above.
+        from ..sandbox import settings as sandbox_settings
+
+        return sandbox_settings.run_windows_setup()
+
+    @app.post("/v1/settings/sandbox/windows/remove")
+    def settings_sandbox_windows_remove() -> dict[str, Any]:
+        from ..sandbox import settings as sandbox_settings
+
+        return sandbox_settings.run_windows_remove()
+
     @app.post("/v1/settings/compaction")
     def settings_set_compaction(body: dict) -> dict[str, Any]:
         # Auto-compaction overrides (OPE-27): threshold % of the context window, the

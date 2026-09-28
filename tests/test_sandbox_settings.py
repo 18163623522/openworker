@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,11 +22,40 @@ def config_file(tmp_path, monkeypatch):
 def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     snap = settings.snapshot()
     assert snap["provider"] == "" and snap["effective_provider"] == "direct" and snap["refused"] == ""
-    assert [p["name"] for p in snap["providers"]] == ["direct", "seatbelt", "openshell"]
+    native = "windows" if sys.platform == "win32" else "seatbelt"  # the operating system's own sandbox
+    assert [p["name"] for p in snap["providers"]] == ["direct", native, "openshell"]
     assert next(p for p in snap["providers"] if p["name"] == "direct")["usable"]
-    assert snap["network_profile"] == "strict" and [n["name"] for n in snap["network_profiles"]] == ["strict", "standard"]
+    from coworker.sandbox import network_profiles
+
+    assert snap["network_profile"] == network_profiles.default_profile()  # strict; `open` on Windows
+    assert [n["name"] for n in snap["network_profiles"]] == ["strict", "standard", "open"]
     assert [(e["name"], e["enabled"]) for e in snap["credentials"]] == [("ssh", False), ("gh", False), ("aws", False), ("kube", False)]
+    assert all(e["shipped"] and "kind" in e and e["label"] in ("credential", "configuration") for e in snap["credentials"])
     assert snap["config_path"] == str(config_file)
+    assert (snap["windows_setup"] is None) == (sys.platform != "win32")
+    from coworker.sandbox import toolchains
+
+    assert [e["name"] for e in snap["toolchains"]] == [e["name"] for e in toolchains.defaults()]
+    assert all(e["shipped"] and e["enabled"] and "exists" in e for e in snap["toolchains"])
+
+
+def test_toolchain_switches_and_additions_are_written_slim(config_file):
+    from coworker.sandbox import toolchains
+
+    rows = [dict(e) for e in toolchains.defaults()]
+    if rows:
+        rows[0]["enabled"] = False
+    rows.append({"name": "mytools", "title": "My tools", "path": "~/tools", "enabled": True})
+    out = settings.update({"toolchains": rows})
+    assert out["ok"], out
+    text = config_file.read_text()
+    assert text.count("[[sandbox_toolchains]]") == (2 if rows[:-1] else 1)  # one switch, one addition; nothing else
+    assert 'name = "mytools"' in text and 'path = "~/tools"' in text
+    by = {e["name"]: e for e in settings.snapshot()["toolchains"]}
+    assert by["mytools"]["enabled"] and not by["mytools"]["shipped"]
+    if rows[:-1]:
+        assert by[rows[0]["name"]]["enabled"] is False
+    assert settings.update({"toolchains": [{"name": "x", "path": "relative/path"}]})["ok"] is False
 
 
 def test_update_writes_only_what_differs_from_the_shipped_entries(config_file):
@@ -57,7 +87,62 @@ def test_update_refuses_bad_input_without_writing(config_file):
     assert settings.update({"credentials": [{"name": "x", "enabled": True, "path": "etc"}]})["ok"] is False
     assert settings.update({"credentials": [{"name": "x", "enabled": True, "hosts": ["nohost"]}]})["ok"] is False
     assert settings.update({"credentials": [{"enabled": True}]})["ok"] is False
+    assert settings.update({"credentials": [{"name": "x", "enabled": True, "path": "~/x", "label": "secret"}]})["ok"] is False
     assert not config_file.exists()
+
+
+def test_a_label_is_written_and_read_back(config_file):
+    out = settings.update({"credentials": [{"name": "aws", "enabled": True, "path": "~/.aws", "label": "credential"}, {"name": "npmrc", "enabled": True, "path": "~/.npmrc", "label": "configuration"}]})
+    assert out["ok"], out
+    by = {e["name"]: e for e in settings.snapshot()["credentials"]}
+    assert by["aws"]["label"] == "credential" and by["aws"]["path"] == "~/.aws" and by["npmrc"]["label"] == "configuration"
+    assert by["gh"]["label"] == "credential" and by["gh"]["shipped"] and not by["npmrc"]["shipped"]
+
+
+def test_windows_setup_runs_checks_and_only_then_chooses_the_sandbox(config_file, monkeypatch):
+    """UX-053: "Set up now" runs the elevated setup, proves the wall in a throwaway sandbox,
+    and makes the Windows sandbox the choice; a failed check leaves the choice alone."""
+    from types import SimpleNamespace
+
+    from coworker.sandbox import selection
+    from coworker.sandbox.providers import windows_setup
+
+    monkeypatch.setattr(settings.sys, "platform", "win32")
+    # Off Windows the provider module cannot even import; the snapshot's two probes are stubbed.
+    monkeypatch.setattr(settings, "_availability", lambda name: (True, "", "ready"))
+    monkeypatch.setattr(selection, "select", lambda name=None: SimpleNamespace(provider=name or "direct"))
+    monkeypatch.setattr(windows_setup, "info", lambda: {"state": "ready", "set_up_at": "2026-09-28T10:00:00Z", "problem": "", "can_elevate": True, "command": "x"})
+    monkeypatch.setattr(windows_setup, "run_setup", lambda: (True, "ok S-1 S-2"))
+    monkeypatch.setattr(settings, "_throwaway_check", lambda: (False, "the home folder can be listed from inside"))
+    out = settings.run_windows_setup()
+    assert not out["ok"] and "throwaway sandbox failed" in out["error"] and "sandbox_provider" not in (config_file.read_text() if config_file.exists() else "")
+    monkeypatch.setattr(settings, "_throwaway_check", lambda: (True, "proved"))
+    out = settings.run_windows_setup()
+    assert out["ok"] and out["checked"] == "proved" and out["provider"] == "windows" and out["windows_setup"]["state"] == "ready"
+    monkeypatch.setattr(windows_setup, "run_setup", lambda: (False, "The operation was canceled by the user."))
+    out = settings.run_windows_setup()
+    assert not out["ok"] and "canceled" in out["error"] and out["provider"] == "windows"  # the earlier choice stands
+    monkeypatch.setattr(windows_setup, "run_remove", lambda: (True, "removed"))
+    out = settings.run_windows_remove()
+    assert out["ok"] and out["provider"] == "direct"
+    monkeypatch.setattr(settings.sys, "platform", "darwin")
+    assert not settings.run_windows_setup()["ok"] and not settings.run_windows_remove()["ok"]
+
+
+def test_windows_setup_info_states(monkeypatch):
+    from coworker.sandbox.providers import windows_setup
+
+    monkeypatch.setattr(windows_setup, "can_elevate", lambda: True)
+    monkeypatch.setattr(windows_setup, "state", lambda: None)
+    assert windows_setup.info()["state"] == "not_set_up"
+    monkeypatch.setattr(windows_setup, "state", lambda: {"version": 1})
+    assert windows_setup.info()["state"] == "older"
+    monkeypatch.setattr(windows_setup, "state", lambda: {"version": windows_setup.SETUP_VERSION, "set_up_at": "2026-09-28T10:00:00Z"})
+    monkeypatch.setattr(windows_setup, "problem", lambda: "the sandbox account for the open network mode is not usable by this user")
+    info = windows_setup.info()
+    assert info["state"] == "broken" and info["set_up_at"] == "2026-09-28T10:00:00Z" and info["can_elevate"] and info["command"]
+    monkeypatch.setattr(windows_setup, "problem", lambda: None)
+    assert windows_setup.info()["state"] == "ready"
 
 
 def test_removing_a_shipped_entry_and_going_back_to_the_default_rule(config_file):

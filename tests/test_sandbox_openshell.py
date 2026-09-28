@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -49,6 +50,8 @@ def test_network_profiles():
     assert {"github.com", "pypi.org", "registry.npmjs.org"} <= hosts(strict)
     assert "api.tavily.com" not in hosts(strict) and "api.tavily.com" in hosts(standard)
     assert all(entry["binaries"] for entry in strict.values())  # OpenShell requires the field
+    opened = policy.render(ROOTS, profile="open")["network_policies"]
+    assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
     with pytest.raises(ValueError):
         policy.render(ROOTS, profile="wide-open")
 
@@ -258,7 +261,7 @@ def test_registry_reaps_rows_of_a_server_that_is_gone(tmp_path, monkeypatch):
     reg = registry_mod.SandboxRegistry(tmp_path / "registry.db")
     reg.record("owr-local-1", provider="runner-local", session_id="s1")
     reg.record("owr-local-2", provider="runner-local", session_id="s2")
-    gone = subprocess.Popen(["true"])
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     with reg._connect() as db:
         db.execute("UPDATE sandboxes SET server_pid = ? WHERE name = ?", (gone.pid, "owr-local-1"))

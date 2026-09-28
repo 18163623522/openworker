@@ -372,7 +372,78 @@ def seatbelt_check() -> tuple[str, bool, str]:
         return ("the macOS sandbox (Seatbelt) can be used", False, str(exc))
 
 
+def windows_rows(print_fn: Callable[[str], None]) -> None:
+    """The Windows sandbox's own lines of `status`; the OpenShell lines follow them."""
+    from .providers import windows, windows_setup
+
+    for what, ok, detail in windows_setup.checks():
+        print_fn(f"  [{'ok' if ok else '--'}] {what}" + (f"  ({detail})" if detail and not ok else ""))
+    problem = windows_setup.problem()
+    if problem:
+        print_fn(f"       the Windows sandbox cannot be used yet: {problem}")
+    elif app_config.load_config().sandbox_provider == "windows":
+        print_fn("       the Windows sandbox is ready, and this machine is set to use it")
+    else:
+        print_fn(f"       the Windows sandbox is ready; to use it: set `sandbox_provider = \"windows\"` in {app_config.global_config_path()}")
+    print_fn("\nOpenShell on this machine:")
+
+
+def windows_setup_command(*, confirm: Callable[[str], bool], print_fn: Callable[[str], None]) -> int:
+    from .providers import windows_setup
+
+    from . import netproxy
+
+    ports = netproxy.WINDOWS_PORTS
+    print_fn(
+        "The full Windows sandbox runs agents' commands as a hidden local account. Setup asks for administrator rights once and:\n"
+        f"  - creates two accounts with random passwords nobody sees, hidden from the sign-in screen, with remote and network\n"
+        f"    logon denied: `{windows_setup.ACCOUNTS['open']}` (network open) and `{windows_setup.ACCOUNTS['closed']}` (allow list only)\n"
+        f"  - adds one Windows Firewall rule, \"{windows_setup.FIREWALL_RULE}\", that blocks every outbound connection for the\n"
+        f"    closed account, and four loopback filters that leave it only the proxy's ports {ports.start}-{ports.stop - 1}\n"
+        f"  - stores the passwords in {windows_setup.CRED_FILE}, readable by you and administrators only\n"
+        f"  - removes the account and rules of an earlier setup, and records what it changed in {windows_setup.STATE_FILE}"
+    )
+    if not confirm("Run the setup now (one administrator prompt)?"):
+        return 1
+    ok, said = windows_setup.run_setup()
+    if not ok:
+        print_fn(f"setup failed; see above for what it managed to do: {said}")
+        return 1
+    configured = app_config.load_config().sandbox_provider
+    if configured != "windows":
+        print_fn(f"Set this machine to run agents in the Windows sandbox:\n  sandbox_provider = \"windows\" in {app_config.global_config_path()}")
+        if confirm("Make this change?"):
+            app_config.set_global_value("sandbox_provider", "windows")
+    print_fn("")
+    status(print_fn)  # the OpenShell lines may say "--" here; the Windows setup itself succeeded
+    return 0
+
+
+def windows_remove_command(*, confirm: Callable[[str], bool], print_fn: Callable[[str], None]) -> int:
+    from .providers import windows_setup
+
+    print_fn(
+        "This removes everything `sandbox setup` made on this machine (one administrator prompt): the two sandbox accounts\n"
+        f"and their profiles, the firewall rule, the loopback filters, and {windows_setup.ROOT}."
+    )
+    if not confirm("Remove the Windows sandbox setup now?"):
+        return 1
+    ok, said = windows_setup.run_remove()
+    print_fn("removed" if ok else f"remove failed: {said}")
+    return 0 if ok else 1
+
+
+def remove(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, print_fn: Callable[[str], None] = print) -> int:
+    confirm = ask or (lambda question: yes or input(f"{question} [y/N] ").strip().lower() in ("y", "yes"))
+    if sys.platform == "win32":
+        return windows_remove_command(confirm=confirm, print_fn=print_fn)
+    print_fn("`sandbox remove` undoes the Windows setup; there is nothing to remove on this platform.")
+    return 2
+
+
 def status(print_fn: Callable[[str], None] = print) -> int:
+    if sys.platform == "win32":
+        windows_rows(print_fn)
     if sys.platform == "darwin":
         what, ok, detail = seatbelt_check()
         print_fn(f"  [{'ok' if ok else '--'}] {what}" + (f"  ({detail})" if detail else ""))
@@ -408,6 +479,8 @@ def _offer_image_download(rows: dict[str, bool], confirm: Callable[[str], bool],
 
 def setup(*, yes: bool = False, ask: Optional[Callable[[str], bool]] = None, print_fn: Callable[[str], None] = print) -> int:
     confirm = ask or (lambda question: yes or input(f"{question} [y/N] ").strip().lower() in ("y", "yes"))
+    if sys.platform == "win32":
+        return windows_setup_command(confirm=confirm, print_fn=print_fn)
     if not sys.platform.startswith("linux"):
         print_fn("`sandbox setup` configures a Linux machine. On a Mac, install OpenShell yourself and use `openworker machine sandbox status`.")
         # The one step that is the same on a Mac with Docker Desktop: the image download.
