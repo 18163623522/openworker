@@ -85,10 +85,16 @@ class RunnerWorkspace(Workspace):
         if registry is not None:
             registry.reap()  # sandboxes left behind by a server that is gone
             registry.check_room()
+            # Reserve the name before the sandbox exists: engine builds run concurrently
+            # (OPE-206), and another build's reap() would otherwise delete this one while
+            # it is still provisioning, because it is not yet in the registry.
+            self._record(state="creating")
         try:
             provider.create()
         except Exception:
             provider.destroy()  # a half-made sandbox may already hold copied credentials
+            if registry is not None and self._registered:
+                registry.close(self._registered)
             raise
         try:
             self.client = RunnerClient(provider.open_runner)
@@ -102,9 +108,9 @@ class RunnerWorkspace(Workspace):
         )
         self._record()
 
-    def _record(self) -> None:
+    def _record(self, state: str = "ready") -> None:
         """Enter this sandbox in the registry; after a restart that replaced it, under its
-        new name."""
+        new name. `state="creating"` reserves the name before the sandbox exists."""
         if self.registry is None:
             return
         info = self.provider.describe()
@@ -120,6 +126,7 @@ class RunnerWorkspace(Workspace):
             roots=getattr(self.provider, "roots", None),
             profile=getattr(self.provider, "profile", ""),
             enforcement=info.get("enforcement", ""),
+            state=state,
         )
 
     def sync_roots(self) -> Optional[str]:
@@ -134,11 +141,13 @@ class RunnerWorkspace(Workspace):
         restarts = getattr(self.provider, "restarts_on_regrant", True)
         if restarts:
             self.client.detach()
-        regrant(wanted)
-        if restarts:
+            # Reserve the replacement's name before it exists, for the same reason as at
+            # start: a concurrent build's reap() must not take it for an orphan.
+            regrant(wanted, before_create=lambda: self._record(state="creating"))
             self.client.connect()  # a new runner: the client notes the restart
             self._after_connect()
         else:
+            regrant(wanted)  # the same sandbox, re-granted in place (Windows: entries on folders)
             verify = getattr(self.provider, "verify", None)
             if verify is not None:
                 verify(self.client)

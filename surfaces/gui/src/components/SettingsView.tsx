@@ -167,8 +167,12 @@ export function SettingsView({
   onCreateSkill,
   onAskWorker,
   onBack,
+  onSandboxProviderChanged,
 }: {
   initialTab?: SetTab;
+  // Sandbox: the provider changed and the server dropped these sessions' engines; the
+  // app reconnects the one on screen so it is rebuilt (or refused) under the new rule.
+  onSandboxProviderChanged?: (sessionIds: string[]) => void;
   // "Back to app" on the rail — returns to the conversation surface.
   onBack?: () => void;
   onOpenPersona?: (id: string, machineId?: string | null) => void;
@@ -391,7 +395,7 @@ export function SettingsView({
               onAskWorker={(machineId) => onAskWorker?.(machineId)}
             />
           ) : tab === "sandbox" ? (
-            <SandboxSection key={scopeId || "local"} machine={scoped} />
+            <SandboxSection key={scopeId || "local"} machine={scoped} onProviderChanged={onSandboxProviderChanged} />
           ) : tab === "machines" ? (
             <MachinesSection />
           ) : tab === "slack" || tab === "github" ? (

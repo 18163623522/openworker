@@ -109,7 +109,7 @@ def test_windows_setup_runs_checks_and_only_then_chooses_the_sandbox(config_file
 
     monkeypatch.setattr(settings.sys, "platform", "win32")
     # Off Windows the provider module cannot even import; the snapshot's two probes are stubbed.
-    monkeypatch.setattr(settings, "_availability", lambda name: (True, ""))
+    monkeypatch.setattr(settings, "_availability", lambda name: (True, "", "ready"))
     monkeypatch.setattr(selection, "select", lambda name=None: SimpleNamespace(provider=name or "direct"))
     monkeypatch.setattr(windows_setup, "info", lambda: {"state": "ready", "set_up_at": "2026-09-28T10:00:00Z", "problem": "", "can_elevate": True, "command": "x"})
     monkeypatch.setattr(windows_setup, "run_setup", lambda: (True, "ok S-1 S-2"))
@@ -154,6 +154,25 @@ def test_removing_a_shipped_entry_and_going_back_to_the_default_rule(config_file
     assert "sandbox_provider" not in text and "[[sandbox_credentials]]" not in text
 
 
+def test_a_missing_base_image_shows_as_needs_download_not_as_ready(config_file, monkeypatch):
+    # OPE-205: the page said "ready" while the first session was bound to hang on the
+    # one-time 5 GB download. Now that state has a name of its own, and the refusal a
+    # session would get carries the same message.
+    from coworker.sandbox import selection
+    from coworker.sandbox.providers.openshell import IMAGE_MISSING_PREFIX
+
+    message = f"{IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `openworker machine sandbox setup`."
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: message)
+    snap = settings.snapshot()
+    row = next(p for p in snap["providers"] if p["name"] == "openshell")
+    assert row == {"name": "openshell", "usable": False, "why": message, "state": "needs_download"}
+    assert next(p for p in snap["providers"] if p["name"] == "direct")["state"] == "ready"
+    assert settings.update({"provider": "openshell"})["ok"]  # the choice is allowed; the download is what is missing
+    assert "not downloaded yet" in settings.snapshot()["refused"]
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: "The OpenShell gateway is not running.")
+    assert next(p for p in settings.snapshot()["providers"] if p["name"] == "openshell")["state"] == "unavailable"
+
+
 def test_an_explicit_provider_that_cannot_be_used_shows_as_refused(config_file, monkeypatch):
     from coworker.sandbox import selection
     from coworker.sandbox.providers.openshell import OpenShellUnavailable
@@ -166,3 +185,53 @@ def test_an_explicit_provider_that_cannot_be_used_shows_as_refused(config_file, 
     assert not next(p for p in snap["providers"] if p["name"] == "openshell")["usable"]
     with pytest.raises(OpenShellUnavailable):
         selection.select("openshell")
+
+
+def test_changing_the_provider_rebuilds_live_engines_built_under_the_old_rule(tmp_path, monkeypatch):
+    """Seen 2026-09-28 on WSL: sessions opened before the switch kept running direct while
+    the page said sessions were refused. A provider change now drops idle engines built
+    under another provider (a running one is rebuilt when its turn ends) and the response
+    names them, so the app reconnects the one on screen."""
+    from fastapi.testclient import TestClient
+
+    from coworker.sandbox import settings as sandbox_settings
+    from coworker.server import create_app
+    from tests.test_persona_connections import _mgr
+
+    monkeypatch.setattr(sandbox_settings, "openshell_problem", lambda fresh=False: "OpenShell is not installed", raising=False)
+    from coworker.sandbox import selection
+
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    mgr = _mgr(tmp_path, monkeypatch)
+
+    class Direct:
+        def describe(self):
+            return {"provider": "direct", "enforcement": "none"}
+
+    class Boxed:
+        def describe(self):
+            return {"provider": "openshell", "enforcement": "full"}
+
+    class Engine:
+        def __init__(self, ws):
+            self.sandbox_workspace = ws
+
+    closed: list[str] = []
+    mgr._engines.update({"direct-idle": Engine(Direct()), "direct-busy": Engine(Direct()), "boxed": Engine(Boxed())})
+    monkeypatch.setattr(mgr, "_close_sandbox", lambda engine: closed.append(type(engine.sandbox_workspace).__name__))
+    mgr.mark_running("direct-busy")
+    client = TestClient(create_app(mgr))
+    res = client.post("/v1/settings/sandbox", json={"provider": "openshell"}).json()
+    assert res["ok"] and sorted(res["rebuilt_sessions"]) == ["direct-busy", "direct-idle"]
+    assert "direct-idle" not in mgr._engines  # dropped now: its next connection is rebuilt (here: refused)
+    assert "direct-busy" in mgr._engines  # mid-turn: kept until the turn ends
+    assert "boxed" in mgr._engines  # already under the new rule
+    mgr.mark_idle("direct-busy")
+    assert "direct-busy" not in mgr._engines
+    # Switching off: the boxed engine is the odd one out now, and its sandbox is closed.
+    res = client.post("/v1/settings/sandbox", json={"provider": ""}).json()
+    assert res["ok"] and res["rebuilt_sessions"] == ["boxed"] and closed[-1] == "Boxed"
+    # A save that does not touch the provider rebuilds nothing.
+    mgr._engines["d"] = Engine(Direct())
+    res = client.post("/v1/settings/sandbox", json={"network_profile": "strict"}).json()
+    assert res["ok"] and "rebuilt_sessions" not in res and "d" in mgr._engines

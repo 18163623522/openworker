@@ -26,7 +26,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from .. import credentials as creds
 from .. import netproxy, network_profiles
@@ -220,11 +220,15 @@ class SeatbeltProvider:
             return
         raise SeatbeltUnavailable("the sandbox did not take effect: the home folder can be listed from inside")
 
-    def regrant(self, roots: Sequence[dict[str, Any]]) -> None:
+    def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. A profile is fixed when a process starts, so the
-        daemon is started again with a new one; the client sees a runner restart."""
+        daemon is started again with a new one; the client sees a runner restart.
+        `before_create` is the workspace's registry reservation (a no-op here: Seatbelt has
+        no gateway-side list for a reap to consult, but the hook keeps providers alike)."""
         self.roots = [{"path": seatbelt_profile.real(r["path"]), "writable": bool(r.get("writable"))} for r in roots]
         self._stop_daemon()
+        if before_create is not None:
+            before_create()
         self.create()
 
     def restart_daemon(self) -> None:

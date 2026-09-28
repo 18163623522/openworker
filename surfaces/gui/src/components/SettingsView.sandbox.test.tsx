@@ -1,7 +1,8 @@
-// Settings ▸ Sandbox (UX-051 A, UX-053 v3): one switch first; on reveals the type; a ready
-// type reveals its options. The page shows what the machine reports and writes back the
-// changes: provider, network profile, credential list, toolchain list. On Windows, choosing
-// the sandbox opens the setup dialog, which calls the setup route.
+// Settings ▸ Sandbox (UX-051 A, UX-053 v3, OPE-207): one switch first; on reveals the type;
+// a ready type reveals its options. The page shows what the machine reports and writes back
+// the changes: provider, network profile, credential list, toolchain list. On Windows,
+// choosing the sandbox opens the setup dialog, which calls the Windows setup route. Under
+// OpenShell the readiness checklist and the guided setup job show.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -35,7 +36,24 @@ const base = {
 };
 let snapshot: any = { ...base };
 
-const setSandboxSettings = vi.fn(async (patch: any) => ({ ok: true, ...snapshot, ...patch }));
+const readiness = {
+  platform: "linux",
+  supported: true,
+  all_ok: false,
+  steps: [
+    { key: "docker", what: "Docker is installed and this user can use it", ok: true, hint: "", fixable: false, command: "", docs: "" },
+    // Handed over (no way to run as an administrator here): a command, and a guide.
+    { key: "openshell", what: "OpenShell 0.0.116 is installed", ok: false, hint: "", fixable: false, command: "curl -LsSf https://example/install.sh | sh", docs: "https://example/guide" },
+    { key: "gateway", what: "the gateway is running", ok: false, hint: "OpenShell is not installed", fixable: false, command: "", docs: "" },
+    { key: "image", what: "the sandbox base image is downloaded (about 5 GB, one time)", ok: false, hint: "", fixable: true, command: "docker pull img", docs: "" },
+  ],
+};
+let setupState: any = { status: "idle", rows: [], progress: null, error: "", elapsed_s: 0 };
+
+// Like the backend: a provider change names the sessions it dropped for a rebuild.
+const setSandboxSettings = vi.fn(async (patch: any) => ({ ok: true, ...snapshot, ...patch, ...("provider" in patch ? { rebuilt_sessions: ["s-open"] } : {}) }));
+const onSandboxProviderChanged = vi.fn();
+const startSandboxSetup = vi.fn(async () => setupState);
 const runSandboxSetup = vi.fn(async () => ({ ok: true, checked: "the wall held", ...snapshot, provider: "windows", windows_setup: { ...snapshot.windows_setup, state: "ready", set_up_at: "2026-09-28T10:00:00Z" } }));
 const runSandboxRemove = vi.fn(async () => ({ ok: true, ...snapshot, provider: "direct", windows_setup: { ...snapshot.windows_setup, state: "not_set_up", set_up_at: "" } }));
 
@@ -47,6 +65,10 @@ vi.mock("../api", async (importOriginal) => {
     setSandboxSettings: (patch: any) => setSandboxSettings(patch),
     runSandboxSetup: () => runSandboxSetup(),
     runSandboxRemove: () => runSandboxRemove(),
+    getSandboxReadiness: vi.fn(async () => readiness),
+    getSandboxSetup: vi.fn(async () => setupState),
+    startSandboxSetup: () => startSandboxSetup(),
+    cancelSandboxSetup: vi.fn(async () => setupState),
     getMachines: vi.fn(async () => ({ machines: [] })),
     getCloudMachines: vi.fn(async () => ({ machines: [] })),
     getCloudConnections: vi.fn(async () => []),
@@ -66,11 +88,14 @@ describe("Settings ▸ Sandbox", () => {
     setSandboxSettings.mockClear();
     runSandboxSetup.mockClear();
     runSandboxRemove.mockClear();
+    startSandboxSetup.mockClear();
+    onSandboxProviderChanged.mockClear();
+    setupState = { status: "idle", rows: [], progress: null, error: "", elapsed_s: 0 };
   });
   afterEach(cleanup);
 
   it("off: one switch and nothing else; on reveals the type card only", async () => {
-    render(<SettingsView initialTab="sandbox" />);
+    render(<SettingsView initialTab="sandbox" onSandboxProviderChanged={onSandboxProviderChanged} />);
     await screen.findByTestId("sandbox-section");
     const sw = screen.getByRole("switch");
     expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -86,6 +111,102 @@ describe("Settings ▸ Sandbox", () => {
     expect(setSandboxSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("sandbox-provider-seatbelt"));
     await waitFor(() => expect(setSandboxSettings).toHaveBeenCalledWith({ provider: "seatbelt" }));
+    await waitFor(() => expect(onSandboxProviderChanged).toHaveBeenCalledWith(["s-open"])); // live sessions rebuilt under the new rule
+  });
+
+  it("OpenShell on Linux: the readiness checklist, its hints, the handover command and the setup button", async () => {
+    snapshot = {
+      ...base,
+      platform: "linux",
+      provider: "openshell",
+      effective_provider: "",
+      refused: "no session will start: OpenShell is not installed",
+      providers: [
+        { name: "direct", usable: true, why: "", state: "ready" },
+        { name: "openshell", usable: false, why: "OpenShell is not installed", state: "unavailable" },
+      ],
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-readiness");
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("sandbox-switch-status").textContent).toBe("on · OpenShell (NVIDIA)");
+    expect((screen.getByTestId("sandbox-provider-openshell") as HTMLInputElement).checked).toBe(true);
+    await screen.findByTestId("sandbox-readiness-row-openshell");
+    expect(screen.getByText("3 requirements missing")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-readiness-row-docker").getAttribute("data-state")).toBe("ok");
+    expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("pending");
+    expect(screen.getByText("curl -LsSf https://example/install.sh | sh")).toBeTruthy(); // the command to run
+    // Only the handed-over row shows its command with Copy; the image row is the app's to
+    // do, and a note (the gateway row) gets neither.
+    expect(screen.getAllByText("Run this in a terminal on this machine:").length).toBe(1);
+    expect(screen.getAllByText("Copy").length).toBe(1);
+    expect(screen.queryByTestId("sandbox-readiness-command-gateway")).toBeNull();
+    expect((screen.getByTestId("sandbox-readiness-docs-openshell") as HTMLAnchorElement).href).toBe("https://example/guide");
+    expect((screen.getByTestId("sandbox-setup-start") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("sandbox-card-tools")).toBeNull(); // OpenShell mounts no home folder: no tools card
+    expect(screen.getByTestId("sandbox-card-files")).toBeTruthy();
+  });
+
+  it("OpenShell: a running setup job shows its rows and progress; needs_you offers Check again", async () => {
+    snapshot = { ...base, platform: "linux", provider: "openshell", effective_provider: "openshell", providers: [{ name: "direct", usable: true, why: "", state: "ready" }, { name: "openshell", usable: true, why: "", state: "ready" }] };
+    setupState = {
+      status: "running",
+      rows: [
+        { ...readiness.steps[0], state: "ok" },
+        { ...readiness.steps[1], ok: true, state: "ok" },
+        { ...readiness.steps[2], ok: true, state: "ok" },
+        { ...readiness.steps[3], state: "fixing" },
+      ],
+      progress: { layers_total: 8, layers_done: 3, last_line: "x: Downloading", elapsed_s: 75 },
+      error: "",
+      elapsed_s: 75,
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-download-progress");
+    expect(screen.getByText("Downloading the base image: 3 of 8 layers, 1 min 15 s elapsed")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-setup-cancel")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-readiness-row-image").getAttribute("data-state")).toBe("fixing");
+    cleanup();
+
+    setupState = {
+      status: "needs_you",
+      rows: [
+        { ...readiness.steps[0], state: "ok" },
+        { ...readiness.steps[1], state: "needs_you" },
+        { ...readiness.steps[2], state: "pending" },
+        { ...readiness.steps[3], state: "pending" },
+      ],
+      progress: null,
+      error: "",
+      elapsed_s: 3,
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-setup-needs_you");
+    expect(screen.getByText(/run the command shown in a terminal on this machine, then click Check again/)).toBeTruthy();
+    expect(screen.getByTestId("sandbox-readiness-row-openshell").getAttribute("data-state")).toBe("needs_you");
+    expect(screen.getByTestId("sandbox-setup-start").textContent).toBe("Check again");
+    fireEvent.click(screen.getByTestId("sandbox-setup-start"));
+    await waitFor(() => expect(startSandboxSetup).toHaveBeenCalled());
+  });
+
+  it("OpenShell with the base image missing is still choosable and says needs download", async () => {
+    snapshot = {
+      ...base,
+      platform: "linux",
+      providers: [
+        { name: "direct", usable: true, why: "", state: "ready" },
+        { name: "openshell", usable: false, why: "the base image is missing", state: "needs_download" },
+      ],
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    fireEvent.click(screen.getByRole("switch"));
+    expect((screen.getByTestId("sandbox-provider-openshell") as HTMLInputElement).disabled).toBe(false);
+    expect(screen.getByTestId("sandbox-provider-openshell-status").textContent).toBe("needs download");
+    expect(screen.getByTestId("sandbox-provider-openshell-hint").textContent).toMatch(/about 5 GB/);
+    expect(screen.queryByTestId("sandbox-provider-openshell-why")).toBeNull();
+    fireEvent.click(screen.getByTestId("sandbox-provider-openshell"));
+    await waitFor(() => expect(setSandboxSettings).toHaveBeenCalledWith({ provider: "openshell" }));
   });
 
   it("a ready type shows its options; switching off writes direct", async () => {

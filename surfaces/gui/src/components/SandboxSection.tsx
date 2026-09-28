@@ -1,19 +1,30 @@
-// Settings ▸ Sandbox (UX-051 A, UX-053 v3): one switch first; on reveals the sandbox type;
-// a ready type reveals only its own options (network, the files an agent may be given,
-// the tool folders the sandbox may read). Choosing the Windows sandbox opens its setup
-// dialog, which runs the one-time elevated setup and proves the wall before the choice
-// takes effect. Everything here is machine-level (the machine's config.toml through
-// /v1/settings/sandbox); nothing is per project.
-import { useEffect, useState } from "react";
+// Settings ▸ Sandbox (UX-051 A, UX-053 v3, OPE-207): one switch first; on reveals the
+// sandbox type; a ready type reveals only its own options (network, the files an agent may
+// be given, the tool folders the sandbox may read). Choosing the Windows sandbox opens its
+// setup dialog, which runs the one-time elevated setup and proves the wall before the
+// choice takes effect. OpenShell shows its readiness checklist with the guided "Set up
+// sandbox" job (fixes what the app may fix, never as root; hands the rest over as
+// commands; downloads the image with progress). Everything here is machine-level (the
+// machine's config.toml through /v1/settings/sandbox); nothing is per project. A provider
+// change rebuilds live sessions under the new rule (onProviderChanged carries their ids).
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  cancelSandboxSetup,
+  getSandboxReadiness,
   getSandboxSettings,
+  getSandboxSetup,
   runSandboxRemove,
   runSandboxSetup,
   setSandboxSettings,
+  startSandboxSetup,
   type Machine,
   type SandboxCredentialEntry,
+  type SandboxReadiness,
+  type SandboxReadinessStep,
   type SandboxSettings,
+  type SandboxSetupRowState,
+  type SandboxSetupState,
   type SandboxToolchainEntry,
 } from "../api";
 import { chooseFolder } from "../tauri";
@@ -108,11 +119,15 @@ function Modal({ children, testid }: { children: React.ReactNode; testid: string
 
 const SETUP_CHANGES = ["accounts", "rules", "folder", "record"] as const;
 
-export function SandboxSection({ machine }: { machine?: Machine | null }) {
+export function SandboxSection({ machine, onProviderChanged }: { machine?: Machine | null; onProviderChanged?: (sessionIds: string[]) => void }) {
   const { t } = useTranslation();
   const mid = machine?.id ?? null;
   const [cfg, setCfg] = useState<SandboxSettings | null>(null);
   const [error, setError] = useState<string>("");
+  const [readiness, setReadiness] = useState<SandboxReadiness | null>(null);
+  const [job, setJob] = useState<SandboxSetupState | null>(null);
+  const [copied, setCopied] = useState<string>("");
+  const notifiedRef = useRef(false);
   const [wantOn, setWantOn] = useState(false); // the switch is on, no type is ready yet
   const [openCard, setOpenCard] = useState<"files" | "tools" | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // credential name being edited, "" = new
@@ -136,6 +151,76 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
     }
     setError("");
     setCfg(res as SandboxSettings);
+    if ("provider" in patch) onProviderChanged?.(res.rebuilt_sessions ?? []);
+  };
+
+  // OpenShell's readiness checklist (Seatbelt and the Windows sandbox need none of this):
+  // loaded when OpenShell is the choice, and again after a setup run.
+  const openshellChosen = Boolean(cfg) && (cfg!.provider || cfg!.effective_provider || "direct") === "openshell";
+  const loadReadiness = () => {
+    if (!cfg || !openshellChosen) return;
+    setReadiness(null);
+    getSandboxReadiness(mid)
+      .then(setReadiness)
+      .catch(() => setReadiness({ platform: cfg.platform, supported: false, steps: [], all_ok: false }));
+  };
+  useEffect(loadReadiness, [mid, openshellChosen, cfg?.platform]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A setup job may be running from before (the page was closed and reopened): adopt it.
+  useEffect(() => {
+    if (!openshellChosen) return;
+    getSandboxSetup(mid)
+      .then((s) => setJob(s.status === "idle" ? null : s))
+      .catch(() => {});
+  }, [mid, openshellChosen]);
+  // Poll the job while it runs; on the way out, reload the checklist and the settings
+  // (the job may have written the config line) and say so once.
+  useEffect(() => {
+    if (!job || job.status !== "running") return;
+    const timer = window.setInterval(() => {
+      getSandboxSetup(mid)
+        .then((s) => {
+          setJob(s);
+          if (s.status !== "running") {
+            loadReadiness();
+            getSandboxSettings(mid).then(setCfg).catch(() => {});
+            if (s.status === "done" && !notifiedRef.current) {
+              notifiedRef.current = true;
+              try {
+                if ("Notification" in window && Notification.permission === "granted") {
+                  new Notification(t("settingsx.sandbox.notify_title"), { body: t("settingsx.sandbox.notify_body") });
+                }
+              } catch {
+                /* notifications are a courtesy */
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [job?.status, mid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const startJob = async () => {
+    notifiedRef.current = false;
+    try {
+      if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    const s = await startSandboxSetup(mid).catch(() => null);
+    if (s) setJob(s);
+  };
+  const cancelJob = async () => {
+    const s = await cancelSandboxSetup(mid).catch(() => null);
+    if (s) setJob(s);
+  };
+  const copy = (text: string) => {
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(text);
+        window.setTimeout(() => setCopied(""), 1500);
+      })
+      .catch(() => {});
   };
 
   if (!cfg) return null;
@@ -147,7 +232,7 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
     openshell: [t("settingsx.sandbox.provider_openshell"), t("settingsx.sandbox.provider_openshell_desc")],
   };
   const chosen = cfg.provider || cfg.effective_provider || "direct";
-  const active = chosen !== "direct"; // a type is the machine's choice
+  const active = chosen !== "direct"; // a type is the machine's choice (OpenShell counts even while its image downloads)
   const on = active || wantOn;
   const setup = cfg.windows_setup;
   const setupReady = setup?.state === "ready";
@@ -266,17 +351,20 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
               const [label, desc] = providerNames[p.name] ?? [p.name, ""];
               const isActive = chosen === p.name;
               const win = p.name === "windows";
-              const canPick = p.usable || (win && Boolean(setup?.can_elevate));
-              const why = !p.usable ? (win && setup && !setup.can_elevate ? t("settingsx.sandbox.needs_admin_why", { command: setup.command }) : win && setup?.can_elevate ? "" : p.why) : "";
+              const needsDownload = p.state === "needs_download"; // OpenShell in place except the base image: still choosable
+              const canPick = p.usable || needsDownload || (win && Boolean(setup?.can_elevate));
+              const why = !p.usable && !needsDownload ? (win && setup && !setup.can_elevate ? t("settingsx.sandbox.needs_admin_why", { command: setup.command }) : win && setup?.can_elevate ? "" : p.why) : "";
               const status = win
                 ? setupReady
                   ? t("settingsx.sandbox.status_ready")
                   : setup?.can_elevate
                     ? t("settingsx.sandbox.status_setup")
                     : t("settingsx.sandbox.status_needs_admin")
-                : p.usable
-                  ? t("settingsx.sandbox.status_ready")
-                  : t("settingsx.sandbox.status_unavailable");
+                : needsDownload
+                  ? t("settingsx.sandbox.status_needs_download")
+                  : p.usable
+                    ? t("settingsx.sandbox.status_ready")
+                    : t("settingsx.sandbox.status_unavailable");
               return (
                 <label key={p.name} className={"flex items-start gap-3 px-4 py-3 " + (canPick ? "cursor-pointer" : "opacity-60")}>
                   <input
@@ -296,6 +384,11 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
                         {why}
                       </span>
                     ) : null}
+                    {needsDownload ? (
+                      <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-hint`}>
+                        {t("settingsx.sandbox.needs_download_hint")}
+                      </span>
+                    ) : null}
                     {win && setupReady ? (
                       <span className="block text-meta text-muted mt-1.5" data-testid="sandbox-windows-setup-line">
                         {setUpOnText ? t("settingsx.sandbox.set_up_on", { date: setUpOnText }) : t("settingsx.sandbox.set_up")}
@@ -306,7 +399,10 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
                       </span>
                     ) : null}
                   </span>
-                  <span className={"text-meta shrink-0 whitespace-nowrap pt-0.5 " + (win && !setupReady && setup && !setup.can_elevate ? "text-warnInk" : isActive || (win ? setupReady : p.usable) ? "text-ok" : "text-faint")}>
+                  <span
+                    className={"text-meta shrink-0 whitespace-nowrap pt-0.5 " + ((win && !setupReady && setup && !setup.can_elevate) || needsDownload ? "text-warnInk" : isActive || (win ? setupReady : p.usable) ? "text-ok" : "text-faint")}
+                    data-testid={`sandbox-provider-${p.name}-status`}
+                  >
                     {status}
                   </span>
                 </label>
@@ -318,6 +414,9 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
           </div>
         </>
       ) : null}
+
+      {/* 2b. OpenShell: the readiness checklist and the guided setup job (OPE-207) */}
+      {active && chosen === "openshell" ? <OpenShellReadiness t={t} readiness={readiness} job={job} onStart={startJob} onCancel={cancelJob} copy={copy} copied={copied} /> : null}
 
       {/* 3. The type's own options */}
       {active ? (
@@ -636,6 +735,134 @@ export function SandboxSection({ machine }: { machine?: Machine | null }) {
         </Modal>
       ) : null}
     </section>
+  );
+}
+
+// OpenShell's checklist: the rows `openworker machine sandbox status` prints, each with a
+// key and whether the app may fix it itself; the live job's rows while it runs or just ran.
+function OpenShellReadiness({
+  t,
+  readiness,
+  job,
+  onStart,
+  onCancel,
+  copy,
+  copied,
+}: {
+  t: (k: string, o?: Record<string, unknown>) => string;
+  readiness: SandboxReadiness | null;
+  job: SandboxSetupState | null;
+  onStart: () => void;
+  onCancel: () => void;
+  copy: (text: string) => void;
+  copied: string;
+}) {
+  const rows: (SandboxReadinessStep & { state?: SandboxSetupRowState })[] = job && job.status !== "idle" ? job.rows : readiness?.steps ?? [];
+  const missing = rows.filter((r) => !r.ok && r.state !== "fixed").length;
+  const running = job?.status === "running";
+  const elapsed = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`);
+  return (
+    <div className={CARD + " mb-4"} data-testid="sandbox-readiness">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-line">
+        <span className="flex-1 min-w-0">
+          <span className="block text-ui font-medium text-ink">{t("settingsx.sandbox.readiness")}</span>
+          <span className={"block text-meta " + (rows.length && missing === 0 ? "text-ok" : "text-muted")}>
+            {!readiness && !job
+              ? t("settingsx.sandbox.readiness_loading")
+              : missing === 0
+                ? t("settingsx.sandbox.readiness_all_ok")
+                : missing === 1
+                  ? t("settingsx.sandbox.readiness_missing_one")
+                  : t("settingsx.sandbox.readiness_missing", { count: missing })}
+          </span>
+        </span>
+        {running ? (
+          <button className={BTN_BORDERED} onClick={onCancel} data-testid="sandbox-setup-cancel">
+            {t("settingsx.sandbox.setup_cancel")}
+          </button>
+        ) : (
+          <button
+            className={BTN_ACCENT}
+            disabled={!rows.length || (missing === 0 && job?.status !== "needs_you" && job?.status !== "failed")}
+            onClick={onStart}
+            data-testid="sandbox-setup-start"
+          >
+            {job && job.status !== "idle" ? t("settingsx.sandbox.setup_again") : t("settingsx.sandbox.setup_start")}
+          </button>
+        )}
+      </div>
+      <ul className="divide-y divide-line">
+        {rows.map((r) => {
+          const state: SandboxSetupRowState = r.state ?? (r.ok ? "ok" : "pending");
+          const good = state === "ok" || state === "fixed";
+          // A command is something to run in a terminal on that machine (with Copy); a hint
+          // is a note about what was found. A row the app fixes itself shows its command
+          // only once the app could not (handed over, or failed).
+          const showCommand = !good && r.command && (!r.fixable || state === "needs_you" || state === "failed");
+          return (
+            <li key={r.key} className="px-4 py-2.5" data-testid={`sandbox-readiness-row-${r.key}`} data-state={state}>
+              <div className="flex items-start gap-2">
+                <span className={"shrink-0 w-4 " + (good ? "text-ok" : state === "fixing" ? "text-muted" : "text-warnInk")} aria-hidden>
+                  {good ? "✓" : state === "fixing" ? "⟳" : "✗"}
+                </span>
+                <span className="flex-1 min-w-0 text-ui text-ink">{r.what}</span>
+                <span className="text-meta text-muted shrink-0">{t(`settingsx.sandbox.step_${state}`)}</span>
+              </div>
+              {r.key === "openshell" && running && state === "fixing" && job?.progress ? (
+                <div className="mt-1 ml-6 text-meta text-muted font-mono break-all" data-testid="sandbox-install-progress">
+                  {t("settingsx.sandbox.install_progress", { elapsed: elapsed(job.progress.elapsed_s) })}
+                  {job.progress.last_line ? ` · ${job.progress.last_line}` : ""}
+                </div>
+              ) : null}
+              {r.key === "image" && running && state === "fixing" && job?.progress ? (
+                <div className="mt-1.5 ml-6" data-testid="sandbox-download-progress">
+                  <div className="h-1.5 rounded bg-line overflow-hidden">
+                    <div
+                      className="h-full bg-accent transition-all"
+                      style={{ width: job.progress.layers_total ? `${Math.round((100 * job.progress.layers_done) / job.progress.layers_total)}%` : "5%" }}
+                    />
+                  </div>
+                  <div className="text-meta text-muted mt-1">
+                    {job.progress.layers_total
+                      ? t("settingsx.sandbox.download_progress", { done: job.progress.layers_done, total: job.progress.layers_total, elapsed: elapsed(job.progress.elapsed_s) })
+                      : t("settingsx.sandbox.download_progress_unknown", { elapsed: elapsed(job.progress.elapsed_s) })}
+                  </div>
+                </div>
+              ) : null}
+              {!good && r.hint ? <div className="mt-1 ml-6 text-meta text-muted">{r.hint}</div> : null}
+              {showCommand ? (
+                <div className="mt-1 ml-6" data-testid={`sandbox-readiness-command-${r.key}`}>
+                  <div className="text-meta text-muted">{t("settingsx.sandbox.run_in_terminal")}</div>
+                  <div className="flex items-start gap-2">
+                    <code className="text-meta font-mono text-ink break-all flex-1 min-w-0">{r.command}</code>
+                    <button className="text-meta text-accent shrink-0" onClick={() => copy(r.command)}>
+                      {copied === r.command ? t("settingsx.sandbox.copied") : t("settingsx.sandbox.copy")}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {!good && r.docs ? (
+                <a className="mt-1 ml-6 inline-block text-meta text-accent" href={r.docs} target="_blank" rel="noreferrer" data-testid={`sandbox-readiness-docs-${r.key}`}>
+                  {t("settingsx.sandbox.guide")}
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {job && job.status !== "idle" && job.status !== "running" ? (
+        <div className={"px-4 py-3 border-t border-line text-ui " + (job.status === "done" ? "text-ok" : "text-warnInk")} data-testid={`sandbox-setup-${job.status}`}>
+          {job.status === "done"
+            ? t("settingsx.sandbox.setup_done", { provider: t("settingsx.sandbox.provider_openshell") })
+            : job.status === "needs_you"
+              ? t("settingsx.sandbox.setup_needs_you")
+              : job.status === "cancelled"
+                ? t("settingsx.sandbox.setup_cancelled")
+                : t("settingsx.sandbox.setup_failed", { error: job.error })}
+        </div>
+      ) : null}
+      <div className={FIELD_HELP + " px-4 pb-3"}>{t("settingsx.sandbox.setup_never_root")}</div>
+    </div>
   );
 }
 
