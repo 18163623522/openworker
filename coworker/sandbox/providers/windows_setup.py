@@ -19,8 +19,8 @@ prompt) that:
 6. removes what an earlier setup or spike left (`OpenWorkerSandbox`, its rule), and records
    what it changed in `setup.json`, so `remove` can undo exactly that.
 
-The provider reads `account(kind)` at start: with it, full mode; without it, the same-user
-mode labelled `partial: setup not run`.
+The provider reads `account(kind)` at start; without it the sandbox is not usable and
+sessions set to use it are refused (`problem()` says why). There is no weaker mode.
 """
 
 from __future__ import annotations
@@ -200,6 +200,19 @@ def account(kind: str = CLOSED) -> Optional[tuple[str, str, str]]:
         return None
     password = str(passwords.get(name) or "")
     return (name, sid, password) if password else None
+
+
+def problem() -> Optional[str]:
+    """Why the Windows sandbox cannot be used by this user right now, or None."""
+    recorded = state()
+    if not recorded:
+        return "the one-time setup has not run on this PC (`openworker machine sandbox setup`)"
+    if not current():
+        return "an older setup is recorded on this PC; run `openworker machine sandbox setup` again"
+    for kind in (OPEN, CLOSED):
+        if account(kind) is None:
+            return f"the sandbox account for the {kind} network mode is not usable by this user; run `openworker machine sandbox setup` again"
+    return None
 
 
 def filters_recorded() -> bool:

@@ -57,6 +57,7 @@ describe("Settings ▸ Sandbox", () => {
     await screen.findByTestId("sandbox-section");
     expect((screen.getByTestId("sandbox-provider-direct") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByTestId("sandbox-provider-openshell") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByTestId("sandbox-provider-openshell-why").textContent).toBe("OpenShell is not installed");
     expect(screen.getByText("default")).toBeTruthy();
     expect((screen.getByTestId("sandbox-network-strict") as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText("SSH keys")).toBeTruthy();

@@ -793,8 +793,11 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
                 <span className="flex-1 min-w-0">
                   <span className="block text-ui text-ink">{label}</span>
                   <span className="block text-meta text-muted">{desc}</span>
+                  {!p.usable && p.why ? (
+                    <span className="block text-meta text-warnInk mt-1" data-testid={`sandbox-provider-${p.name}-why`}>{p.why}</span>
+                  ) : null}
                 </span>
-                <span className={"text-meta shrink-0 " + (p.usable ? (active ? "text-success" : "text-muted") : "text-muted")} title={p.why || undefined}>
+                <span className={"text-meta shrink-0 " + (p.usable ? (active ? "text-success" : "text-muted") : "text-muted")}>
                   {p.name === "direct" && !cfg.provider
                     ? t("settingsx.sandbox.status_default")
                     : p.usable

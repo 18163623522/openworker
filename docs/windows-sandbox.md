@@ -68,10 +68,12 @@ sandbox_network_profile = "open"    # the Windows default; or "strict", "standar
 
 The setting is per machine; a project's own config cannot change it.
 
-The first time the Windows sandbox is selected, OpenWorker asks for administrator rights
-and runs the one-time setup (the command line form is `openworker machine sandbox setup`).
-If you skip it, or cannot elevate on this machine, sessions still run, in a weaker mode
-that is labelled as such (see "Without setup" below), and you are asked again next time.
+Choosing the Windows sandbox is choosing to set it up: OpenWorker shows what the one-time
+setup changes and runs it on one administrator prompt (the command line form is
+`openworker machine sandbox setup`). Until setup has run, the option cannot be used and the
+machine stays on "No sandbox". There is no weaker mode. If setup is later found broken (an
+account deleted, the rule or a filter gone), sessions on the machine are refused with the
+way to set it up again, rather than run without the sandbox.
 
 ## What the setup does
 
@@ -151,6 +153,11 @@ Read only:
   account read those by default, and so can the sandbox. Keep what the agent must not see
   under your profile.
 
+Passed through, not listed: the folders between a granted folder and your profile root.
+A project under `C:\Users\<you>\code` needs the shell to step through `C:\Users\<you>`
+and `code`; each gets a traverse-only entry for the session, which lets nothing be listed
+or read there.
+
 Read only, from your profile, so the agent can run your tools:
 
 - developer tools installed per user, from a list you control in Settings ▸ Sandbox:
@@ -182,15 +189,6 @@ Windows has no `nc`. The agent is told what it can do ("you can push over SSH as
 user"), never where a credential is kept. Short-lived cloud roles (AWS first) and an
 encrypted wallet for keys that cannot be short-lived are the next additions; see the
 design notes.
-
-## Without setup
-
-If setup has not run, the Windows sandbox still limits writes: the runner starts as you,
-under a write-restricted token, and can write only where the session's folders and its
-private folder carry an entry for it. Reads and the network are yours. OpenWorker labels
-this mode `partial` in every tool result and in Settings, and asks for setup again at the
-next start. Shared SSH keys cannot be used in this mode (Windows OpenSSH does not finish
-under a write-restricted token); the agent is told.
 
 ## Every agent, one account
 

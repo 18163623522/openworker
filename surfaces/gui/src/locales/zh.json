@@ -2238,7 +2238,7 @@
       "provider_seatbelt": "macOS 沙箱",
       "provider_seatbelt_desc": "命令只能读写会话的文件夹，只能访问允许列表中的网络主机。你的其他文件和登录信息被隐藏。",
       "provider_windows": "Windows 沙箱",
-      "provider_windows_desc": "命令以一个看不到你的用户配置文件的隐藏本地账户运行。网络按下方的选择：开放，或仅限允许列表。未做一次性设置（openworker machine sandbox setup）时，只限制写入到会话的文件夹，其他不受限制。",
+      "provider_windows_desc": "命令以一个看不到你的用户配置文件的隐藏本地账户运行。网络按下方的选择：开放，或仅限允许列表。一次性设置，只需一次管理员确认。",
       "provider_openshell": "OpenShell（NVIDIA）",
       "provider_openshell_desc": "每个同事一个 Linux 容器，挂载会话的文件夹。需要这台机器上装有 OpenShell 和 Docker。",
       "status_default": "默认",

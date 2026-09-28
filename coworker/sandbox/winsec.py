@@ -4,7 +4,7 @@ Only the server side imports this; the runner package stays standard library and
 need to know who its server is beyond the SIDs it is handed.
 
 What is here, in the order a provider uses it:
-- `current_user_sid()`, `logon_sid()`: who we are.
+- `current_user_sid()`, `logon_sid()`: who we are (the desktop's descriptor names both).
 - `session_sid()`: a made-up SID for one sandbox. It is no account and never looked up; it is
   what the write-restricted token and the folder entries have in common.
 - `write_restricted_token(session)`: our own token, restricted so that a WRITE is allowed only
@@ -98,7 +98,6 @@ if sys.platform == "win32":
     _adv.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
     _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.ULONG)]
     _adv.GetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
-    _adv.CreateRestrictedToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(SID_AND_ATTRIBUTES), wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(SID_AND_ATTRIBUTES), ctypes.POINTER(wintypes.HANDLE)]
     _adv.CreateProcessAsUserW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p, ctypes.c_void_p, wintypes.BOOL, wintypes.DWORD, ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(STARTUPINFOW), ctypes.POINTER(PROCESS_INFORMATION)]
     _adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
     _adv.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
@@ -115,7 +114,6 @@ if sys.platform == "win32":
 _TOKEN_ALL_ACCESS = 0xF01FF
 _TOKEN_QUERY = 0x0008
 _TokenUser, _TokenDefaultDacl, _TokenLogonSid = 1, 6, 28
-_WRITE_RESTRICTED = 0x8
 _SDDL_REVISION_1 = 1
 _WINSTA_ALL_ACCESS = 0x37F
 _DESKTOP_ALL_ACCESS = 0x1FF | 0x000F0000
@@ -133,6 +131,7 @@ _GRANT_ACCESS, _REVOKE_ACCESS = 1, 4
 _CONTAINER_INHERIT_ACE, _OBJECT_INHERIT_ACE = 0x2, 0x1
 _FILE_GENERIC_MODIFY = 0x1301BF  # icacls "M": read, write, execute, delete
 _FILE_GENERIC_READ_EXECUTE = 0x1200A9  # icacls "RX"
+_FILE_TRAVERSE_ONLY = 0x20 | 0x80 | 0x100000  # FILE_TRAVERSE, FILE_READ_ATTRIBUTES, SYNCHRONIZE: icacls "(X,RA,S)"
 _LOGON_WITH_PROFILE = 0x1
 _INFINITE = 0xFFFFFFFF
 _WAIT_OBJECT_0 = 0
@@ -214,51 +213,12 @@ def logon_sid() -> str:
         token.close()
 
 
-def session_sid() -> str:
-    """A SID for one sandbox. Made up, unique, never an account. Windows accepts only its
-    own authorities as restricting SIDs (an app-capability SID `S-1-15-...` is refused), so
-    it has the shape of a domain account that no domain issues."""
-    return "S-1-5-21-%d-%d-%d-%d" % tuple(random.SystemRandom().randrange(1 << 20, 1 << 31) for _ in range(4))
-
-
 def _descriptor(sddl: str) -> ctypes.c_void_p:
     descriptor = ctypes.c_void_p()
     size = wintypes.ULONG()
     if not _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, _SDDL_REVISION_1, ctypes.byref(descriptor), ctypes.byref(size)):
         raise _fail(f"security descriptor from {sddl!r}")
     return descriptor
-
-
-class RestrictedToken:
-    """A write-restricted copy of our own token (see the module docstring)."""
-
-    def __init__(self, session: str, *, restrict_to: Sequence[str] = ()) -> None:
-        self.session = session
-        self._sids = [_Sid(s) for s in (session, logon_sid(), "S-1-1-0", *restrict_to)]  # S-1-1-0 = Everyone
-        own = _OwnToken(_TOKEN_ALL_ACCESS)
-        try:
-            restrict = (SID_AND_ATTRIBUTES * len(self._sids))()
-            for i, sid in enumerate(self._sids):
-                restrict[i].Sid = sid.pointer.value
-                restrict[i].Attributes = 0
-            self.handle = wintypes.HANDLE()
-            if not _adv.CreateRestrictedToken(own.handle, _WRITE_RESTRICTED, 0, None, 0, None, len(self._sids), restrict, ctypes.byref(self.handle)):
-                raise _fail("CreateRestrictedToken")
-        finally:
-            own.close()
-        # Objects the sandbox creates (its token, its processes, its pipes) get this DACL.
-        self._default = _descriptor(f"D:(A;;GA;;;{current_user_sid()})(A;;GA;;;{session})(A;;GA;;;SY)")
-        present, dacl, defaulted = wintypes.BOOL(), ctypes.c_void_p(), wintypes.BOOL()
-        if not _adv.GetSecurityDescriptorDacl(self._default, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)):
-            raise _fail("GetSecurityDescriptorDacl")
-        info = TOKEN_DEFAULT_DACL(dacl)
-        if not _adv.SetTokenInformation(self.handle, _TokenDefaultDacl, ctypes.byref(info), ctypes.sizeof(info)):
-            raise _fail("SetTokenInformation(TokenDefaultDacl)")
-
-    def close(self) -> None:
-        if self.handle:
-            _k32.CloseHandle(self.handle)
-            self.handle = wintypes.HANDLE()
 
 
 class Desktop:
@@ -334,62 +294,6 @@ class Process:
         if self._job:
             _k32.CloseHandle(self._job)  # kill-on-close: whatever is left in the job ends here
             self._job = None
-
-
-def spawn(
-    argv: Sequence[str],
-    *,
-    token: RestrictedToken,
-    desktop: Desktop,
-    cwd: str,
-    env: dict[str, str],
-    stderr_path: Optional[str] = None,
-) -> Process:
-    """Start `argv` under the token, on the desktop, in a job that ends with the Process.
-    A hidden console is created (the daemon's shells need one). stdin is closed; stdout
-    goes nowhere; stderr to `stderr_path` when given."""
-    import subprocess
-
-    job = _k32.CreateJobObjectW(None, None)
-    if not job:
-        raise _fail("CreateJobObject")
-    limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if not _k32.SetInformationJobObject(job, _JobObjectExtendedLimitInformation, ctypes.byref(limits), ctypes.sizeof(limits)):
-        raise _fail("SetInformationJobObject")
-
-    startup = STARTUPINFOW()
-    startup.cb = ctypes.sizeof(startup)
-    startup.lpDesktop = desktop.name
-    handles = []
-    try:
-        nul = os.open(os.devnull, os.O_RDWR)
-        handles.append(nul)
-        err_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC) if stderr_path else nul
-        if stderr_path:
-            handles.append(err_fd)
-        import msvcrt
-
-        startup.dwFlags = _STARTF_USESTDHANDLES
-        startup.hStdInput = msvcrt.get_osfhandle(nul)
-        startup.hStdOutput = msvcrt.get_osfhandle(nul)
-        startup.hStdError = msvcrt.get_osfhandle(err_fd)
-        for h in (startup.hStdInput, startup.hStdError):
-            _k32.SetHandleInformation(wintypes.HANDLE(h), 1, 1)  # HANDLE_FLAG_INHERIT
-        command = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
-        block = ctypes.create_unicode_buffer("".join(f"{k}={v}\0" for k, v in sorted(env.items())) + "\0")
-        info = PROCESS_INFORMATION()
-        flags = CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
-        if not _adv.CreateProcessAsUserW(token.handle, None, command, None, None, True, flags, block, cwd, ctypes.byref(startup), ctypes.byref(info)):
-            raise _fail("CreateProcessAsUser")
-    finally:
-        for fd in handles:
-            os.close(fd)
-    if not _k32.AssignProcessToJobObject(job, info.hProcess):
-        _k32.TerminateProcess(info.hProcess, 1)
-        raise _fail("AssignProcessToJobObject")
-    _k32.ResumeThread(info.hThread)
-    return Process(info, job)
 
 
 def spawn_as_account(
@@ -480,6 +384,15 @@ def grant_write(folder: str, sid_text: str, *, inherit: bool = True) -> None:
     _change_dacl(folder, sid_text, _GRANT_ACCESS, inherit=inherit)
 
 
+def grant_traverse(folder: str, sid_text: str) -> None:
+    """Pass through the folder without listing it (one non-inheritable entry: traverse,
+    read attributes, synchronize). Needed on every folder between a granted folder and the
+    profile root: PowerShell resolves a path by reading each parent's attributes, and
+    "bypass traverse checking" does not cover that, so without it a shell cannot enter
+    a granted folder under the person's profile (found 2026-09-28)."""
+    _change_dacl(folder, sid_text, _GRANT_ACCESS, _FILE_TRAVERSE_ONLY, inherit=False)
+
+
 def grant_read(folder: str, sid_text: str) -> None:
     """One inheritable Read-and-execute entry (icacls "RX") for the SID on the folder."""
     _change_dacl(folder, sid_text, _GRANT_ACCESS, _FILE_GENERIC_READ_EXECUTE)
@@ -509,8 +422,10 @@ def private_acl(path: str) -> None:
 
 
 def entries_for(folder: str, sid_text: str) -> bool:
-    """Whether the folder's own DACL still names the SID (for tests and clean-up checks)."""
+    """Whether the folder's own DACL still names the SID (for tests and clean-up checks).
+    `icacls /findsid` matches by SID, so a real account (which icacls would print by name)
+    is found the same way as a made-up one."""
     import subprocess
 
-    done = subprocess.run(["icacls", folder], capture_output=True, text=True)
-    return sid_text in done.stdout
+    done = subprocess.run(["icacls", folder, "/findsid", f"*{sid_text}"], capture_output=True, text=True)
+    return "SID Found" in done.stdout

@@ -1,9 +1,8 @@
 """`windows`: the tool runner on Windows, confined by Windows' own account boundary.
 
-Same runner, same protocol. Two modes, chosen by whether `openworker machine sandbox
-setup` has run (windows_setup.py):
-
-FULL (after setup): the daemon is logged on as a hidden local account
+Same runner, same protocol. The one-time setup (windows_setup.py) must have run; without
+it the provider refuses (ruling 18: an explicit choice that cannot be honoured refuses,
+it never runs open). The daemon is logged on as a hidden local account
 (CreateProcessWithLogonW, the secondary logon service; no privilege needed), chosen by the
 network profile: `OWSandboxClosedNet` for the allow-list profiles, `OWSandboxOpenNet` for
 `open` (ruling 3d.2). Windows keeps both out of the person's profile: `.ssh`, `.aws`,
@@ -17,13 +16,7 @@ session starts. The open account has no rules: any host, any local port, files s
 confined. Folders outside the profile (`C:\\work`) are readable by any local account by
 default (spike finding A); that is stated, not hidden (ruling 3d.5).
 
-SAME-USER (no setup): the daemon runs as the current user under a write-restricted token
-whose restricting SID is a made-up session SID; writes are allowed only where that SID has
-an entry (the session's writable folders, the private folder). Reads and the network are
-the user's own. Everyone-writable places (the drive root's "new folder", `C:\\Users\\Public`,
-`C:\\Windows\\Temp`) stay writable, as in every write-restricted sandbox.
-
-In both modes the entries are removed at close, every process the daemon starts inherits
+The entries are removed at close, every process the daemon starts inherits
 the confinement, and the daemon lives in a job object that ends with the sandbox.
 
 Learned on the VM (2026-09-22): the restricting list must hold the LOGON SID or no process
@@ -49,18 +42,12 @@ from typing import Any, Optional, Sequence
 from .. import credentials as creds
 from .. import netproxy, network_profiles
 from ..bundle import build_runner_zipapp
-from ..launch import runner_command, runner_dir, serve_arguments, spawn_kwargs, wait_for_runner
+from ..launch import runner_command, serve_arguments, spawn_kwargs, wait_for_runner
 from ..runner import winpipe
 from ..transport import PipeTransport, Transport
 from . import windows_setup
-from .seatbelt import _CACHE_VARIABLES, clean_environment
 
-FULL, PARTIAL = "full", "partial"
-_EVERYONE_WRITABLE = ("the drive root (new folders only)", r"C:\Users\Public", r"C:\Windows\Temp")
-_PARTIAL_REASON = (
-    "Windows write-restricted token (setup not run): writes limited to the session's folders; reads and the network are"
-    " NOT limited (run `openworker machine sandbox setup` for the full sandbox)"
-)
+FULL = "full"
 _FULL_REASON = (
     "Windows sandbox account: the user's profile (keys, documents, OpenWorker's state) is out of reach; files limited to"
     " the session's folders plus what any local account may read outside profiles"
@@ -72,20 +59,19 @@ class WindowsUnavailable(RuntimeError):
 
 
 def preflight() -> None:
+    """Usable here: Windows, this process can read its token, setup of this version has run
+    and this user can read the accounts' credentials. The message says what is missing."""
     if sys.platform != "win32":
         raise WindowsUnavailable("The Windows sandbox exists only on Windows.")
     from .. import winsec
 
     try:
         winsec.current_user_sid()
-        winsec.logon_sid()
     except OSError as exc:
         raise WindowsUnavailable(f"cannot read this process's token: {exc}") from None
-
-
-def mode() -> str:
-    """`full` when setup has run and this user can read the accounts' credentials."""
-    return FULL if windows_setup.account(windows_setup.OPEN) and windows_setup.account(windows_setup.CLOSED) else PARTIAL
+    problem = windows_setup.problem()
+    if problem:
+        raise WindowsUnavailable(problem)
 
 
 class WindowsProvider:
@@ -101,15 +87,10 @@ class WindowsProvider:
         runner_path: Optional[Path] = None,
         relay_silence_seconds: Optional[float] = None,
         credentials: Sequence[creds.Grant] = (),
-        force_mode: Optional[str] = None,
         tool_dirs: Sequence[str] = (),
     ) -> None:
         """`credentials`: the grants (credentials.granted) to copy into the sandbox.
-        `tool_dirs`: developer tool folders under the profile the account may read (the
-        full mode; the same-user mode reads them anyway). `force_mode`: tests only;
-        `partial` on a machine where setup has run."""
-        from .. import winsec
-
+        `tool_dirs`: developer tool folders under the profile the account may read."""
         self.roots = _clean_roots(roots)
         self.grants = list(credentials)
         self.tool_dirs = [os.path.realpath(p) for p in tool_dirs]
@@ -120,25 +101,22 @@ class WindowsProvider:
         self._runner = Path(runner_path) if runner_path is not None else build_runner_zipapp()
         self._relay_silence = relay_silence_seconds
         self.sandbox = f"sb-{uuid.uuid4().hex[:12]}"
-        self.mode = force_mode or mode()
+        preflight()
         self.open_network = network and network_profiles.is_open(self.profile)
         # The account is the network mode: closed (allow list through the proxy) or open.
         self.kind = windows_setup.OPEN if self.open_network else windows_setup.CLOSED
-        self._account = windows_setup.account(self.kind) if self.mode == FULL else None
-        if self.mode == FULL and self._account is None:
-            raise WindowsUnavailable("the full Windows sandbox needs `openworker machine sandbox setup` first (or again: the accounts changed)")
-        # Who the entries and the pipe name: the hidden account, or the made-up session SID.
-        self.session_sid = self._account[1] if self._account else winsec.session_sid()
-        if self.mode == FULL:
-            windows_setup.SANDBOXES.mkdir(parents=True, exist_ok=True)
-            windows_setup.reap_private_folders()  # what a server killed hard left behind
-            self._dir = tempfile.mkdtemp(prefix="owr-", dir=str(windows_setup.SANDBOXES))
-            self.socket_path = winpipe.pipe_name(os.path.basename(self._dir))
-        else:
-            self._dir, self.socket_path = runner_dir()
+        account = windows_setup.account(self.kind)
+        if account is None:
+            raise WindowsUnavailable(windows_setup.problem() or f"the {self.kind} sandbox account is not usable; run `openworker machine sandbox setup` again")
+        self._account = account
+        # The entries on the folders and the pipe's descriptor name the account.
+        self.session_sid = account[1]
+        windows_setup.SANDBOXES.mkdir(parents=True, exist_ok=True)
+        windows_setup.reap_private_folders()  # what a server killed hard left behind
+        self._dir = tempfile.mkdtemp(prefix="owr-", dir=str(windows_setup.SANDBOXES))
+        self.socket_path = winpipe.pipe_name(os.path.basename(self._dir))
         self._daemon: Any = None
         self._proxy: Optional[netproxy.AllowListProxy] = None
-        self._token: Any = None
         self._desktop: Any = None
         self._granted: list[tuple[str, str]] = []  # (folder, "write" | "read") entries that exist right now
         self._runner_inside: Path = self._runner  # where the sandbox sees the runner file
@@ -146,28 +124,18 @@ class WindowsProvider:
 
     # -- what it is ---------------------------------------------------------------------
     def describe(self) -> dict[str, Any]:
-        if self.mode == FULL:
-            if not self.network:
-                network = "blocked"
-            elif self.open_network:
-                network = "open (any host, any local port; the 'open' profile)"
-            else:
-                network = f"the '{self.profile}' profile through the allow-list proxy; the rest is blocked by the firewall and the loopback filters"
-            reason = f"{_FULL_REASON}. Network: {network}"
+        if not self.network:
+            network = "blocked"
+        elif self.open_network:
+            network = "open (any host, any local port; the 'open' profile)"
         else:
-            if not self.network:
-                network = "the user's own"
-            elif self.open_network:
-                network = "the user's own (the 'open' profile)"
-            else:
-                network = f"advisory: the '{self.profile}' profile through the proxy variables only"
-            reason = f"{_PARTIAL_REASON}. Network: {network}. Still writable by anyone: {', '.join(_EVERYONE_WRITABLE)}"
+            network = f"the '{self.profile}' profile through the allow-list proxy; the rest is blocked by the firewall and the loopback filters"
         return {
             "provider": self.name,
             "sandbox": self.sandbox,
-            "enforcement": FULL if self.mode == FULL else PARTIAL,
-            "mode": self.mode,
-            "reason": reason,
+            "enforcement": FULL,
+            "account": self._account[0],
+            "reason": f"{_FULL_REASON}. Network: {network}",
             "credentials": self.copied.describe() if self.copied is not None else [],
             "notes": list(self.notes),
         }
@@ -187,69 +155,35 @@ class WindowsProvider:
         hosts = sorted({h for g in self.grants for h in g.hosts})
         if self.network and not self.open_network:
             self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
-        for root in self.roots:
-            self._grant(root["path"], "write" if root["writable"] else "read")
-        self._grant(self._dir, "write")
-        if self.mode == FULL:
-            for folder in self.tool_dirs:  # readable to the account, never writable
-                if os.path.isdir(folder):
-                    self._grant(folder, "read")
+        for entry in self._wanted_entries():
+            self._grant(*entry)
         self._desktop = winsec.Desktop(self.session_sid)
         log = os.path.join(self._dir, "daemon.log")
-        if self.mode == FULL:
-            assert self._account is not None
-            name, sid, password = self._account
-            # The runner file lives in the user's state folder, which the account cannot see.
-            self._runner_inside = Path(self._dir) / self._runner.name
-            shutil.copy2(self._runner, self._runner_inside)
-            # The environment goes through a file in the private folder (the account reads
-            # it): CreateProcessWithLogonW allows 1024 characters of command line, and PATH
-            # alone can be longer than that.
-            import json
+        name, sid, password = self._account
+        # The runner file lives in the user's state folder, which the account cannot see.
+        self._runner_inside = Path(self._dir) / self._runner.name
+        shutil.copy2(self._runner, self._runner_inside)
+        # The environment goes through a file in the private folder (the account reads it):
+        # CreateProcessWithLogonW allows 1024 characters of command line, and PATH alone can
+        # be longer than that.
+        import json
 
-            env_file = os.path.join(self._dir, "env.json")
-            Path(env_file).write_text(json.dumps(self._environment(full=True)), encoding="utf-8")
-            serve = serve_arguments(self.socket_path, self._dir, also_sids=[sid])
-            argv = [*runner_command(self._runner_inside), "serve", *serve, "--env-file", env_file, "--cwd", self.cwd, "--exit-with-parent"]
-            self._daemon = winsec.spawn_as_account(argv, account=name, password=password, desktop=self._desktop, cwd=self.cwd, stderr_path=log)
-        else:
-            self._runner_inside = self._runner
-            env = self._environment(full=False)
-            # Same user: Windows OpenSSH does its work under a write-restricted token but
-            # never exits, and git's MSYS shell cannot start at all (no signal pipe), so an
-            # ssh grant cannot be honoured here; the agent is told. The other grants are
-            # files plus environment variables and work.
-            usable = [g for g in self.grants if g.name != "ssh"]
-            if len(usable) != len(self.grants):
-                self.notes.append("The shared SSH key is not available in this sandbox: on Windows it needs the full sandbox (`openworker machine sandbox setup`).")
-            if usable:
-                self.copied = creds.copy_in(usable, self._dir, proxy_port=self._proxy.port if self._proxy else None)
-                winsec.private_acl(self.copied.home)  # the copy is this user's alone
-                env.update(self.copied.env)
-            self._token = winsec.RestrictedToken(self.session_sid)
-            serve = serve_arguments(self.socket_path, self._dir, also_sids=[self.session_sid])
-            argv = [*runner_command(self._runner), "serve", *serve, "--cwd", self.cwd, "--exit-with-parent"]
-            self._daemon = winsec.spawn(argv, token=self._token, desktop=self._desktop, cwd=self.cwd, env=env, stderr_path=log)
+        env_file = os.path.join(self._dir, "env.json")
+        Path(env_file).write_text(json.dumps(self._environment()), encoding="utf-8")
+        serve = serve_arguments(self.socket_path, self._dir, also_sids=[sid])
+        argv = [*runner_command(self._runner_inside), "serve", *serve, "--env-file", env_file, "--cwd", self.cwd, "--exit-with-parent"]
+        self._daemon = winsec.spawn_as_account(argv, account=name, password=password, desktop=self._desktop, cwd=self.cwd, stderr_path=log)
         try:
             wait_for_runner(self.socket_path, self._daemon)
         except RuntimeError as exc:
             said = Path(log).read_text(errors="replace").strip() if os.path.exists(log) else ""
             raise WindowsUnavailable(f"the sandboxed tool runner did not start: {exc} {said[-400:]}".strip()) from None
 
-    def _environment(self, *, full: bool) -> dict[str, str]:
-        """Same-user mode: the server's environment without secrets, temp and caches moved
-        into the private folder. Full mode: only what the account's own environment lacks
-        (the proxy), because the account has a profile, temp and caches of its own."""
-        env: dict[str, str] = {} if full else clean_environment()
-        if full:
-            # The account's own PATH knows nothing of the person's tools; the person's does.
-            env["PATH"] = os.environ.get("PATH", "")
-        if not full:
-            temp = os.path.join(self._dir, "tmp")
-            os.makedirs(temp, exist_ok=True)
-            env["TEMP"] = env["TMP"] = temp
-            for name, folder in _CACHE_VARIABLES.items():
-                env[name] = os.path.join(self._dir, "cache", folder)
+    def _environment(self) -> dict[str, str]:
+        """Only what the account's own environment lacks: the person's PATH (the account's
+        knows nothing of their tools) and the proxy. The account has a profile, temp and
+        caches of its own."""
+        env: dict[str, str] = {"PATH": os.environ.get("PATH", "")}
         if self._proxy is not None:
             env.update(netproxy.environment(self._proxy))
         return env
@@ -262,12 +196,10 @@ class WindowsProvider:
     _CLEARED = (".ssh", ".config/gh", ".aws", ".kube", "bin")
 
     def provision(self, client: Any) -> None:
-        """Full mode: the copies of granted credentials go into the ACCOUNT's own profile,
-        written by the daemon so that the account owns them (Windows OpenSSH refuses a key
-        file owned by someone else). Whatever an earlier sandbox left there is removed
-        first; the daemon removes them again when it leaves."""
-        if self.mode != FULL:
-            return
+        """The copies of granted credentials go into the ACCOUNT's own profile, written by
+        the daemon so that the account owns them (Windows OpenSSH refuses a key file owned
+        by someone else). Whatever an earlier sandbox left there is removed first; the
+        daemon removes them again when it leaves."""
         from ..runner.protocol import RunnerError
 
         home_inside = str(client.hello.get("home") or "")
@@ -305,8 +237,8 @@ class WindowsProvider:
         )
 
     def verify(self, client: Any) -> None:
-        """Every folder is reachable inside, and the wall is really up. Full mode: the
-        user's profile cannot be listed. Same-user mode: a file cannot be written into it."""
+        """Every folder is reachable inside, and the wall is really up: the user's profile
+        cannot be listed, and in the closed mode no local port but the proxy's is reachable."""
         from ..runner.protocol import RunnerError
 
         for root in self.roots:
@@ -314,23 +246,12 @@ class WindowsProvider:
         home = os.path.realpath(os.path.expanduser("~"))
         if any(home == r["path"] or home.startswith(r["path"] + os.sep) for r in self.roots):
             return  # the user granted the home folder itself; nothing to prove
-        if self.mode == FULL:
-            try:
-                client.call("fs.list", {"path": home, "limit": 1}, timeout=15)
-            except RunnerError:
-                self._verify_loopback(client)
-                return
-            raise WindowsUnavailable("the sandbox did not take effect: the home folder can be listed from inside")
-        probe = os.path.join(home, f"owr-verify-{uuid.uuid4().hex[:8]}.txt")
         try:
-            client.call("fs.write", {"path": probe, "text": "probe\n"}, timeout=15)
+            client.call("fs.list", {"path": home, "limit": 1}, timeout=15)
         except RunnerError:
+            self._verify_loopback(client)
             return
-        try:
-            os.remove(probe)
-        except OSError:
-            pass
-        raise WindowsUnavailable("the sandbox did not take effect: a file could be written into the home folder from inside")
+        raise WindowsUnavailable("the sandbox did not take effect: the home folder can be listed from inside")
 
     def _verify_loopback(self, client: Any) -> None:
         """The closed account may reach the proxy on loopback and nothing else there
@@ -360,10 +281,28 @@ class WindowsProvider:
             raise WindowsUnavailable(f"the sandbox cannot reach the allow-list proxy on port {self._proxy.port}: {via.get('error')}")
 
     # -- the entries ----------------------------------------------------------------------
+    def _wanted_entries(self) -> list[tuple[str, str]]:
+        """Every entry this sandbox needs right now: Modify on writable roots and the
+        private folder, Read on read-only roots and the tool folders, and Traverse (no
+        listing) on each folder between a granted folder and the profile root, so a shell
+        can enter a folder under the profile. The profile itself stays unlistable."""
+        wanted = [(r["path"], "write" if r["writable"] else "read") for r in self.roots] + [(self._dir, "write")]
+        wanted += [(folder, "read") for folder in self.tool_dirs if os.path.isdir(folder)]
+        home = os.path.realpath(os.path.expanduser("~"))
+        for folder, _kind in list(wanted):
+            parent = os.path.dirname(folder)
+            while parent.lower().startswith(home.lower()) and len(parent) >= len(home):
+                if (parent, "traverse") not in wanted and not any(f.lower() == parent.lower() and k != "traverse" for f, k in wanted):
+                    wanted.append((parent, "traverse"))
+                if parent.lower() == home.lower():
+                    break
+                parent = os.path.dirname(parent)
+        return wanted
+
     def _grant(self, folder: str, kind: str) -> None:
         from .. import winsec
 
-        (winsec.grant_write if kind == "write" else winsec.grant_read)(folder, self.session_sid)
+        {"write": winsec.grant_write, "read": winsec.grant_read, "traverse": winsec.grant_traverse}[kind](folder, self.session_sid)
         self._granted.append((folder, kind))
 
     def _revoke(self, folder: str, kind: str) -> None:
@@ -383,9 +322,7 @@ class WindowsProvider:
         so the entries move and the daemon stays: a new folder is usable at once, a removed
         one is closed at once."""
         self.roots = _clean_roots(roots)
-        wanted = [(r["path"], "write" if r["writable"] else "read") for r in self.roots] + [(self._dir, "write")]
-        if self.mode == FULL:
-            wanted += [(folder, "read") for folder in self.tool_dirs if os.path.isdir(folder)]
+        wanted = self._wanted_entries()
         for entry in list(self._granted):
             if entry not in wanted:
                 self._revoke(*entry)
@@ -419,10 +356,9 @@ class WindowsProvider:
         self._stop_daemon()
         for entry in list(self._granted):
             self._revoke(*entry)
-        for thing in (self._token, self._desktop):
-            if thing is not None:
-                thing.close()
-        self._token = self._desktop = None
+        if self._desktop is not None:
+            self._desktop.close()
+        self._desktop = None
         if self._proxy is not None and self._proxy is not netproxy._proxies.get(self.profile):
             self._proxy.close()  # this session's own proxy; the shared one stays
         self._proxy = None

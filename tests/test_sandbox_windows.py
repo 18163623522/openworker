@@ -1,9 +1,9 @@
 """The Windows sandbox provider (design doc `sandbox-windows-design.md`, section 7).
 
-Live tests, Windows only. The same-user mode needs nothing; the full mode needs setup to
-have run on the machine (`openworker machine sandbox setup`) and skips otherwise. Setup
-itself is only exercised with OPENWORKER_TEST_WINDOWS_SETUP=1, because it changes the
-machine (an account, a firewall rule, a folder under ProgramData).
+Live tests, Windows only. They need setup to have run on the machine (`openworker machine
+sandbox setup`) and skip otherwise; there is no weaker mode. Setup itself is only exercised
+with OPENWORKER_TEST_WINDOWS_SETUP=1, because it changes the machine (two accounts, a
+firewall rule, loopback filters, a folder under ProgramData).
 """
 
 from __future__ import annotations
@@ -27,10 +27,9 @@ def _has_setup() -> bool:
     return windows_setup.account("open") is not None and windows_setup.account("closed") is not None
 
 
-full = pytest.mark.skipif(not _has_setup(), reason="needs `openworker machine sandbox setup` on this machine")
 
 
-def _open(tmp_path, *, mode, extra_roots=(), network=False, profile="strict"):
+def _open(tmp_path, *, extra_roots=(), network=False, profile="strict"):
     from coworker.sandbox.providers.windows import WindowsProvider
 
     project = tmp_path / "project"
@@ -38,78 +37,71 @@ def _open(tmp_path, *, mode, extra_roots=(), network=False, profile="strict"):
     (project / "a.txt").write_text("hello\n")
     zipapp = build_runner_zipapp(tmp_path / "dist")
     roots = [{"path": str(project), "writable": True}, *extra_roots]
-    provider = WindowsProvider(roots=roots, cwd=project, runner_path=zipapp, network=network, profile=profile, force_mode=mode)
+    provider = WindowsProvider(roots=roots, cwd=project, runner_path=zipapp, network=network, profile=profile)
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 60
     return ws, provider, project
 
 
-@pytest.fixture
-def sandbox(tmp_path):
-    ws, provider, project = _open(tmp_path, mode="partial")
-    yield ws, provider, project
-    ws.close()
+full = pytest.mark.skipif(not _has_setup(), reason="needs `openworker machine sandbox setup` on this machine")
 
 
-# -- same-user mode ------------------------------------------------------------------------
-
-
-def test_writes_are_limited_to_the_sessions_folders(sandbox, tmp_path):
-    ws, provider, project = sandbox
-    assert ws.describe()["mode"] == "partial"
-    inside = ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")
-    assert inside["exit_code"] == 0 and "made" in inside["output"]
-    beside = ws.executor.run(f"Set-Content -Path '{tmp_path / 'beside.txt'}' -Value x")  # the parent, never granted
-    assert beside["exit_code"] != 0 and not (tmp_path / "beside.txt").exists()
-    home = ws.executor.run("Set-Content -Path (Join-Path $env:USERPROFILE 'owr-probe.txt') -Value x")
-    assert home["exit_code"] != 0 and not os.path.exists(os.path.expanduser("~/owr-probe.txt"))
-    # Reads are the user's reads in this mode, and the statement says so.
-    assert ws.executor.run(f"(Get-ChildItem '{tmp_path}').Count")["exit_code"] == 0
-    assert "reads and the network are NOT limited" in ws.describe()["reason"]
-
-
-def test_the_entries_come_and_go_with_the_sandbox(sandbox, tmp_path):
+@full
+def test_writes_are_limited_to_the_sessions_folders_and_the_entries_come_and_go(tmp_path):
     from coworker.sandbox import winsec
 
-    ws, provider, project = sandbox
-    assert winsec.entries_for(str(project), provider.session_sid)
-    assert not winsec.entries_for(str(tmp_path), provider.session_sid)
-    ws.close()
-    assert not winsec.entries_for(str(project), provider.session_sid)
+    ws, provider, project = _open(tmp_path)
+    try:
+        inside = ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")
+        assert inside["exit_code"] == 0 and "made" in inside["output"]
+        beside = ws.executor.run(f"Set-Content -Path '{tmp_path / 'beside.txt'}' -Value x")  # the parent, never granted
+        assert beside["exit_code"] != 0 and not (tmp_path / "beside.txt").exists()
+        assert winsec.entries_for(str(project), provider.session_sid)
+        assert winsec.entries_for(str(tmp_path), provider.session_sid)  # traverse only: the write above was refused
+        assert winsec.entries_for(os.path.expanduser("~"), provider.session_sid)
+    finally:
+        ws.close()
+    for folder in (str(project), str(tmp_path), os.path.expanduser("~")):
+        assert not winsec.entries_for(folder, provider.session_sid), folder
     assert not os.path.exists(provider._dir)
 
 
-def test_a_new_folder_is_usable_without_a_restart(sandbox, tmp_path):
-    ws, provider, project = sandbox
-    extra = tmp_path / "extra"
-    extra.mkdir()
-    before = ws.client.instance_id
-    assert ws.executor.run(f"Set-Content -Path '{extra / 'x.txt'}' -Value x")["exit_code"] != 0
-    provider.regrant([{"path": str(project), "writable": True}, {"path": str(extra), "writable": True}])
-    assert ws.executor.run(f"Set-Content -Path '{extra / 'x.txt'}' -Value x")["exit_code"] == 0
-    assert ws.client.instance_id == before  # the same daemon, the same shells
-    provider.regrant([{"path": str(project), "writable": True}])
-    assert ws.executor.run(f"Set-Content -Path '{extra / 'y.txt'}' -Value x")["exit_code"] != 0
+@full
+def test_a_new_folder_is_usable_without_a_restart(tmp_path):
+    ws, provider, project = _open(tmp_path)
+    try:
+        extra = tmp_path / "extra"
+        extra.mkdir()
+        before = ws.client.instance_id
+        assert ws.executor.run(f"Set-Content -Path '{extra / 'x.txt'}' -Value x")["exit_code"] != 0
+        provider.regrant([{"path": str(project), "writable": True}, {"path": str(extra), "writable": True}])
+        assert ws.executor.run(f"Set-Content -Path '{extra / 'x.txt'}' -Value x")["exit_code"] == 0
+        assert ws.client.instance_id == before  # the same daemon, the same shells
+        provider.regrant([{"path": str(project), "writable": True}])
+        assert ws.executor.run(f"Set-Content -Path '{extra / 'y.txt'}' -Value x")["exit_code"] != 0
+    finally:
+        ws.close()
 
 
+@full
 def test_a_session_workspace_goes_through_the_registry(tmp_path, monkeypatch):
     from coworker.sandbox.registry import SandboxRegistry
     from coworker.sandbox.workspace import open_workspace
 
     monkeypatch.setenv("OPENWORKER_SANDBOX_PROVIDER", "windows")
-    expected = "full" if _has_setup() else "partial"  # the default rule: full mode once setup has run
     ws = open_workspace(cwd=tmp_path, session_id="s-win", agent="cowork")
     try:
-        assert ws.describe()["provider"] == "windows" and ws.describe()["enforcement"] == expected
+        assert ws.describe()["provider"] == "windows" and ws.describe()["enforcement"] == "full"
         assert ws.executor.run("echo via-sandbox")["output"].strip() == "via-sandbox"
         rows = SandboxRegistry().list()
-        assert [r["session_id"] for r in rows] == ["s-win"] and rows[0]["enforcement"] == expected
+        assert [r["session_id"] for r in rows] == ["s-win"] and rows[0]["enforcement"] == "full"
         assert rows[0]["profile"] == "open"  # the Windows default
     finally:
         ws.close()
     assert SandboxRegistry().list() == []
 
 
+@full
 def test_the_provider_is_known_to_selection_and_settings(monkeypatch, tmp_path):
     from coworker.sandbox import selection, settings
 
@@ -152,7 +144,7 @@ def test_a_granted_ssh_key_reaches_github_through_the_proxy(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     zipapp = build_runner_zipapp(tmp_path / "dist")
-    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True, credentials=grants, force_mode="full")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True, credentials=grants)
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 90
     try:
@@ -165,32 +157,6 @@ def test_a_granted_ssh_key_reaches_github_through_the_proxy(tmp_path):
         assert inside.lower().startswith(r"c:\users\owsandboxclosednet")
     finally:
         ws.close()
-
-
-def test_the_same_user_mode_refuses_an_ssh_grant_and_says_so(tmp_path):
-    """Windows OpenSSH does not exit under a write-restricted token and git's MSYS shell
-    cannot start there, so the same-user mode keeps the other grants and tells the agent."""
-    from coworker.sandbox import credentials as creds
-    from coworker.sandbox.providers.windows import WindowsProvider
-
-    home = _fake_home(tmp_path)
-    (home / ".config" / "gh").mkdir(parents=True)
-    (home / ".config" / "gh" / "hosts.yml").write_text("github.com:\n  oauth_token: gho_x\n")
-    grants = creds.granted([{"name": "ssh", "enabled": True}, {"name": "gh", "enabled": True}], home=str(home))
-    project = tmp_path / "project"
-    project.mkdir()
-    zipapp = build_runner_zipapp(tmp_path / "dist")
-    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, credentials=grants, force_mode="partial")
-    ws = RunnerWorkspace(provider, cwd=project)
-    ws.executor.default_timeout = 60
-    try:
-        assert [c["name"] for c in ws.describe()["credentials"]] == ["gh"]
-        assert "needs the full sandbox" in ws.context()
-        assert "gho_x" in ws.executor.run("Get-Content (Join-Path $env:GH_CONFIG_DIR 'hosts.yml')")["output"]
-        assert ws.executor.run("Test-Path (Join-Path $env:HOME '.ssh')")["output"].strip() == "False"
-    finally:
-        ws.close()
-    assert not os.path.exists(provider._dir)  # the copy went with the private folder
 
 
 @full
@@ -206,7 +172,7 @@ def test_full_mode_removes_the_copies_when_the_sandbox_ends(tmp_path):
     zipapp = build_runner_zipapp(tmp_path / "dist")
 
     def open_one(with_grants):
-        provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, credentials=grants if with_grants else (), force_mode="full")
+        provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, credentials=grants if with_grants else ())
         ws = RunnerWorkspace(provider, cwd=project)
         ws.executor.default_timeout = 60
         return ws
@@ -224,6 +190,22 @@ def test_full_mode_removes_the_copies_when_the_sandbox_ends(tmp_path):
 
 
 # -- setup and the full mode ---------------------------------------------------------------
+
+
+def test_without_setup_the_provider_refuses_and_settings_say_why(monkeypatch, tmp_path):
+    """No weaker mode: an explicit choice that cannot be honoured refuses (ruling 18)."""
+    from coworker.sandbox import selection, settings
+    from coworker.sandbox.providers import windows, windows_setup
+
+    monkeypatch.setattr(windows_setup, "state", lambda: None)
+    with pytest.raises(windows.WindowsUnavailable, match="setup has not run"):
+        windows.WindowsProvider(roots=[{"path": str(tmp_path), "writable": True}], cwd=tmp_path, runner_path=tmp_path / "r.pyz")
+    monkeypatch.setenv("OPENWORKER_SANDBOX_PROVIDER", "windows")
+    with pytest.raises(windows.WindowsUnavailable, match="no session will start"):
+        selection.select()
+    monkeypatch.delenv("OPENWORKER_SANDBOX_PROVIDER")
+    row = next(p for p in settings.snapshot()["providers"] if p["name"] == "windows")
+    assert not row["usable"] and "setup has not run" in row["why"]
 
 
 @pytest.mark.skipif(os.environ.get("OPENWORKER_TEST_WINDOWS_SETUP") != "1", reason="changes the machine; OPENWORKER_TEST_WINDOWS_SETUP=1 to run")
@@ -254,12 +236,17 @@ def test_full_mode_hides_the_profile_and_gives_the_sessions_folders(tmp_path):
     reference = tmp_path / "reference"
     reference.mkdir()
     (reference / "ref.txt").write_text("read me\n")
-    ws, provider, project = _open(tmp_path, mode="full", extra_roots=[{"path": str(reference), "writable": False}])
+    ws, provider, project = _open(tmp_path, extra_roots=[{"path": str(reference), "writable": False}])
     try:
-        assert ws.describe()["mode"] == "full"
+        assert ws.describe()["enforcement"] == "full" and ws.describe()["account"] == "OWSandboxClosedNet"
         who = ws.executor.run("$env:USERNAME")["output"].strip()
         assert who.lower() == "owsandboxclosednet"
-        assert "made" in ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")["output"]
+        # the project sits under the person's profile: the shell can enter it (traverse
+        # entries on the parents), write there, and still not list the parents
+        assert ws.executor.run("(Get-Location).Path")["output"].strip().lower() == str(project).lower()
+        made = ws.executor.run("Set-Content -Path new.txt -Value made; Get-Content new.txt")
+        assert made["exit_code"] == 0 and made["output"].strip() == "made", made
+        assert ws.executor.run(f"Get-ChildItem '{tmp_path}'")["exit_code"] != 0
         assert "read me" in ws.executor.run(f"Get-Content '{reference / 'ref.txt'}'")["output"]
         assert ws.executor.run(f"Set-Content -Path '{reference / 'no.txt'}' -Value x")["exit_code"] != 0
         assert ws.executor.run("Get-ChildItem $env:USERPROFILE\\..\\Administrator")["exit_code"] != 0  # another account's profile
@@ -272,6 +259,8 @@ def test_full_mode_hides_the_profile_and_gives_the_sessions_folders(tmp_path):
 
     assert not winsec.entries_for(str(project), provider.session_sid)
     assert not winsec.entries_for(str(reference), provider.session_sid)
+    assert not winsec.entries_for(str(tmp_path), provider.session_sid)  # the traverse entry is gone too
+    assert not winsec.entries_for(os.path.expanduser("~"), provider.session_sid)
     assert not os.path.exists(provider._dir)
 
 
@@ -282,7 +271,7 @@ def test_full_mode_blocks_the_network_except_the_proxy(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     zipapp = build_runner_zipapp(tmp_path / "dist")
-    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True, force_mode="full")
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=True)
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 90
     # curl.exe (shipped with Windows) follows the proxy variables; PowerShell 5's
@@ -316,7 +305,7 @@ def test_a_stale_private_folder_is_reaped_when_the_next_sandbox_starts(tmp_path)
     stale = windows_setup.SANDBOXES / "owr-stale0000"
     stale.mkdir(parents=True, exist_ok=True)
     (stale / "daemon.log").write_text("left behind\n")
-    ws, provider, project = _open(tmp_path, mode="full")
+    ws, provider, project = _open(tmp_path)
     try:
         assert not stale.exists()  # gone: no daemon listens on its pipe
         assert os.path.isdir(provider._dir)  # the live one stays
@@ -336,7 +325,7 @@ def test_full_mode_reads_the_toolchain_folders_it_is_given(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     zipapp = build_runner_zipapp(tmp_path / "dist")
-    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, force_mode="full", tool_dirs=[str(tools)])
+    provider = WindowsProvider(roots=[{"path": str(project), "writable": True}], cwd=project, runner_path=zipapp, network=False, tool_dirs=[str(tools)])
     ws = RunnerWorkspace(provider, cwd=project)
     ws.executor.default_timeout = 60
     try:
@@ -353,7 +342,7 @@ def test_full_mode_reads_the_toolchain_folders_it_is_given(tmp_path):
 
 @full
 def test_the_open_profile_runs_as_the_open_account_with_the_network_open(tmp_path):
-    ws, provider, project = _open(tmp_path, mode="full", network=True, profile="open")
+    ws, provider, project = _open(tmp_path, network=True, profile="open")
     ws.executor.default_timeout = 90
     try:
         assert provider.kind == "open" and provider._proxy is None
