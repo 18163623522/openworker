@@ -1073,12 +1073,14 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
           </details>
 
           <details className={CARD + " mb-4"} data-testid="sandbox-credentials-section">
-            <summary className="px-4 py-3 cursor-pointer text-ui text-ink flex items-center">
+            <summary className="px-4 py-3 cursor-pointer text-ui text-ink flex items-center list-none [&::-webkit-details-marker]:hidden">
+              <span className="inline-block w-4 text-muted [details[open]>summary>&]:rotate-90 transition-transform" aria-hidden>▸</span>
               <span>{t("settingsx.sandbox.credentials")}</span>
               <button
                 className="ml-auto text-ui text-accent"
                 onClick={(e) => {
                   e.preventDefault();
+                  (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.setAttribute("open", "");
                   setEditing("");
                 }}
                 data-testid="sandbox-credential-add"
@@ -1118,24 +1120,25 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
             </div>
             <div className={FIELD_HELP + " px-4"}>{t("settingsx.sandbox.credentials_help")}</div>
             {cfg.platform === "darwin" ? <div className={FIELD_HELP + " px-4"}>{t("settingsx.sandbox.keychain_note")}</div> : null}
+            {editing !== null ? (
+              <div className="px-4 pt-3">
+                <CredentialEditor
+                  entry={editing ? cfg.credentials.find((c) => c.name === editing) ?? null : null}
+                  onCancel={() => setEditing(null)}
+                  onSave={(row) => {
+                    const rows = editing ? cfg.credentials.map((x) => (x.name === editing ? row : x)) : [...cfg.credentials, row];
+                    setEditing(null);
+                    updateCredentials(rows);
+                  }}
+                />
+              </div>
+            ) : null}
             <div className="pb-3" />
           </details>
         </>
       ) : null}
 
       {enabled ? <div className={FIELD_HELP + " mt-3"}>{t("settingsx.sandbox.saved_in", { path: cfg.config_path })}</div> : null}
-
-      {editing !== null ? (
-        <CredentialEditor
-          entry={editing ? cfg.credentials.find((c) => c.name === editing) ?? null : null}
-          onCancel={() => setEditing(null)}
-          onSave={(row) => {
-            const rows = editing ? cfg.credentials.map((x) => (x.name === editing ? row : x)) : [...cfg.credentials, row];
-            setEditing(null);
-            updateCredentials(rows);
-          }}
-        />
-      ) : null}
     </section>
   );
 }
@@ -1152,13 +1155,13 @@ function CredentialEditor({
   const { t } = useTranslation();
   const [title, setTitle] = useState(entry?.title ?? "");
   const [name, setName] = useState(entry?.name ?? "");
-  const [path, setPath] = useState(entry?.path ?? "~/");
+  const [path, setPath] = useState(entry?.path ?? "");
   const [hosts, setHosts] = useState((entry?.hosts ?? []).join("\n"));
   const [does, setDoes] = useState(entry?.does ?? "");
   const slug = entry?.name || name || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const valid = Boolean(slug) && (path.startsWith("~/") || path.startsWith("/"));
   return (
-    <div className={CARD + " p-4 mt-3"} data-testid="sandbox-credential-editor">
+    <div className={CARD + " p-4"} data-testid="sandbox-credential-editor">
       <div className="text-ui text-ink mb-1">{entry ? t("settingsx.sandbox.editor_title_edit") : t("settingsx.sandbox.editor_title_add")}</div>
       <div className={FIELD_HELP + " mb-3"}>{t("settingsx.sandbox.editor_help")}</div>
       <div className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-2 items-center">
