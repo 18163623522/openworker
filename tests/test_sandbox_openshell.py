@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import subprocess
 import threading
 import time
@@ -235,7 +236,9 @@ def test_the_private_folder_is_visible_to_the_gateway_and_to_no_sandbox(tmp_path
     private = Path(provider._tmp)
     assert private.parent == tmp_path / openshell.RUNTIME_DIR_NAME
     assert not str(private).startswith(str(tmp_path / "sandbox") + os.sep)  # not inside the mounted folder
-    assert not str(private).startswith("/tmp")
+    # Not in the system temp dir itself (the old place). The state dir under test may well
+    # live under /tmp (pytest's default basetemp on CI), so compare parents, not prefixes.
+    assert private.parent != Path(tempfile.gettempdir()).resolve() and private.parent.name == openshell.RUNTIME_DIR_NAME
     assert private.name.startswith(f"ow-openshell-{os.getpid()}-")
     if os.name != "nt":
         assert (private.parent.stat().st_mode & 0o777) == 0o700
