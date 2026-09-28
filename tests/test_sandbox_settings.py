@@ -100,3 +100,53 @@ def test_an_explicit_provider_that_cannot_be_used_shows_as_refused(config_file, 
     assert not next(p for p in snap["providers"] if p["name"] == "openshell")["usable"]
     with pytest.raises(OpenShellUnavailable):
         selection.select("openshell")
+
+
+def test_changing_the_provider_rebuilds_live_engines_built_under_the_old_rule(tmp_path, monkeypatch):
+    """Seen 2026-09-28 on WSL: sessions opened before the switch kept running direct while
+    the page said sessions were refused. A provider change now drops idle engines built
+    under another provider (a running one is rebuilt when its turn ends) and the response
+    names them, so the app reconnects the one on screen."""
+    from fastapi.testclient import TestClient
+
+    from coworker.sandbox import settings as sandbox_settings
+    from coworker.server import create_app
+    from tests.test_persona_connections import _mgr
+
+    monkeypatch.setattr(sandbox_settings, "openshell_problem", lambda fresh=False: "OpenShell is not installed", raising=False)
+    from coworker.sandbox import selection
+
+    monkeypatch.setattr(selection, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    mgr = _mgr(tmp_path, monkeypatch)
+
+    class Direct:
+        def describe(self):
+            return {"provider": "direct", "enforcement": "none"}
+
+    class Boxed:
+        def describe(self):
+            return {"provider": "openshell", "enforcement": "full"}
+
+    class Engine:
+        def __init__(self, ws):
+            self.sandbox_workspace = ws
+
+    closed: list[str] = []
+    mgr._engines.update({"direct-idle": Engine(Direct()), "direct-busy": Engine(Direct()), "boxed": Engine(Boxed())})
+    monkeypatch.setattr(mgr, "_close_sandbox", lambda engine: closed.append(type(engine.sandbox_workspace).__name__))
+    mgr.mark_running("direct-busy")
+    client = TestClient(create_app(mgr))
+    res = client.post("/v1/settings/sandbox", json={"provider": "openshell"}).json()
+    assert res["ok"] and sorted(res["rebuilt_sessions"]) == ["direct-busy", "direct-idle"]
+    assert "direct-idle" not in mgr._engines  # dropped now: its next connection is rebuilt (here: refused)
+    assert "direct-busy" in mgr._engines  # mid-turn: kept until the turn ends
+    assert "boxed" in mgr._engines  # already under the new rule
+    mgr.mark_idle("direct-busy")
+    assert "direct-busy" not in mgr._engines
+    # Switching off: the boxed engine is the odd one out now, and its sandbox is closed.
+    res = client.post("/v1/settings/sandbox", json={"provider": ""}).json()
+    assert res["ok"] and res["rebuilt_sessions"] == ["boxed"] and closed[-1] == "Boxed"
+    # A save that does not touch the provider rebuilds nothing.
+    mgr._engines["d"] = Engine(Direct())
+    res = client.post("/v1/settings/sandbox", json={"network_profile": "strict"}).json()
+    assert res["ok"] and "rebuilt_sessions" not in res and "d" in mgr._engines

@@ -2403,7 +2403,12 @@ def create_app(manager: SessionManager) -> FastAPI:
     def settings_set_sandbox(body: dict) -> dict[str, Any]:
         from ..sandbox import settings as sandbox_settings
 
-        return sandbox_settings.update(body or {})
+        result = sandbox_settings.update(body or {})
+        if result.get("ok") and "provider" in (body or {}):
+            # Live sessions built under the old rule are rebuilt on their next connection;
+            # the app reconnects the one on screen (see App.tsx, onSandboxProviderChanged).
+            result["rebuilt_sessions"] = manager.apply_sandbox_setting()
+        return result
 
     @app.get("/v1/settings/sandbox/readiness")
     async def settings_sandbox_readiness() -> dict[str, Any]:

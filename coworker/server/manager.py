@@ -698,12 +698,9 @@ class SessionManager:
             return record.workspace or None
         return self.resolve_workspace(workspace)
 
-    def pending_sandbox_build(self, session_id: str) -> str:
-        """The sandbox provider a NEW engine for this session would be built with, or ""
-        when the engine exists already or commands would run directly. Reads the config
-        only, no preflight: it is asked on the event loop, before the build (OPE-206)."""
-        if session_id in self._engines:
-            return ""
+    def _wanted_sandbox_provider(self) -> str:
+        """The provider a NEW engine would be built with right now, or "" for direct.
+        Reads the config only, no preflight: it is asked on the event loop."""
         from ..sandbox.selection import is_headless
         from ..sandbox.workspace import DIRECT, OPENSHELL, PROVIDER_ENV
 
@@ -711,6 +708,32 @@ class SessionManager:
         if chosen:
             return "" if chosen == DIRECT else chosen
         return OPENSHELL if is_headless() else ""
+
+    def pending_sandbox_build(self, session_id: str) -> str:
+        """The sandbox provider a NEW engine for this session would be built with, or ""
+        when the engine exists already or commands would run directly (OPE-206)."""
+        if session_id in self._engines:
+            return ""
+        return self._wanted_sandbox_provider()
+
+    def apply_sandbox_setting(self) -> list[str]:
+        """Settings ▸ Sandbox changed the provider: every live engine built under another
+        provider is dropped, so its next connection rebuilds it under the new rule (and
+        is refused if that rule cannot be met). A running turn keeps its engine and is
+        rebuilt when it ends. Returns the affected session ids. Without this, a session
+        opened before the switch kept running with no wall while the page said sessions
+        were refused (seen 2026-09-28 on WSL)."""
+        wanted = self._wanted_sandbox_provider()
+        affected: list[str] = []
+        for session_id, engine in list(self._engines.items()):
+            workspace = getattr(engine, "sandbox_workspace", None)
+            describe = getattr(workspace, "describe", None)
+            built = str((describe() if callable(describe) else {}).get("provider") or "direct")
+            if built == (wanted or "direct"):
+                continue
+            self._refresh_session_tools(session_id)
+            affected.append(session_id)
+        return affected
 
     def _engine_build_lock(self, session_id: str) -> threading.Lock:
         with self._engine_build_locks_guard:

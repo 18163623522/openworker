@@ -2119,7 +2119,9 @@ export async function getSandboxSettings(machineId?: string | null): Promise<San
 export async function setSandboxSettings(
   patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials">>,
   machineId?: string | null,
-): Promise<{ ok: boolean; error?: string } & Partial<SandboxSettings>> {
+): Promise<{ ok: boolean; error?: string; rebuilt_sessions?: string[] } & Partial<SandboxSettings>> {
+  // `rebuilt_sessions`: after a provider change, the sessions whose engine the server
+  // dropped so their next connection rebuilds them under the new rule.
   const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

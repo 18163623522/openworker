@@ -2047,6 +2047,11 @@ export function App() {
           key={settingsTab}
           initialTab={settingsTab}
           onBack={() => setSurface("session")}
+          onSandboxProviderChanged={(ids) => {
+            // The session on screen was built under the old sandbox rule: reconnect, so
+            // the server rebuilds it under the new one (or refuses it with the reason).
+            if (ids.includes(sessionId)) setConnectNonce((n) => n + 1);
+          }}
           onOpenPersona={(id, machineId) => openPersona(id, "settings", machineId)}
           onAskWorker={(machineId) => {
             // Memory's remote CTA: the conversation IS the edit surface — a

@@ -42,8 +42,10 @@ let setupState: any = { status: "idle", rows: [], progress: null, error: "", ela
 // Like the backend: each save returns the whole (updated) snapshot.
 const setSandboxSettings = vi.fn(async (patch: any) => {
   snapshot = { ...snapshot, ...patch };
-  return { ok: true, ...snapshot };
+  // Like the backend: a provider change names the sessions it dropped for a rebuild.
+  return { ok: true, ...snapshot, ...("provider" in patch ? { rebuilt_sessions: ["s-open"] } : {}) };
 });
+const onSandboxProviderChanged = vi.fn();
 const startSandboxSetup = vi.fn(async () => setupState);
 
 vi.mock("../api", async (importOriginal) => {
@@ -89,10 +91,11 @@ describe("Settings ▸ Sandbox", () => {
   });
 
   it("switching on picks the provider that needs no setup on a Mac, and off clears the key", async () => {
-    render(<SettingsView initialTab="sandbox" />);
+    render(<SettingsView initialTab="sandbox" onSandboxProviderChanged={onSandboxProviderChanged} />);
     await screen.findByTestId("sandbox-section");
     fireEvent.click(screen.getByTestId("sandbox-switch"));
     await waitFor(() => expect(setSandboxSettings).toHaveBeenCalledWith({ provider: "seatbelt" }));
+    await waitFor(() => expect(onSandboxProviderChanged).toHaveBeenCalledWith(["s-open"])); // the app reconnects that session
     // Now on: the provider line (a dropdown on a Mac) and the sub-settings appear.
     expect((screen.getByTestId("sandbox-provider-select") as HTMLSelectElement).value).toBe("seatbelt");
     expect(screen.getByTestId("sandbox-network-section")).toBeTruthy();

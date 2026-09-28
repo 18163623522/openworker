@@ -178,8 +178,12 @@ export function SettingsView({
   onCreateSkill,
   onAskWorker,
   onBack,
+  onSandboxProviderChanged,
 }: {
   initialTab?: SetTab;
+  // Sandbox: the provider changed and the server dropped these sessions' engines; the
+  // app reconnects the one on screen so it is rebuilt (or refused) under the new rule.
+  onSandboxProviderChanged?: (sessionIds: string[]) => void;
   // "Back to app" on the rail — returns to the conversation surface.
   onBack?: () => void;
   onOpenPersona?: (id: string, machineId?: string | null) => void;
@@ -402,7 +406,7 @@ export function SettingsView({
               onAskWorker={(machineId) => onAskWorker?.(machineId)}
             />
           ) : tab === "sandbox" ? (
-            <SandboxSection key={scopeId || "local"} machine={scoped} />
+            <SandboxSection key={scopeId || "local"} machine={scoped} onProviderChanged={onSandboxProviderChanged} />
           ) : tab === "machines" ? (
             <MachinesSection />
           ) : tab === "slack" || tab === "github" ? (
@@ -737,7 +741,7 @@ function PersonasSection({
 // what to do.
 const SANDBOX_PROVIDERS = ["openshell", "seatbelt"] as const;
 
-function SandboxSection({ machine }: { machine?: Machine | null }) {
+function SandboxSection({ machine, onProviderChanged }: { machine?: Machine | null; onProviderChanged?: (sessionIds: string[]) => void }) {
   const { t } = useTranslation();
   const mid = machine?.id ?? null;
   const [cfg, setCfg] = useState<SandboxSettings | null>(null);
@@ -760,6 +764,7 @@ function SandboxSection({ machine }: { machine?: Machine | null }) {
     }
     setError("");
     setCfg(res as SandboxSettings);
+    if ("provider" in patch) onProviderChanged?.(res.rebuilt_sessions ?? []);
   };
 
   // The switch reads the machine's choice; a headless machine's default rule (OpenShell
