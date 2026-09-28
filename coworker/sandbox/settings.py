@@ -28,6 +28,8 @@ def _availability(name: str) -> tuple[bool, str]:
         except seatbelt.SeatbeltUnavailable as exc:
             return False, str(exc)
     if name == OPENSHELL:
+        if sys.platform == "win32":  # its Windows driver is a preview; the setup command here sets up the Windows sandbox
+            return False, "OpenShell is not available on Windows yet."
         from .selection import openshell_problem
 
         problem = openshell_problem()

@@ -228,7 +228,7 @@ def test_setup_creates_the_two_hidden_accounts_and_status_reports_it():
     rule = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-NetFirewallRule -DisplayName '{windows_setup.FIREWALL_RULE}').Enabled"], capture_output=True, text=True).stdout
     assert "True" in rule
     assert windows_setup.filters_recorded() and windows_wfp.present() in (True, None)
-    windows_rows = said[: next((i for i, line in enumerate(said) if line.startswith("OpenShell on this machine")), len(said))]
+    windows_rows = said[: next((i for i, line in enumerate(said) if line.strip().startswith("OpenShell on this machine")), len(said))]
     assert any("setup has run" in line for line in windows_rows) and all("[--]" not in line for line in windows_rows)
     info = windows_setup.info()
     assert info["state"] == "ready" and info["set_up_at"].endswith("Z") and info["can_elevate"]
