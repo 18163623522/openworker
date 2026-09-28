@@ -142,6 +142,7 @@ $changed += "sandboxes-folder"
 
 # 6. The record.
 @{ version = $Version; user_sid = $UserSid; firewall_rule = $Rule; changed = $changed;
+   set_up_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
    accounts = @{ open = @{ name = $OpenAccount; sid = $openSid }; closed = @{ name = $ClosedAccount; sid = $closedSid } };
    wfp = @{ filters = $wfp; ports = @($PortLow, $PortHigh) } } |
   ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Root "setup.json") -Encoding ASCII
@@ -278,6 +279,50 @@ def is_elevated() -> bool:
         return bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
     except OSError:
         return False
+
+
+_ADMINISTRATORS_SID = "S-1-5-32-544"
+
+
+def can_elevate() -> bool:
+    """This user can answer the administrator prompt: already elevated, or a member of
+    Administrators (under UAC the group is on the filtered token, marked deny-only, and
+    `whoami` still lists it). A standard user gets a prompt asking for someone else's
+    password, which the app must not show as "one prompt"."""
+    if sys.platform != "win32":
+        return False
+    if is_elevated():
+        return True
+    try:
+        done = subprocess.run(["whoami", "/groups", "/fo", "csv"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return _ADMINISTRATORS_SID in (done.stdout or "")
+
+
+NOT_SET_UP, OLDER, BROKEN, READY = "not_set_up", "older", "broken", "ready"
+SETUP_COMMAND = "openworker machine sandbox setup"
+
+
+def info() -> dict[str, Any]:
+    """What Settings ▸ Sandbox shows about the setup on this PC: its state, when it ran,
+    whether this user can run it, and the command to hand to an administrator."""
+    recorded = state()
+    if not recorded:
+        status = NOT_SET_UP
+    elif not current():
+        status = OLDER
+    elif problem():
+        status = BROKEN
+    else:
+        status = READY
+    return {
+        "state": status,
+        "set_up_at": str(recorded.get("set_up_at") or "") if recorded else "",
+        "problem": problem() or "",
+        "can_elevate": can_elevate(),
+        "command": SETUP_COMMAND,
+    }
 
 
 def _wfp_command() -> tuple[str, str]:

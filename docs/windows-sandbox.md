@@ -59,7 +59,11 @@ A few things are true by design:
 
 ## Turn it on
 
-Settings ▸ Sandbox ▸ "Windows sandbox", or in `config.toml`:
+Settings ▸ Sandbox has one switch, "Run agents in a sandbox". Turning it on shows the
+sandbox types this PC can use; choosing "Windows sandbox" shows what the one-time setup
+changes and runs it on one administrator prompt. Once the type is ready its options
+appear: the network mode, the files an agent may be given, and the tools from your profile
+the sandbox may read. In `config.toml`:
 
 ```toml
 sandbox_provider = "windows"        # or "direct": commands run in the OpenWorker process
@@ -68,12 +72,15 @@ sandbox_network_profile = "open"    # the Windows default; or "strict", "standar
 
 The setting is per machine; a project's own config cannot change it.
 
-Choosing the Windows sandbox is choosing to set it up: OpenWorker shows what the one-time
-setup changes and runs it on one administrator prompt (the command line form is
-`openworker machine sandbox setup`). Until setup has run, the option cannot be used and the
-machine stays on "No sandbox". There is no weaker mode. If setup is later found broken (an
-account deleted, the rule or a filter gone), sessions on the machine are refused with the
-way to set it up again, rather than run without the sandbox.
+Choosing the Windows sandbox is choosing to set it up (the command line form is
+`openworker machine sandbox setup`). Setup ends by opening a throwaway sandbox and proving
+the wall from inside; only then does the choice take effect. Until setup has run, the type
+cannot be chosen and the switch goes back off. There is no weaker mode. If setup is later
+found broken (an account deleted, the rule or a filter gone), sessions on the machine are
+refused with the way to set it up again, rather than run without the sandbox. Switching the
+sandbox off keeps the setup on the PC; "Remove setup" under the type undoes it.
+
+Someone who is not an administrator sees the type with the command to hand to one.
 
 ## What the setup does
 
@@ -175,12 +182,15 @@ Not readable:
 By default the sandbox has none of your logins, which also means `git push` over SSH has
 nothing to push with. Settings ▸ Sandbox lists files you can share, all off by default:
 
-| Entry | Copied from | Lets the agent | Hosts added to the allow list |
-|---|---|---|---|
-| `ssh` | `~/.ssh` | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
-| `gh` | `~/.config/gh` | use `gh` as you: pull requests, issues, releases | `api.github.com:443`, `github.com:443` |
-| `aws` | `~/.aws` | use `aws` with your profiles | `*.amazonaws.com:443` |
-| `kube` | `~/.kube` | use `kubectl` with your clusters | the servers named in the kubeconfig |
+| Entry | Copied from | What it is | Lets the agent | Hosts added to the allow list |
+|---|---|---|---|---|
+| `ssh` | `~/.ssh` | folder, credential | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
+| `gh` | `~/.config/gh` | folder, credential | use `gh` as you: pull requests, issues, releases | `api.github.com:443`, `github.com:443` |
+| `aws` | `~/.aws/config` | file, configuration | use `aws` with your profiles; `~/.aws/credentials` stays out unless you add it | `*.amazonaws.com:443` |
+| `kube` | `~/.kube/config` | file, credential | use `kubectl` with your clusters | the servers named in the kubeconfig |
+
+An entry is a single file or a whole folder, your choice; you can add either, and each is
+labelled *credential* (a secret inside) or *configuration* (host names, profiles, options).
 
 A copy is written into the sandbox account's own profile by the runner, so that Windows
 OpenSSH accepts the key's permissions, and removed when the runner leaves. In the closed

@@ -41,9 +41,16 @@ port = 8765
 # The default is "strict", or "open" on Windows.
 # sandbox_network_profile = "strict"
 # Credentials an agent may be given, copied into the sandbox for the session and deleted
-# with it. All off unless enabled here or in Settings ▸ Sandbox.
+# with it. All off unless enabled here or in Settings ▸ Sandbox. An entry is a single
+# file or a whole folder (the path decides), labelled "credential" or "configuration".
 # [[sandbox_credentials]]
 # name = "ssh"
+# enabled = true
+# [[sandbox_credentials]]
+# name = "aws-keys"
+# path = "~/.aws/credentials"
+# label = "credential"
+# hosts = ["*.amazonaws.com:443"]
 # enabled = true
 # Developer tool folders under your home folder a sandbox may read (never write). The
 # shipped list per platform is in Settings ▸ Sandbox; an entry here switches one off or

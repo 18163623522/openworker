@@ -2092,10 +2092,21 @@ export async function getReviewerStats(sessionId: string): Promise<ReviewerStats
 export interface SandboxCredentialEntry {
   name: string;
   title?: string;
-  path?: string;
+  path?: string; // a file or a folder under the home folder
   hosts?: string[];
   does?: string;
+  label?: "credential" | "configuration"; // what is in it
   enabled: boolean;
+  kind?: "file" | "folder" | ""; // display only: what the path is on this machine ("" = missing)
+  shipped?: boolean; // display only: in the default list
+}
+// UX-053: the Windows one-time setup, as the page sees it (null off Windows).
+export interface WindowsSetupInfo {
+  state: "not_set_up" | "older" | "broken" | "ready";
+  set_up_at: string; // ISO date, "" when unknown
+  problem: string;
+  can_elevate: boolean; // this user can answer the administrator prompt
+  command: string; // to hand to an administrator
 }
 export interface SandboxToolchainEntry {
   name: string;
@@ -2111,6 +2122,7 @@ export interface SandboxSettings {
   effective_provider: string;
   refused: string;
   providers: { name: string; usable: boolean; why: string }[];
+  windows_setup: WindowsSetupInfo | null;
   network_profile: string;
   network_profiles: { name: string; hosts: string[] }[];
   credentials: SandboxCredentialEntry[];
@@ -2132,6 +2144,21 @@ export async function setSandboxSettings(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
+  return res.json();
+}
+
+// UX-053: "Set up now" in the Windows setup dialog. The server runs the elevated setup
+// (Windows shows its own prompt), proves the wall in a throwaway sandbox, and makes the
+// Windows sandbox the machine's choice. Blocks until Windows answers.
+export async function runSandboxSetup(
+  machineId?: string | null,
+): Promise<{ ok: boolean; error?: string; said?: string; checked?: string } & Partial<SandboxSettings>> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup`, { method: "POST" });
+  return res.json();
+}
+
+export async function runSandboxRemove(machineId?: string | null): Promise<{ ok: boolean; error?: string; said?: string } & Partial<SandboxSettings>> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/remove`, { method: "POST" });
   return res.json();
 }
 

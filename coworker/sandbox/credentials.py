@@ -1,12 +1,15 @@
-"""Credential grants: files from the home folder a user chooses to share with a sandbox.
+"""Credential grants: files and folders from the home folder a user chooses to share with
+a sandbox.
 
-Design doc rulings 30 to 33 and section 11b. Nothing is shared unless the user switched an
-entry on in the MACHINE config (`[[sandbox_credentials]]`); a repository's own config cannot
-add one. Each granted entry is COPIED into the sandbox's private folder for the session
-(tools like `ssh`, `aws` and `gh` write beside their credentials, and Windows OpenSSH refuses
-a key another user can read), and the copy dies with the sandbox. The real files are never
-opened for writing. Each entry also names the hosts its tool needs; those join the session's
-network allow list.
+Design doc rulings 30 to 33, section 11b and 11d ruling 6. Nothing is shared unless the user
+switched an entry on in the MACHINE config (`[[sandbox_credentials]]`); a repository's own
+config cannot add one. An entry is a single file or a whole folder, the user's choice; the
+path decides which. Each granted entry is COPIED into the sandbox's private folder for the
+session (tools like `ssh`, `aws` and `gh` write beside their credentials, and Windows
+OpenSSH refuses a key another user can read), and the copy dies with the sandbox. The real
+files are never opened for writing. Each entry names the hosts its tool needs; those join
+the session's network allow list. Each entry carries a label: `credential` (a secret is
+inside) or `configuration` (host names, profiles, options; no secret).
 
 Logins kept in a keychain or credential manager are not files and cannot be shared.
 """
@@ -21,7 +24,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+CREDENTIAL = "credential"
+CONFIGURATION = "configuration"
+LABELS = (CREDENTIAL, CONFIGURATION)
+
 # What ships. `hosts` are "host:port"; a port of 22 is an SSH tunnel through the proxy.
+# `.ssh` and `gh` are folders (their tools write beside the files); AWS ships as the
+# profiles file only, so `~/.aws/credentials` stays out unless the user adds it; the
+# kubeconfig is one file.
 DEFAULT_ENTRIES: list[dict[str, Any]] = [
     {
         "name": "ssh",
@@ -29,6 +39,7 @@ DEFAULT_ENTRIES: list[dict[str, Any]] = [
         "path": "~/.ssh",
         "hosts": ["github.com:22", "gitlab.com:22"],
         "does": "push and pull over SSH, and log in to servers, as you",
+        "label": CREDENTIAL,
         "enabled": False,
     },
     {
@@ -37,22 +48,25 @@ DEFAULT_ENTRIES: list[dict[str, Any]] = [
         "path": "~/.config/gh",
         "hosts": ["api.github.com:443", "github.com:443"],
         "does": "use gh as you: pull requests, issues, releases",
+        "label": CREDENTIAL,
         "enabled": False,
     },
     {
         "name": "aws",
-        "title": "AWS",
-        "path": "~/.aws",
+        "title": "AWS profiles",
+        "path": "~/.aws/config",
         "hosts": ["*.amazonaws.com:443"],
-        "does": "use aws with your profiles",
+        "does": "use aws with your profiles (regions and profile names; no keys unless you add ~/.aws/credentials)",
+        "label": CONFIGURATION,
         "enabled": False,
     },
     {
         "name": "kube",
         "title": "Kubernetes",
-        "path": "~/.kube",
+        "path": "~/.kube/config",
         "hosts": [],  # read from the kubeconfig at grant time
         "does": "use kubectl with your clusters",
+        "label": CREDENTIAL,
         "enabled": False,
     },
 ]
@@ -70,6 +84,8 @@ class Grant:
     relative: str  # the path under the home folder, e.g. ".ssh"
     hosts: list[str] = field(default_factory=list)
     does: str = ""
+    label: str = CREDENTIAL  # credential | configuration
+    kind: str = "folder"  # file | folder, from what the path is on this machine
 
 
 @dataclass
@@ -94,12 +110,25 @@ def entries(configured: Optional[Sequence[dict[str, Any]]]) -> list[dict[str, An
         if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
             continue
         name = str(raw["name"]).strip()
-        base = by_name.get(name, {"name": name, "title": name, "path": "", "hosts": [], "does": "", "enabled": False})
+        base = by_name.get(name, {"name": name, "title": name, "path": "", "hosts": [], "does": "", "label": CREDENTIAL, "enabled": False})
         merged = {**base, **{k: v for k, v in raw.items() if v is not None}}
         merged["hosts"] = [str(h) for h in (merged.get("hosts") or [])]
         merged["enabled"] = bool(merged.get("enabled"))
+        merged["label"] = merged.get("label") if merged.get("label") in LABELS else CREDENTIAL
         by_name[name] = merged
     return list(by_name.values())
+
+
+def kind_of(path: str, *, home: Optional[str] = None) -> str:
+    """"file", "folder", or "" when the path does not exist on this machine."""
+    if not path:
+        return ""
+    real = _real(str(path), home or os.path.expanduser("~"))
+    if os.path.isdir(real):
+        return "folder"
+    if os.path.isfile(real):
+        return "file"
+    return ""
 
 
 def _real(path: str, home: str) -> str:
@@ -127,18 +156,24 @@ def granted(configured: Optional[Sequence[dict[str, Any]]], *, home: Optional[st
         hosts = list(e.get("hosts") or [])
         if e["name"] == "kube" and not hosts:
             hosts = _kubeconfig_hosts(real)
-        out.append(Grant(name=str(e["name"]), title=str(e.get("title") or e["name"]), path=real, relative=relative, hosts=hosts, does=str(e.get("does") or "")))
+        out.append(
+            Grant(
+                name=str(e["name"]), title=str(e.get("title") or e["name"]), path=real, relative=relative, hosts=hosts,
+                does=str(e.get("does") or ""), label=str(e.get("label") or CREDENTIAL), kind="folder" if os.path.isdir(real) else "file",
+            )
+        )  # fmt: skip
     return out
 
 
-def _kubeconfig_hosts(kube_dir: str) -> list[str]:
-    """`server:` lines of the kubeconfig, as host:port. Plain text scan, no YAML needed."""
+def _kubeconfig_hosts(kube_path: str) -> list[str]:
+    """`server:` lines of the kubeconfig (the file, or a folder holding `config`), as
+    host:port. Plain text scan, no YAML needed."""
     from urllib.parse import urlsplit
 
     hosts: list[str] = []
-    for name in ("config",):
+    for path in ([os.path.join(kube_path, "config")] if os.path.isdir(kube_path) else [kube_path]):
         try:
-            text = Path(kube_dir, name).read_text(encoding="utf-8", errors="replace")
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for line in text.splitlines():
@@ -214,10 +249,16 @@ def copy_in(
         elif g.name == "gh":
             env["GH_CONFIG_DIR"] = inside
         elif g.name == "aws":
-            env["AWS_CONFIG_FILE"] = os.path.join(inside, "config")
-            env["AWS_SHARED_CREDENTIALS_FILE"] = os.path.join(inside, "credentials")
+            # The shipped entry is the profiles file; a user may point it at the folder.
+            if g.kind == "folder":
+                env["AWS_CONFIG_FILE"] = os.path.join(inside, "config")
+                env["AWS_SHARED_CREDENTIALS_FILE"] = os.path.join(inside, "credentials")
+            else:
+                env["AWS_CONFIG_FILE"] = inside
+        elif g.name == "aws-credentials":
+            env["AWS_SHARED_CREDENTIALS_FILE"] = inside
         elif g.name == "kube":
-            env["KUBECONFIG"] = os.path.join(inside, "config")
+            env["KUBECONFIG"] = os.path.join(inside, "config") if g.kind == "folder" else inside
     return CopiedCredentials(home=sandbox_home, env=env, hosts=sorted(set(hosts)), grants=list(grants), path_dirs=path_dirs)
 
 
@@ -288,5 +329,6 @@ def context_lines(copied: Optional[CopiedCredentials]) -> str:
         return ""
     lines = ["Credentials shared with this sandbox (copies, deleted when the session ends):"]
     for g in copied.grants:
-        lines.append(f"- {g.title} ({g.relative}): you can {g.does}.")
+        what = "folder" if g.kind == "folder" else "file"
+        lines.append(f"- {g.title} ({g.relative}, {what}): you can {g.does}.")
     return "\n".join(lines)

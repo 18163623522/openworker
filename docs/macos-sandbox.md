@@ -78,8 +78,12 @@ nothing to push with. Settings ▸ Sandbox lists files you can share, all off by
 |---|---|---|---|
 | `ssh` | `~/.ssh` | push and pull over SSH, and log in to servers, as you | `github.com:22`, `gitlab.com:22` |
 | `gh` | `~/.config/gh` | use `gh` as you: pull requests, issues, releases | `api.github.com:443`, `github.com:443` |
-| `aws` | `~/.aws` | use `aws` with your profiles | `*.amazonaws.com:443` |
-| `kube` | `~/.kube` | use `kubectl` with your clusters | the servers named in the kubeconfig |
+| `aws` | `~/.aws/config` | use `aws` with your profiles; `~/.aws/credentials` stays out unless you add it | `*.amazonaws.com:443` |
+| `kube` | `~/.kube/config` | use `kubectl` with your clusters | the servers named in the kubeconfig |
+
+An entry is a single file or a whole folder, your choice; each is labelled *credential* or
+*configuration*. Settings ▸ Sandbox shows them once the sandbox is on: one switch first,
+then the type, then the type's own options.
 
 An enabled entry is **copied** into the sandbox's private home when the sandbox starts,
 owner-only, and deleted with the sandbox; the real files are never opened for writing.
