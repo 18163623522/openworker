@@ -13,26 +13,32 @@ from . import credentials, network_profiles
 from .workspace import DIRECT, OPENSHELL, SEATBELT
 
 
-def _availability(name: str) -> tuple[bool, str]:
-    """(usable, why not) for a provider on this machine."""
+def _availability(name: str) -> tuple[bool, str, str]:
+    """(usable, why not, state) for a provider on this machine. `state` is what the page
+    shows next to the provider: "ready", "unavailable", or "needs_download" for OpenShell
+    when everything is in place except the base image (OPE-205: the page said "ready" while
+    the first session was bound to hang on that download)."""
     if name == DIRECT:
-        return True, ""
+        return True, "", "ready"
     if name == SEATBELT:
         if sys.platform != "darwin":
-            return False, "macOS only"
+            return False, "macOS only", "unavailable"
         from .providers import seatbelt
 
         try:
             seatbelt.preflight()
-            return True, ""
+            return True, "", "ready"
         except seatbelt.SeatbeltUnavailable as exc:
-            return False, str(exc)
+            return False, str(exc), "unavailable"
     if name == OPENSHELL:
+        from .providers.openshell import is_image_problem
         from .selection import openshell_problem
 
         problem = openshell_problem()
-        return (problem is None), (problem or "")
-    return False, "unknown"
+        if problem is None:
+            return True, "", "ready"
+        return False, problem, ("needs_download" if is_image_problem(problem) else "unavailable")
+    return False, "unknown", "unavailable"
 
 
 def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
@@ -46,8 +52,8 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         effective, refused = "", str(exc)
     providers = []
     for name in (DIRECT, SEATBELT, OPENSHELL):
-        usable, why = _availability(name)
-        providers.append({"name": name, "usable": usable, "why": why})
+        usable, why, state = _availability(name)
+        providers.append({"name": name, "usable": usable, "why": why, "state": state})
     return {
         "platform": sys.platform,
         "provider": cfg.sandbox_provider or "",  # "" = the default rule
@@ -61,6 +67,18 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         "credentials": _for_display(credentials.entries(cfg.sandbox_credentials)),
         "config_path": str(app_config.global_config_path()),
     }
+
+
+def readiness() -> dict[str, Any]:
+    """The checklist Settings ▸ Sandbox shows for OpenShell: the same rows as `openworker
+    machine sandbox status`, with keys and whether the app may fix each one itself
+    (OPE-207). Costs a few CLI calls; the page asks for it separately from `snapshot`."""
+    from . import setup_cmd
+
+    if sys.platform == "win32":
+        return {"platform": sys.platform, "supported": False, "steps": [], "all_ok": False}
+    rows = [s.as_dict() for s in setup_cmd.steps()]
+    return {"platform": sys.platform, "supported": True, "steps": rows, "all_ok": all(r["ok"] for r in rows)}
 
 
 def _for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

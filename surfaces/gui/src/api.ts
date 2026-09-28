@@ -2102,7 +2102,9 @@ export interface SandboxSettings {
   provider: string; // "" = the default rule
   effective_provider: string;
   refused: string;
-  providers: { name: string; usable: boolean; why: string }[];
+  // `state` is what the page shows next to a provider. "needs_download": OpenShell is in
+  // place except for the base image (about 5 GB, pulled once); the radio stays enabled.
+  providers: { name: string; usable: boolean; why: string; state?: "ready" | "needs_download" | "unavailable" }[];
   network_profile: string;
   network_profiles: { name: string; hosts: string[] }[];
   credentials: SandboxCredentialEntry[];
@@ -2117,12 +2119,61 @@ export async function getSandboxSettings(machineId?: string | null): Promise<San
 export async function setSandboxSettings(
   patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials">>,
   machineId?: string | null,
-): Promise<{ ok: boolean; error?: string } & Partial<SandboxSettings>> {
+): Promise<{ ok: boolean; error?: string; rebuilt_sessions?: string[] } & Partial<SandboxSettings>> {
+  // `rebuilt_sessions`: after a provider change, the sessions whose engine the server
+  // dropped so their next connection rebuilds them under the new rule.
   const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
+  return res.json();
+}
+
+// OPE-207: the readiness checklist behind Settings ▸ Sandbox (the rows `openworker machine
+// sandbox status` prints, with a key and whether the app may fix each one itself), and
+// the guided setup job that walks it on the machine where sessions run.
+export interface SandboxReadinessStep {
+  key: string;
+  what: string;
+  ok: boolean;
+  hint: string; // a note (what was found, why it failed); never a command
+  fixable: boolean; // the setup job does this one itself on that machine
+  command: string; // what to run in a terminal there when the app cannot
+  docs: string; // a page explaining the requirement, or ""
+}
+export interface SandboxReadiness {
+  platform: string;
+  supported: boolean;
+  steps: SandboxReadinessStep[];
+  all_ok: boolean;
+}
+export type SandboxSetupRowState = "pending" | "fixing" | "fixed" | "ok" | "needs_you" | "failed";
+export interface SandboxSetupState {
+  status: "idle" | "running" | "done" | "needs_you" | "failed" | "cancelled";
+  rows: (SandboxReadinessStep & { state: SandboxSetupRowState })[];
+  progress: { layers_total: number; layers_done: number; last_line: string; elapsed_s: number } | null;
+  error: string;
+  elapsed_s: number;
+}
+
+export async function getSandboxReadiness(machineId?: string | null): Promise<SandboxReadiness> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/readiness`);
+  return res.json();
+}
+
+export async function getSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup`);
+  return res.json();
+}
+
+export async function startSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup`, { method: "POST" });
+  return res.json();
+}
+
+export async function cancelSandboxSetup(machineId?: string | null): Promise<SandboxSetupState> {
+  const res = await fetch(`${engineBase(machineId)}/v1/settings/sandbox/setup/cancel`, { method: "POST" });
   return res.json();
 }
 
@@ -2793,7 +2844,14 @@ export type Handlers = {
    * should reload what it may have missed (transcript tail, parked prompts). */
   onOpen?: (reconnected: boolean) => void;
   onClose?: () => void;
+  /** The server refused to build this session (its sandbox cannot be used) and closed
+   * the socket for good (close code 4403). No reconnect follows: retrying would only
+   * repeat the refusal every few seconds. The reason arrived as an `error` event. */
+  onRefused?: () => void;
 };
+
+/** Close code the server uses for a session it refused to build (see app.py). */
+export const WS_CLOSE_SESSION_REFUSED = 4403;
 
 /** Reconnect backoff for a dropped session socket: 1s, 2s, 4s, 8s, then 15s. */
 export const SESSION_RECONNECT_MS = [1000, 2000, 4000, 8000, 15000];
@@ -2848,9 +2906,14 @@ export class Session {
       this.flush();
       this.handlers.onOpen?.(reconnected);
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       this.handlers.onClose?.();
       if (this.closed) return;
+      if (ev.code === WS_CLOSE_SESSION_REFUSED) {
+        this.closed = true; // final: the server said this session cannot be built as configured
+        this.handlers.onRefused?.();
+        return;
+      }
       const delay = SESSION_RECONNECT_MS[Math.min(this.attempts, SESSION_RECONNECT_MS.length - 1)];
       this.attempts += 1;
       this.timer = window.setTimeout(() => this.connect(), delay);
