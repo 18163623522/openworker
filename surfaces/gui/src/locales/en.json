@@ -2270,8 +2270,8 @@
     },
     "sandbox": {
       "title": "Sandbox",
-      "sub": "Where agents run their commands and file tools on this machine. Applies to every new session here (a running session keeps what it started with); a project cannot change it.",
-      "sub_machine": "On ⌂ {{name}} — where its agents run their commands and file tools. Applies to every new session on that machine (a running session keeps what it started with); a project cannot change it.",
+      "sub": "Where agents run their commands and file tools on this machine. Applies to every session here (one in the middle of a turn switches when the turn ends); a project cannot change it.",
+      "sub_machine": "On ⌂ {{name}} — where its agents run their commands and file tools. Applies to every session on that machine (one in the middle of a turn switches when the turn ends); a project cannot change it.",
       "switch": "Run agents in a sandbox",
       "switch_off_desc": "Off: commands run directly on this machine, with the same access as your user account. Your network and credential settings are kept for when you switch back on.",
       "switch_on_desc": "On: commands and file tools run behind a wall that holds only the session's folders and the network allow list.",
