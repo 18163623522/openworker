@@ -254,6 +254,7 @@ class OpenShellProvider:
 
     # -- lifecycle --------------------------------------------------------------------
     def create(self) -> None:
+        self._create_tried = True
         try:
             self._create()
         except Exception:
@@ -352,7 +353,8 @@ class OpenShellProvider:
             pass
 
     def destroy(self) -> None:
-        self._delete()
+        if getattr(self, "_create_tried", False):  # never asked the gateway: nothing to delete there
+            self._delete()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 

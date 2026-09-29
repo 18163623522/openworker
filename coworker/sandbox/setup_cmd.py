@@ -177,8 +177,7 @@ def steps() -> list[Step]:
             docs="" if openshell_ok else GUIDE_URL,
         )
     )
-    gateway_toml = _openshell_home() / "gateway.toml"
-    binds = gateway_toml.is_file() and "enable_bind_mounts = true" in gateway_toml.read_text(encoding="utf-8")
+    binds = _allows_bind_mounts(gateway_config_in_use())
     out.append(Step("bind_mounts", ROWS["bind_mounts"], binds, fixable=True))
     if sys.platform.startswith("linux"):
         linger = _run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger"], 15).stdout.strip() == "Linger=yes"
@@ -238,15 +237,62 @@ def apply_bind_mounts() -> Optional[str]:
     gateway_toml, gateway_env = home / "gateway.toml", home / "gateway.env"
     home.mkdir(parents=True, exist_ok=True)
     existing = gateway_toml.read_text(encoding="utf-8") if gateway_toml.is_file() else ""
-    if "[openshell.drivers.docker]" in existing:
+    if "[openshell.drivers.docker]" in existing and not _allows_bind_mounts(gateway_toml):
         return f"{gateway_toml} already has a [openshell.drivers.docker] table; add `enable_bind_mounts = true` to it by hand."
-    gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
+    if not _allows_bind_mounts(gateway_toml):
+        gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
     env_line = f"OPENSHELL_GATEWAY_CONFIG={gateway_toml}\n"
     env_text = gateway_env.read_text(encoding="utf-8") if gateway_env.is_file() else ""
     if "OPENSHELL_GATEWAY_CONFIG=" not in env_text:
         gateway_env.write_text(env_text + env_line, encoding="utf-8")
-    _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
+    return restart_gateway()
+
+
+def restart_gateway() -> Optional[str]:
+    """Restart the local gateway so it reads its config again: a Homebrew service on a Mac
+    (the formula's start script reads `gateway.env`), a user systemd unit on Linux. Returns
+    an error text, or None. Before 2026-09-28 the Mac was never restarted: the setting was
+    written, the running gateway kept Homebrew's own config, and sessions were refused."""
+    if sys.platform == "darwin":
+        if not shutil.which("brew"):
+            return "Homebrew is not on PATH, so the OpenShell gateway could not be restarted; run: brew services restart nvidia/openshell/openshell"
+        done = _run(["brew", "services", "restart", "nvidia/openshell/openshell"], 120)
+    else:
+        done = _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
+    if done.returncode != 0:
+        return f"the OpenShell gateway did not restart: {(done.stderr or done.stdout or '').strip()[:300]}"
     return None
+
+
+def _allows_bind_mounts(config: Optional[Path]) -> bool:
+    try:
+        return config is not None and config.is_file() and "enable_bind_mounts = true" in config.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def gateway_config_in_use() -> Optional[Path]:
+    """The config file the RUNNING gateway was started with: its `--config` argument, else
+    the one `gateway.env` names, else `gateway.toml` under the OpenShell config folder. A
+    file written after the gateway started is not in use until it restarts, so the check
+    reads what the process was given rather than what is on disk."""
+    home = _openshell_home()
+    listing = _run(["ps", "-Ao", "args="], 15).stdout if sys.platform != "win32" else ""
+    for line in listing.splitlines():
+        parts = line.split()
+        if not parts or not parts[0].endswith("openshell-gateway"):
+            continue
+        if "--config" in parts[:-1]:
+            return Path(parts[parts.index("--config") + 1])
+        break
+    env_file = home / "gateway.env"
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines() if env_file.is_file() else []:
+            if line.startswith("OPENSHELL_GATEWAY_CONFIG="):
+                return Path(line.split("=", 1)[1].strip())
+    except OSError:
+        pass
+    return home / "gateway.toml"
 
 
 def enable_linger() -> Optional[str]:

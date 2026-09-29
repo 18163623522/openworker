@@ -709,13 +709,6 @@ class SessionManager:
             return "" if chosen == DIRECT else chosen
         return OPENSHELL if is_headless() else ""
 
-    def pending_sandbox_build(self, session_id: str) -> str:
-        """The sandbox provider a NEW engine for this session would be built with, or ""
-        when the engine exists already or commands would run directly (OPE-206)."""
-        if session_id in self._engines:
-            return ""
-        return self._wanted_sandbox_provider()
-
     def apply_sandbox_setting(self) -> list[str]:
         """Settings ▸ Sandbox changed the provider: every live engine built under another
         provider is dropped, so its next connection rebuilds it under the new rule (and

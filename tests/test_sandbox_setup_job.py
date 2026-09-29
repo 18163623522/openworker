@@ -234,3 +234,38 @@ def test_the_readiness_endpoint_and_the_job_endpoints(tmp_path, monkeypatch):
     assert client.post("/v1/settings/sandbox/setup/cancel").json()["status"] == "needs_you"  # nothing running: unchanged
     monkeypatch.setattr(settings.sys, "platform", "win32")
     assert client.get("/v1/settings/sandbox/readiness").json() == {"platform": "win32", "supported": False, "steps": [], "all_ok": False}
+
+
+def test_the_folder_step_restarts_the_gateway_and_the_check_reads_the_config_in_use(tmp_path, monkeypatch):
+    """Seen on a Mac, 2026-09-28: the setting was written but the Homebrew gateway kept the
+    config it had started with, the check said yes, and sessions were refused."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    ran: list[list[str]] = []
+    listing = {"out": "/bin/zsh\n/opt/homebrew/opt/openshell/bin/openshell-gateway --config /opt/homebrew/var/openshell/gateway.toml\n"}
+
+    def fake_run(argv, timeout=600):
+        ran.append(argv)
+        return SimpleNamespace(returncode=0, stdout=listing["out"] if argv[0] == "ps" else "", stderr="")
+
+    monkeypatch.setattr(setup_cmd, "_run", fake_run)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    # Started with Homebrew's own config: not in use yet, whatever is on disk.
+    assert setup_cmd.gateway_config_in_use() == setup_cmd.Path("/opt/homebrew/var/openshell/gateway.toml")
+    assert setup_cmd.apply_bind_mounts() is None
+    assert ["brew", "services", "restart", "nvidia/openshell/openshell"] in ran
+    ours = tmp_path / "openshell" / "gateway.toml"
+    assert "enable_bind_mounts = true" in ours.read_text()
+    # Restarted: no --config, so `gateway.env` names the file, and the check is satisfied.
+    listing["out"] = "/opt/homebrew/opt/openshell/bin/openshell-gateway\n"
+    assert setup_cmd.gateway_config_in_use() == ours and setup_cmd._allows_bind_mounts(ours)
+    # Running it again is fine: the setting is there, only the restart happens.
+    ran.clear()
+    assert setup_cmd.apply_bind_mounts() is None and ours.read_text().count("enable_bind_mounts") == 1
+    assert ["brew", "services", "restart", "nvidia/openshell/openshell"] in ran
+    # Linux restarts the user unit.
+    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
+    ran.clear()
+    assert setup_cmd.restart_gateway() is None and ran == [["systemctl", "--user", "restart", "openshell-gateway"]]
