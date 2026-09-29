@@ -28,10 +28,13 @@ CREDENTIAL = "credential"
 CONFIGURATION = "configuration"
 LABELS = (CREDENTIAL, CONFIGURATION)
 
-# What ships. `hosts` are "host:port"; a port of 22 is an SSH tunnel through the proxy.
-# `.ssh` and `gh` are folders (their tools write beside the files); AWS ships as the
-# profiles file only, so `~/.aws/credentials` stays out unless the user adds it; the
-# kubeconfig is one file.
+# What ships: the presets of the page's "A CLI's login" picker (UX-053 v5). None is on, or
+# even listed, until the user adds it. `hosts` are "host:port"; a port of 22 is an SSH
+# tunnel through the proxy. `.ssh` and `gh` are folders (their tools write beside the
+# files); AWS profiles and AWS credentials are two entries, so the keys stay out unless the
+# user adds them; the kubeconfig is one file. `env`: variables the tool reads to find its
+# copy, `{path}` being the copy's path inside and `{dir}` the folder holding it.
+# `windows_path`: where the tool keeps it on Windows, when that differs.
 DEFAULT_ENTRIES: list[dict[str, Any]] = [
     {
         "name": "ssh",
@@ -69,7 +72,61 @@ DEFAULT_ENTRIES: list[dict[str, Any]] = [
         "label": CREDENTIAL,
         "enabled": False,
     },
+    {
+        "name": "aws-credentials",
+        "title": "AWS credentials",
+        "path": "~/.aws/credentials",
+        "hosts": ["*.amazonaws.com:443"],
+        "does": "use aws with your access keys",
+        "label": CREDENTIAL,
+        "enabled": False,
+    },
+    {
+        "name": "npm",
+        "title": "npm",
+        "path": "~/.npmrc",
+        "hosts": ["registry.npmjs.org:443"],
+        "does": "install and publish private packages as you",
+        "label": CREDENTIAL,
+        "env": {"NPM_CONFIG_USERCONFIG": "{path}"},
+        "enabled": False,
+    },
+    {
+        "name": "docker",
+        "title": "Docker registries",
+        "path": "~/.docker/config.json",
+        "hosts": ["registry-1.docker.io:443", "auth.docker.io:443", "production.cloudflare.docker.com:443", "ghcr.io:443"],
+        "does": "push and pull images with the logins saved in this file",
+        "label": CREDENTIAL,
+        "env": {"DOCKER_CONFIG": "{dir}"},
+        "enabled": False,
+    },
+    {
+        "name": "gcloud",
+        "title": "gcloud",
+        "path": "~/.config/gcloud",
+        "windows_path": "~/AppData/Roaming/gcloud",
+        "hosts": ["*.googleapis.com:443", "accounts.google.com:443"],
+        "does": "use gcloud with your accounts and projects",
+        "label": CREDENTIAL,
+        "env": {"CLOUDSDK_CONFIG": "{path}"},
+        "enabled": False,
+    },
+    {
+        "name": "terraform",
+        "title": "Terraform Cloud",
+        "path": "~/.terraform.d/credentials.tfrc.json",
+        "windows_path": "~/AppData/Roaming/terraform.d/credentials.tfrc.json",
+        "hosts": ["app.terraform.io:443", "registry.terraform.io:443", "releases.hashicorp.com:443"],
+        "does": "run terraform against Terraform Cloud as you",
+        "label": CREDENTIAL,
+        "enabled": False,
+    },
 ]
+for _entry in DEFAULT_ENTRIES:  # a shipped entry's path is the one for this platform
+    if sys.platform == "win32" and _entry.get("windows_path"):
+        _entry["path"] = _entry["windows_path"]
+    _entry.pop("windows_path", None)
 
 # Git's own settings are not a credential, but a sandbox whose HOME is redirected must still
 # see them (git refuses to commit without an identity). Always copied when present.
@@ -86,6 +143,7 @@ class Grant:
     does: str = ""
     label: str = CREDENTIAL  # credential | configuration
     kind: str = "folder"  # file | folder, from what the path is on this machine
+    env: dict[str, str] = field(default_factory=dict)  # templates: {path}, {dir}
 
 
 @dataclass
@@ -100,6 +158,18 @@ class CopiedCredentials:
 
     def describe(self) -> list[dict[str, Any]]:
         return [{"name": g.name, "title": g.title, "path": g.path, "does": g.does} for g in self.grants]
+
+
+def listed(configured: Optional[Sequence[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The entries the user added (UX-053 v5): those named in the machine's config, in
+    that order, whether switched on or not. A shipped entry nobody added is a preset only."""
+    names = []
+    for raw in configured or []:
+        name = str(raw.get("name") or "").strip() if isinstance(raw, dict) else ""
+        if name and name not in names:
+            names.append(name)
+    by_name = {e["name"]: e for e in entries(configured)}
+    return [by_name[n] for n in names if n in by_name]
 
 
 def entries(configured: Optional[Sequence[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -160,6 +230,7 @@ def granted(configured: Optional[Sequence[dict[str, Any]]], *, home: Optional[st
             Grant(
                 name=str(e["name"]), title=str(e.get("title") or e["name"]), path=real, relative=relative, hosts=hosts,
                 does=str(e.get("does") or ""), label=str(e.get("label") or CREDENTIAL), kind="folder" if os.path.isdir(real) else "file",
+                env={str(k): str(v) for k, v in (e.get("env") or {}).items()} if isinstance(e.get("env"), dict) else {},
             )
         )  # fmt: skip
     return out
@@ -259,6 +330,8 @@ def copy_in(
             env["AWS_SHARED_CREDENTIALS_FILE"] = inside
         elif g.name == "kube":
             env["KUBECONFIG"] = os.path.join(inside, "config") if g.kind == "folder" else inside
+        for variable, template in g.env.items():
+            env[variable] = template.replace("{path}", inside).replace("{dir}", os.path.dirname(inside))
     return CopiedCredentials(home=sandbox_home, env=env, hosts=sorted(set(hosts)), grants=list(grants), path_dirs=path_dirs)
 
 

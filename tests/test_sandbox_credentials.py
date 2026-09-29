@@ -41,7 +41,8 @@ def _home(tmp_path) -> Path:
 def test_nothing_is_granted_unless_switched_on(tmp_path):
     home = _home(tmp_path)
     assert creds.granted(None, home=str(home)) == []
-    assert [e["enabled"] for e in creds.entries(None)] == [False] * 4
+    assert [e["enabled"] for e in creds.entries(None)] == [False] * len(creds.DEFAULT_ENTRIES)
+    assert creds.listed(None) == []
 
 
 def test_a_user_entry_edits_or_adds_by_name(tmp_path):
@@ -147,9 +148,9 @@ def test_no_grants_means_no_lines_for_the_agent(tmp_path):
 
 # -- the network ------------------------------------------------------------------------
 def test_proxy_allows_the_grants_hosts_including_ssh_and_wildcards():
-    proxy = netproxy.AllowListProxy("strict", extra_hosts=["github.com:22", "*.amazonaws.com:443", "k8s.example.com:6443"])
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["github.com:22", "*.amazonaws.com:443", "k8s.example.com:6443"])
     try:
-        assert proxy.allows("github.com", 22) and proxy.allows("github.com", 443)
+        assert proxy.allows("github.com", 22) and not proxy.allows("github.com", 443)  # only what is listed
         assert proxy.allows("s3.us-east-1.amazonaws.com", 443) and not proxy.allows("amazonaws.com", 443)
         assert proxy.allows("k8s.example.com", 6443) and not proxy.allows("k8s.example.com", 443)
         assert not proxy.allows("gitlab.com", 22) and not proxy.allows("example.com", 443)
@@ -253,3 +254,22 @@ def test_a_failed_creation_leaves_no_copied_credential_behind(tmp_path, monkeypa
     with pytest.raises(seatbelt.SeatbeltUnavailable):
         provider.create()
     assert not os.path.exists(folder)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="gcloud and Terraform keep theirs under AppData on Windows")
+def test_a_presets_variables_point_at_its_copy(tmp_path):
+    """UX-053 v5: a preset from the "A CLI's login" picker tells its tool where the copy is."""
+    home = _home(tmp_path)
+    (home / ".npmrc").write_text("//registry.npmjs.org/:_authToken=npm_x\n")
+    (home / ".docker").mkdir()
+    (home / ".docker" / "config.json").write_text('{"auths": {}}\n')
+    (home / ".config" / "gcloud").mkdir(parents=True)
+    grants = creds.granted([{"name": n, "enabled": True} for n in ("npm", "docker", "gcloud", "terraform")], home=str(home))
+    assert [g.name for g in grants] == ["npm", "docker", "gcloud"]  # no Terraform Cloud login on this machine
+    run = tmp_path / "run"
+    copied = creds.copy_in(grants, str(run), home=str(home))
+    inside = Path(copied.home)
+    assert copied.env["NPM_CONFIG_USERCONFIG"] == str(inside / ".npmrc")
+    assert copied.env["DOCKER_CONFIG"] == str(inside / ".docker")
+    assert copied.env["CLOUDSDK_CONFIG"] == str(inside / ".config" / "gcloud")
+    assert "registry-1.docker.io:443" in copied.hosts and "*.googleapis.com:443" in copied.hosts

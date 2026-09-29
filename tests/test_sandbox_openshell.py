@@ -44,12 +44,11 @@ def test_policy_is_plain_yaml_without_shared_objects():
 
 
 def test_network_profiles():
-    strict = policy.render(ROOTS, profile="strict")["network_policies"]
-    standard = policy.render(ROOTS, profile="standard")["network_policies"]
-    hosts = lambda p: {e["host"] for entry in p.values() for e in entry["endpoints"]}  # noqa: E731
-    assert {"github.com", "pypi.org", "registry.npmjs.org"} <= hosts(strict)
-    assert "api.tavily.com" not in hosts(strict) and "api.tavily.com" in hosts(standard)
-    assert all(entry["binaries"] for entry in strict.values())  # OpenShell requires the field
+    # An allow list holds only the machine's ticked sites: none, nothing gets out.
+    assert policy.render(ROOTS, profile="allowlist")["network_policies"] == {}
+    ticked = policy.render(ROOTS, profile="allowlist", extra_hosts=["github.com:443", "registry.acme.dev:443"])["network_policies"]
+    assert {"host": "registry.acme.dev", "port": 443} in ticked["credentials"]["endpoints"]
+    assert all(entry["binaries"] for entry in ticked.values())  # OpenShell requires the field
     opened = policy.render(ROOTS, profile="open")["network_policies"]
     assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
     with pytest.raises(ValueError):
@@ -169,7 +168,7 @@ def test_registry_counts_caps_and_forgets(tmp_path, monkeypatch):
     from coworker.sandbox.registry import SandboxLimitReached, SandboxRegistry
 
     reg = SandboxRegistry(tmp_path / "registry.db")
-    reg.record("ow-a", provider="openshell", session_id="s1", agent="lead", roots=ROOTS, profile="strict", enforcement="full")
+    reg.record("ow-a", provider="openshell", session_id="s1", agent="lead", roots=ROOTS, profile="allowlist", enforcement="full")
     reg.record("ow-b", provider="openshell", session_id="s1", agent="worker")
     assert reg.count() == 2 and reg.find("s1", "worker")["name"] == "ow-b"
     assert reg.list()[0]["roots"] == ROOTS and reg.list()[0]["machine_id"] == "local"
@@ -207,7 +206,7 @@ def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
     seen: dict = {}
 
     class Provider:
-        roots, profile = [{"path": str(tmp_path), "writable": True}], "strict"
+        roots, profile = [{"path": str(tmp_path), "writable": True}], "allowlist"
 
         def describe(self):
             return {"provider": "openshell", "enforcement": "full", "sandbox": "ow-reserved"}
@@ -299,7 +298,7 @@ def test_a_session_in_a_real_sandbox(folder):
     try:
         assert ws.describe()["enforcement"] == "full" and ws.describe()["runner"]["os"] == "Linux"
         row = ws.registry.find("s-test", "swe-lead")
-        assert row["name"] == ws.provider.sandbox_name and row["enforcement"] == "full" and row["profile"] == "strict"
+        assert row["name"] == ws.provider.sandbox_name and row["enforcement"] == "full" and row["profile"] == "allowlist"
         ex = ws.executor
         assert ex.run("cat hello.txt && cd /tmp && export KEEP=yes")["exit_code"] == 0
         assert ex.run("echo $KEEP $PWD")["output"].split() == ["yes", "/tmp"]  # one persistent shell
@@ -427,3 +426,24 @@ def test_credential_grants_are_copied_into_a_real_sandbox(folder):
     finally:
         ws.close()
     assert not Path(copy).exists()  # the copies died with the sandbox
+
+
+def test_a_mac_whose_docker_kernel_lacks_landlock_is_told_to_update_docker_desktop(tmp_path, monkeypatch):
+    """The CLI only says ContainerExited; the reason is in the container's log. On a Mac the
+    usual one is Docker Desktop's kernel without Landlock, which the probe can confirm."""
+    from coworker.sandbox import setup_cmd
+    from coworker.sandbox.providers import openshell as os_mod
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("`openshell sandbox create --name` failed: Error: sandbox entered error phase while provisioning: ContainerExited: Container exited")
+
+    monkeypatch.setattr(os_mod, "preflight", lambda: {"version": os_mod.PINNED_VERSION})
+    monkeypatch.setattr(os_mod, "_cli", fail)
+    monkeypatch.setattr(os_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: False)
+    provider = os_mod.OpenShellProvider(roots=[{"path": str(tmp_path), "writable": True}], cwd=str(tmp_path))
+    with pytest.raises(os_mod.OpenShellUnavailable, match="Update Docker Desktop"):
+        provider._create()
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: True)  # another reason: the CLI's own words
+    with pytest.raises(RuntimeError, match="ContainerExited"):
+        provider._create()

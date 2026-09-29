@@ -40,8 +40,8 @@ def test_steps_carry_keys_and_say_which_the_app_may_fix(monkeypatch):
     monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
     rows = {s.key: s for s in setup_cmd.steps()}
     assert not rows["docker"].ok and not rows["docker"].fixable and rows["docker"].docs == setup_cmd.DOCKER_INSTALL_URL
-    # A Mac needs no administrator (Homebrew installs as the user): the app installs it.
-    assert not rows["openshell"].ok and rows["openshell"].fixable and rows["openshell"].command == ""
+    # The user installs it; the row points at the guide.
+    assert not rows["openshell"].ok and not rows["openshell"].fixable and rows["openshell"].command == ""
     assert rows["openshell"].docs == setup_cmd.GUIDE_URL and rows["openshell"].hint == ""
     assert rows["bind_mounts"].fixable and rows["config"].fixable
     assert "linger" not in rows and "landlock" not in rows  # Linux-only rows
@@ -49,32 +49,40 @@ def test_steps_carry_keys_and_say_which_the_app_may_fix(monkeypatch):
     assert [(w, ok) for w, ok, _ in setup_cmd.checks()] == [(s.what, s.ok) for s in setup_cmd.steps()]
 
 
-def test_on_linux_the_install_is_the_apps_when_it_can_run_as_an_administrator(monkeypatch):
+def test_a_hung_check_counts_as_not_ok_instead_of_failing_the_checklist(monkeypatch):
+    """`docker info` hangs while Docker Desktop is installed but not running (seen on a Mac,
+    2026-09-28): the row says Docker is missing, and the checklist still loads."""
+    import subprocess
+
+    def hang(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr(setup_cmd.subprocess, "run", hang)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    rows = {s.key: s for s in setup_cmd.steps()}
+    assert not rows["docker"].ok and not rows["openshell"].ok
+    assert setup_cmd._run(["docker", "info"], 1).returncode == 124
+
+
+def test_the_app_never_installs_openshell_it_points_at_the_guide(monkeypatch):
+    """UX-053 v6: the user installs Docker and OpenShell; the row links to NVIDIA's guide."""
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
     monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
     monkeypatch.setattr(setup_cmd.getpass, "getuser", lambda: "sam")
     monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
     monkeypatch.setattr(setup_cmd, "landlock_available", lambda: True)
     monkeypatch.setattr(setup_cmd, "_run", lambda argv, timeout=600: type("Done", (), {"returncode": 1, "stdout": ""})())  # no loginctl here
-    # No way to run as an administrator without a password (WSL): ONE command handed over,
-    # linger first, because the installer needs the user's systemd manager.
-    monkeypatch.setattr(setup_cmd, "admin_prefix", lambda: None)
+    monkeypatch.setattr(setup_cmd, "admin_prefix", lambda: ["sudo", "-n"])  # even where it could
     rows = {s.key: s for s in setup_cmd.steps()}
-    assert not rows["openshell"].fixable
-    assert rows["openshell"].command == f"sudo loginctl enable-linger sam && {setup_cmd.installer_command()}"
-    assert rows["openshell"].command.startswith("sudo loginctl enable-linger sam && curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | OPENSHELL_VERSION=v")
+    assert not rows["openshell"].fixable and rows["openshell"].command == "" and rows["openshell"].docs == setup_cmd.GUIDE_URL
     assert rows["linger"].fixable and rows["linger"].command == "sudo loginctl enable-linger sam"
-    assert rows["grpcio"].ok or rows["grpcio"].command.startswith("pip install")
-    # With one (sudo without a password, or the desktop's prompt): the app installs it.
-    monkeypatch.setattr(setup_cmd, "admin_prefix", lambda: ["sudo", "-n"])
-    rows = {s.key: s for s in setup_cmd.steps()}
-    assert rows["openshell"].fixable and rows["openshell"].command == ""
-    # Another version than the pinned one is said, as a note, not a command.
+    # Another version than the pinned one is said, as a note.
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: "/usr/bin/openshell" if name == "openshell" else None)
     monkeypatch.setattr(setup_cmd, "_run", lambda argv, timeout=600: type("Done", (), {"returncode": 0, "stdout": "openshell 0.0.1\n"})())
     rows = {s.key: s for s in setup_cmd.steps()}
-    assert rows["openshell"].hint == "found 0.0.1, not the tested release" and rows["openshell"].fixable
-
+    assert rows["openshell"].hint == "found 0.0.1, not the tested release" and not rows["openshell"].fixable
 
 def test_admin_prefix_prefers_passwordless_sudo_then_the_desktop_prompt_never_wsl(monkeypatch):
     monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
@@ -97,50 +105,6 @@ def test_admin_prefix_prefers_passwordless_sudo_then_the_desktop_prompt_never_ws
     assert setup_cmd.admin_prefix() is None  # headless: nothing can show a prompt
     monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
     assert setup_cmd.admin_prefix() is None  # a Mac needs none
-
-
-def test_install_openshell_runs_the_installer_as_the_user_on_a_mac_and_as_an_administrator_on_linux(monkeypatch):
-    ran: list[list[str]] = []
-    monkeypatch.setattr(setup_cmd, "_stream", lambda argv, on_line, cancel: ran.append(argv) or (0, "done"))
-    monkeypatch.setattr(setup_cmd.getpass, "getuser", lambda: "sam")
-    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
-    assert setup_cmd.install_openshell() is None
-    assert ran == [["sh", "-c", setup_cmd.installer_command()]]
-    ran.clear()
-    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
-    monkeypatch.setattr(setup_cmd, "admin_prefix", lambda: ["sudo", "-n"])
-    assert setup_cmd.install_openshell() is None
-    assert ran == [["sudo", "-n", "sh", "-c", f"loginctl enable-linger sam && {setup_cmd.installer_command()}"]]
-    monkeypatch.setattr(setup_cmd, "_stream", lambda argv, on_line, cancel: (1, "checksum mismatch"))
-    assert setup_cmd.install_openshell() == "the installer exited with 1: checksum mismatch"
-    monkeypatch.setattr(setup_cmd, "_stream", lambda argv, on_line, cancel: (None, ""))
-    assert setup_cmd.install_openshell() == "installation cancelled"
-    monkeypatch.setattr(setup_cmd, "admin_prefix", lambda: None)
-    assert "sudo loginctl enable-linger sam && curl" in (setup_cmd.install_openshell() or "")
-
-
-def test_the_job_installs_openshell_with_its_output_as_progress(monkeypatch):
-    def fake_install(on_line, cancel):
-        for line in ("downloading v0.0.116 release checksums...", "installing openshell...", "gateway registered"):
-            on_line(line)
-            time.sleep(0.02)
-        return None
-
-    monkeypatch.setattr(setup_cmd, "install_openshell", fake_install)
-    reads = {"n": 0}
-
-    def steps():
-        reads["n"] += 1
-        return [Step("docker", setup_cmd.ROWS["docker"], True), Step("openshell", setup_cmd.ROWS["openshell"], reads["n"] > 1, fixable=True, docs=setup_cmd.GUIDE_URL)]
-
-    job = setup_job.SetupJob(steps)
-    job.start()
-    time.sleep(0.03)
-    mid = job.state()
-    assert mid["status"] == "running" and mid["progress"]["last_line"].startswith(("downloading", "installing"))
-    assert {r["key"]: r["state"] for r in mid["rows"]}["openshell"] == "fixing"
-    state = _wait(job)
-    assert state["status"] == "done" and {r["key"]: r["state"] for r in state["rows"]}["openshell"] == "fixed"
 
 
 def test_the_job_fixes_what_it_may_and_stops_at_what_needs_an_administrator(monkeypatch):
@@ -270,3 +234,73 @@ def test_the_readiness_endpoint_and_the_job_endpoints(tmp_path, monkeypatch):
     assert client.post("/v1/settings/sandbox/setup/cancel").json()["status"] == "needs_you"  # nothing running: unchanged
     monkeypatch.setattr(settings.sys, "platform", "win32")
     assert client.get("/v1/settings/sandbox/readiness").json() == {"platform": "win32", "supported": False, "steps": [], "all_ok": False}
+
+
+def test_the_folder_step_restarts_the_gateway_and_the_check_reads_the_config_in_use(tmp_path, monkeypatch):
+    """Seen on a Mac, 2026-09-28: the setting was written but the Homebrew gateway kept the
+    config it had started with, the check said yes, and sessions were refused."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    ran: list[list[str]] = []
+    listing = {"out": "/bin/zsh\n/opt/homebrew/opt/openshell/bin/openshell-gateway --config /opt/homebrew/var/openshell/gateway.toml\n"}
+
+    def fake_run(argv, timeout=600):
+        ran.append(argv)
+        return SimpleNamespace(returncode=0, stdout=listing["out"] if argv[0] == "ps" else "", stderr="")
+
+    monkeypatch.setattr(setup_cmd, "_run", fake_run)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    # Started with Homebrew's own config: not in use yet, whatever is on disk.
+    assert setup_cmd.gateway_config_in_use() == setup_cmd.Path("/opt/homebrew/var/openshell/gateway.toml")
+    assert setup_cmd.apply_bind_mounts() is None
+    assert ["brew", "services", "restart", "nvidia/openshell/openshell"] in ran
+    ours = tmp_path / "openshell" / "gateway.toml"
+    assert "enable_bind_mounts = true" in ours.read_text()
+    # Restarted: no --config, so `gateway.env` names the file, and the check is satisfied.
+    listing["out"] = "/opt/homebrew/opt/openshell/bin/openshell-gateway\n"
+    assert setup_cmd.gateway_config_in_use() == ours and setup_cmd._allows_bind_mounts(ours)
+    # Running it again is fine: the setting is there, only the restart happens.
+    ran.clear()
+    assert setup_cmd.apply_bind_mounts() is None and ours.read_text().count("enable_bind_mounts") == 1
+    assert ["brew", "services", "restart", "nvidia/openshell/openshell"] in ran
+    # Linux restarts the user unit.
+    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
+    ran.clear()
+    assert setup_cmd.restart_gateway() is None and ran == [["systemctl", "--user", "restart", "openshell-gateway"]]
+
+
+def test_on_a_mac_the_docker_kernel_is_asked_for_landlock(monkeypatch):
+    """Docker Desktop 28.0.4 (kernel 6.10.14-linuxkit) has no Landlock and every OpenShell
+    sandbox exited at start (2026-09-28); 29.8.1 (7.0.14) has it."""
+    from types import SimpleNamespace
+
+    answers = {"probe": "-1\n", "image": 0}
+
+    def fake_run(argv, timeout=600):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(returncode=answers["image"], stdout="", stderr="")
+        if argv[:2] == ["docker", "run"]:
+            assert "--network" in argv and "none" in argv  # a throwaway probe, no network
+            return SimpleNamespace(returncode=0, stdout=answers["probe"], stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(setup_cmd, "_run", fake_run)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+    assert setup_cmd.docker_landlock() is False
+    answers["probe"] = "8\n"
+    assert setup_cmd.docker_landlock() is True
+    answers["image"] = 1  # the base image is not here yet: cannot ask, no row
+    assert setup_cmd.docker_landlock() is None
+    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
+    assert setup_cmd.docker_landlock() is None  # Linux asks its own kernel (the `landlock` row)
+    # In the checklist: a row right after Docker, with what to do.
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: False)
+    monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    keys = [s.key for s in setup_cmd.steps()]
+    row = {s.key: s for s in setup_cmd.steps()}["docker_landlock"]
+    assert keys[:2] == ["docker", "docker_landlock"] and not row.ok and not row.fixable
+    assert row.hint.startswith("Update Docker Desktop") and row.docs == setup_cmd.DOCKER_DESKTOP_URL

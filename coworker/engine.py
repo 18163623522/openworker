@@ -418,6 +418,10 @@ class TurnEngine:
         self.permissions.clear_run_allowances()
         yield Event(EventType.TURN_START, data)
         try:
+            async for event in self._start_sandbox():
+                yield event
+                if event.type is EventType.ERROR:
+                    return
             async for event in self._loop():
                 yield event
         finally:
@@ -500,8 +504,33 @@ class TurnEngine:
             return
         self._cancel.clear()
         yield Event(EventType.TURN_START, {"input": ""})
+        async for event in self._start_sandbox():
+            yield event
+            if event.type is EventType.ERROR:
+                return
         async for event in self._loop():
             yield event
+
+    async def _start_sandbox(self) -> AsyncIterator[Event]:
+        """The session's sandbox is made by its first turn, not when the session opens
+        (RunnerWorkspace(start=False)). Off the event loop: an OpenShell container takes
+        seconds. A sandbox that cannot be made ends the turn with the reason, and Retry
+        tries again."""
+        workspace = getattr(self, "sandbox_workspace", None)
+        start = getattr(workspace, "ensure_started", None)
+        if start is None or getattr(workspace, "started", True):
+            return
+        provider = str(getattr(getattr(workspace, "provider", None), "name", "") or "sandbox")
+        yield Event(EventType.SANDBOX_PREPARING, {"provider": provider})
+        try:
+            await asyncio.to_thread(start)
+        except Exception as exc:
+            text = f"The {provider} sandbox could not start: {exc}"
+            self._append_notice("error", text)
+            yield Event(EventType.ERROR, {"error": text, "error_type": type(exc).__name__})
+            return
+        info = workspace.describe()
+        yield Event(EventType.SANDBOX_READY, {k: info.get(k) for k in ("provider", "enforcement", "reason", "sandbox") if info.get(k) is not None})
 
     async def resume(self) -> AsyncIterator[Event]:
         """Continue a turn that was suspended at a prompt and persisted — durable resume after a

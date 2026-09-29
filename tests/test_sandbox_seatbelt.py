@@ -101,7 +101,7 @@ def _ask(proxy: netproxy.AllowListProxy, request: bytes) -> bytes:
 
 
 def test_proxy_refuses_hosts_that_are_not_listed_and_says_why():
-    proxy = netproxy.AllowListProxy("strict")
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["github.com:443"])
     try:
         answer = _ask(proxy, b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
         assert answer.startswith(b"HTTP/1.1 403 ")
@@ -136,7 +136,7 @@ def test_proxy_tunnels_a_listed_host(monkeypatch):
         return real_connect(address, *args, **kwargs)
 
     monkeypatch.setattr(netproxy.socket, "create_connection", fake_connect)
-    proxy = netproxy.AllowListProxy("strict")
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["github.com:443"])
     try:
         with real_connect(("127.0.0.1", proxy.port), timeout=5) as s:
             s.sendall(b"CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n")
@@ -150,17 +150,34 @@ def test_proxy_tunnels_a_listed_host(monkeypatch):
         upstream.close()
 
 
-def test_every_profile_has_hosts_and_an_unknown_one_is_refused():
-    assert "github.com" in network_profiles.hosts("strict")
-    assert set(network_profiles.hosts("strict")) < set(network_profiles.hosts("standard"))
-    with pytest.raises(ValueError):
-        netproxy.AllowListProxy("wide-open")
+def test_the_catalogue_offers_sites_and_an_unknown_profile_is_refused():
+    assert network_profiles.hosts("allowlist") == []  # nothing until the machine ticks sites
+    assert {"github.com", "pypi.org", "api.tavily.com"} <= {h for hosts in network_profiles.SITES.values() for h in hosts}
+    for gone in ("strict", "standard", "wide-open"):
+        with pytest.raises(ValueError):
+            netproxy.AllowListProxy(gone)
+
+
+def test_a_machines_own_hosts_are_cleaned_and_join_the_list():
+    clean = network_profiles.clean_host
+    assert clean("Registry.Acme.dev") == "registry.acme.dev:443"
+    assert clean("sentry.io:8443") == "sentry.io:8443" and clean("*.acme.dev") == "*.acme.dev:443"
+    assert clean("https://api.acme.dev/v1") == "api.acme.dev:443"
+    for bad in ("", "localhost", "acme dev", "api.acme.dev:0", "api.acme.dev:http", "a..b"):
+        with pytest.raises(ValueError):
+            clean(bad)
+    assert network_profiles.clean_hosts(["a.dev", "A.dev:443", "nope"]) == ["a.dev:443"]
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["registry.acme.dev:443"])
+    try:
+        assert proxy.allows("registry.acme.dev", 443) and not proxy.allows("other.acme.dev", 443)
+    finally:
+        proxy.close()
 
 
 def test_the_open_profile_has_no_list_and_is_the_default_on_windows_only(tmp_path):
     assert network_profiles.hosts("open") == [] and network_profiles.is_open("open")
     assert network_profiles.default_profile("win32") == "open"
-    assert network_profiles.default_profile("darwin") == "strict" and network_profiles.default_profile("linux") == "strict"
+    assert network_profiles.default_profile("darwin") == "allowlist" and network_profiles.default_profile("linux") == "allowlist"
     # Seatbelt: the files stay confined, the network clause opens
     text = seatbelt_profile.render([{"path": str(tmp_path), "writable": True}], runtime_dir=str(tmp_path), open_network=True, home=str(tmp_path))
     assert "(allow network*)" in text and "localhost:" not in text and "(deny default)" in text

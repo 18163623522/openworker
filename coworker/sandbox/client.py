@@ -42,6 +42,9 @@ class _Pending:
 class RunnerClient:
     def __init__(self, open_transport: Callable[[], Transport], *, ping_seconds: float = P.PING_SECONDS) -> None:
         self._open = open_transport
+        # Called by the first call() when nothing is connected yet: a workspace whose
+        # sandbox starts on first use sets it, and clears it once started.
+        self.starter: Optional[Callable[[], Any]] = None
         self._ping_seconds = ping_seconds
         self._transport: Optional[Transport] = None
         self._send_lock = threading.Lock()
@@ -129,6 +132,12 @@ class RunnerClient:
     ) -> dict[str, Any]:
         with self._state_lock:
             transport = self._transport
+        if transport is None and self.starter is not None and not self._closed:
+            # A sandbox that starts on first use (RunnerWorkspace(start=False)): whatever
+            # reaches the runner first, a command or a file tool, starts it.
+            self.starter()
+            with self._state_lock:
+                transport = self._transport
         if transport is None:
             raise P.RunnerError(P.INTERNAL_ERROR, "not connected to a tool runner")
         return self._call_on(transport, method, params or {}, timeout=timeout, on_notify=on_notify)

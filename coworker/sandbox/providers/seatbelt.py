@@ -92,8 +92,11 @@ class SeatbeltProvider:
         runner_path: Optional[Path] = None,
         relay_silence_seconds: Optional[float] = None,
         credentials: Sequence[creds.Grant] = (),
+        extra_hosts: Sequence[str] = (),
     ) -> None:
-        """`credentials`: the grants (credentials.granted) to copy into the sandbox."""
+        """`credentials`: the grants (credentials.granted) to copy into the sandbox.
+        `extra_hosts`: the machine's own additions to the network list ("host:port")."""
+        self.extra_hosts = list(extra_hosts)
         self.roots = [{"path": seatbelt_profile.real(r["path"]), "writable": bool(r.get("writable"))} for r in roots]
         self.grants = list(credentials)
         self.copied: Optional[creds.CopiedCredentials] = None
@@ -161,8 +164,8 @@ class SeatbeltProvider:
         preflight()
         os.makedirs(os.path.join(self._dir, "tmp", "cache"), exist_ok=True)
         if self.network and not network_profiles.is_open(self.profile):
-            hosts = sorted({h for g in self.grants for h in g.hosts})
-            # A session with grants gets its own proxy, because its allow list is its own.
+            hosts = sorted({*self.extra_hosts, *(h for g in self.grants for h in g.hosts)})
+            # A session with grants or added hosts gets its own proxy: its allow list is its own.
             self._proxy = netproxy.AllowListProxy(self.profile, extra_hosts=hosts) if hosts else netproxy.shared(self.profile)
         else:
             self._proxy = None  # `open`: the profile lets everything out, nothing to route

@@ -29,7 +29,7 @@ def _has_setup() -> bool:
 
 
 
-def _open(tmp_path, *, extra_roots=(), network=False, profile="strict"):
+def _open(tmp_path, *, extra_roots=(), network=False, profile="allowlist"):
     from coworker.sandbox.providers.windows import WindowsProvider
 
     project = tmp_path / "project"

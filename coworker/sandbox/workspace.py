@@ -13,6 +13,7 @@ step 2 (design doc, section 11).
 from __future__ import annotations
 
 import os
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
@@ -61,6 +62,14 @@ class DirectWorkspace(Workspace):
 
 
 class RunnerWorkspace(Workspace):
+    """A workspace whose commands and file tools run in a sandbox, through the tool runner.
+
+    `start=False` (a session's workspace): the sandbox is not made until something needs
+    it, the first turn (TurnEngine starts it, so the session can say so) or, failing that,
+    the first call to the runner. Opening a session, or picking its folder, builds nothing
+    (seen 2026-09-28: every folder pick made a sandbox). The client and executor exist from
+    the start, so the file tools are always routed to the runner, never run here."""
+
     def __init__(
         self,
         provider: Any,
@@ -71,6 +80,7 @@ class RunnerWorkspace(Workspace):
         session_id: str = "",
         agent: str = "",
         live_roots: Optional[list] = None,
+        start: bool = True,
     ) -> None:
         from .client import RunnerClient
         from .executor import RunnerExecutor
@@ -82,31 +92,53 @@ class RunnerWorkspace(Workspace):
         # The session's own RootDir list. It changes while the session runs (a folder is
         # granted or taken away); a sandbox's walls are fixed when it starts.
         self._live_roots = live_roots
-        if registry is not None:
-            registry.reap()  # sandboxes left behind by a server that is gone
-            registry.check_room()
-            # Reserve the name before the sandbox exists: engine builds run concurrently
-            # (OPE-206), and another build's reap() would otherwise delete this one while
-            # it is still provisioning, because it is not yet in the registry.
-            self._record(state="creating")
-        try:
-            provider.create()
-        except Exception:
-            provider.destroy()  # a half-made sandbox may already hold copied credentials
-            if registry is not None and self._registered:
-                registry.close(self._registered)
-            raise
-        try:
-            self.client = RunnerClient(provider.open_runner)
-            self.hello = self.client.connect()
-            self._after_connect()
-        except Exception:
-            provider.destroy()
-            raise
+        self._start_lock = threading.Lock()
+        self.started = False
+        self.hello: dict[str, Any] = {}
+        self.client = RunnerClient(lambda: provider.open_runner())  # looked up when it connects
         self._executor = RunnerExecutor(
             self.client, cwd=str(Path(cwd).expanduser().resolve()), shell=shell, before_call=self.sync_roots
         )
-        self._record()
+        if start:
+            self.ensure_started()
+        else:
+            self.client.starter = self.ensure_started
+
+    def ensure_started(self) -> None:
+        """Make the sandbox, connect to its runner and prove the wall. Once; a failure
+        leaves nothing behind and the next call tries again."""
+        with self._start_lock:
+            if self.started:
+                return
+            registry = self.registry
+            if registry is not None:
+                registry.reap()  # sandboxes left behind by a server that is gone
+                registry.check_room()
+                # Reserve the name before the sandbox exists: engine builds run concurrently
+                # (OPE-206), and another build's reap() would otherwise delete this one while
+                # it is still provisioning, because it is not yet in the registry.
+                self._record(state="creating")
+            try:
+                self.provider.create()
+            except Exception:
+                self.provider.destroy()  # a half-made sandbox may already hold copied credentials
+                if registry is not None and self._registered:
+                    registry.close(self._registered)
+                    self._registered = None
+                raise
+            try:
+                self.hello = self.client.connect()
+                self._after_connect()
+            except Exception:
+                self.client.detach()
+                self.provider.destroy()
+                if registry is not None and self._registered:
+                    registry.close(self._registered)
+                    self._registered = None
+                raise
+            self._record()
+            self.started = True
+            self.client.starter = None
 
     def _record(self, state: str = "ready") -> None:
         """Enter this sandbox in the registry; after a restart that replaced it, under its
@@ -131,7 +163,9 @@ class RunnerWorkspace(Workspace):
 
     def sync_roots(self) -> Optional[str]:
         """Restart the sandbox when the session's folders are no longer the ones it was
-        started with (design ruling 15). Returns what to tell the agent, or None."""
+        started with (design ruling 15). Returns what to tell the agent, or None. Runs
+        before every command, so it is also where a sandbox not yet started starts."""
+        self.ensure_started()
         regrant = getattr(self.provider, "regrant", None)
         if regrant is None or self._live_roots is None:
             return None
@@ -181,6 +215,13 @@ class RunnerWorkspace(Workspace):
         return {**self.provider.describe(), "runner": {k: self.hello.get(k) for k in ("runner_version", "os", "machine", "instance_id")}}
 
     def close(self) -> None:
+        if not self.started:
+            self.client.close()
+            try:
+                self.provider.destroy()  # no sandbox was made; its private folder may have been
+            except Exception:
+                pass
+            return
         try:
             self._executor.close()
         finally:
@@ -218,10 +259,14 @@ def open_workspace(
     credentials: Optional[list] = None,
     network_profile: Optional[str] = None,
     toolchains: Optional[list] = None,
+    extra_hosts: Optional[list] = None,
+    start: bool = True,
 ) -> Workspace:
     """The session's workspace for the configured provider. `credentials`: the machine's
     `sandbox_credentials` setting; the enabled entries are copied into the sandbox
     (design doc, section 11b). Ignored in `direct` mode, where nothing is hidden anyway. `direct` unless told otherwise.
+    `extra_hosts`: the machine's `sandbox_network_hosts`, the sites an allow list lets through.
+    `start=False`: make the sandbox on first use instead of now (a session's workspace).
     `toolchains`: the machine's `sandbox_toolchains` setting; the switched-on folders that
     exist are readable inside (Seatbelt, Windows full mode).
     `roots`: the session's RootDir list (primary first); without it the workspace folder is
@@ -239,9 +284,10 @@ def open_workspace(
     from .credentials import granted
 
     grants = granted(credentials)
-    from .network_profiles import check, default_profile
+    from .network_profiles import check, clean_hosts, default_profile
 
     profile = check((network_profile or "").strip().lower() or default_profile())
+    added = clean_hosts(extra_hosts)
     from . import toolchains as toolchain_list
 
     tool_dirs = toolchain_list.granted(toolchains)
@@ -250,12 +296,13 @@ def open_workspace(
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
+            SeatbeltProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
             agent=agent,
             live_roots=roots,
+            start=start,
         )
     if name == OPENSHELL:
         from .providers.openshell import OpenShellProvider
@@ -263,23 +310,25 @@ def open_workspace(
 
         label = "-".join(part for part in (session_id[:24], agent[:24]) if part)
         return RunnerWorkspace(
-            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile),
+            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
             agent=agent,
             live_roots=roots,
+            start=start,
         )
     if name == WINDOWS:
         from .providers.windows import WindowsProvider
         from .registry import SandboxRegistry
 
         return RunnerWorkspace(
-            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs),
+            WindowsProvider(roots=listed, cwd=str(cwd), credentials=grants, profile=profile, tool_dirs=tool_dirs, extra_hosts=added),
             cwd=cwd,
             registry=SandboxRegistry(),
             session_id=session_id,
             agent=agent,
             live_roots=roots,
+            start=start,
         )
     raise ValueError(f"unknown sandbox provider: {name!r} (known: {DIRECT}, {SEATBELT}, {WINDOWS}, {OPENSHELL}, {RUNNER_LOCAL})")

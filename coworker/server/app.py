@@ -2862,15 +2862,11 @@ def create_app(manager: SessionManager) -> FastAPI:
         mcp_tools = await manager.prepare_mcp_tools(
             session_id, workspace=workspace, agent=agent
         )
-        # Building the engine can mean building a sandbox: with OpenShell, a container is
-        # created, its runner started and its mounts verified, which takes seconds (and on
-        # first use, minutes). Done on the event loop that wait froze the whole server, so
-        # the GUI saw its health checks fail and showed the app-wide "Starting OpenWorker…"
-        # screen instead of this session (OPE-206). So: say what is happening on THIS
-        # socket, build on a worker thread, and report the outcome here too.
-        sandbox_provider = manager.pending_sandbox_build(session_id)
-        if sandbox_provider:
-            await ws.send_json({"type": "sandbox_preparing", "data": {"provider": sandbox_provider}})
+        # The engine is built off the event loop (OPE-206: a build once froze the server).
+        # Its sandbox is not made here: the first turn makes it and says so
+        # (TurnEngine._start_sandbox), so opening a session or picking its folder builds
+        # nothing. A sandbox that cannot be used at all is still refused here, by the
+        # provider choice (select), with the reason.
         try:
             engine = await asyncio.to_thread(
                 manager.get_engine,
@@ -2896,14 +2892,6 @@ def create_app(manager: SessionManager) -> FastAPI:
             await ws.send_json({"type": "error", "data": {"error": str(exc)}})
             await ws.close(code=WS_CLOSE_SESSION_REFUSED, reason="session refused")
             return
-        if sandbox_provider and engine is not None:
-            info = getattr(getattr(engine, "sandbox_workspace", None), "describe", dict)()
-            await ws.send_json(
-                {
-                    "type": "sandbox_ready",
-                    "data": {key: info.get(key) for key in ("provider", "enforcement", "reason", "sandbox") if info.get(key) is not None},
-                }
-            )
         if engine is None:
             await ws.send_json(
                 {

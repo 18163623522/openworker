@@ -125,8 +125,11 @@ class Config:
     # coworker/sandbox/credentials.py; an entry here edits or adds by name.
     sandbox_credentials: list[dict[str, Any]] = field(default_factory=list)
     # Which hosts a sandbox may reach: a profile name from coworker/sandbox/network_profiles.py
-    # ("strict" when unset). Machine-level, like the provider.
+    # ("allowlist" when unset, "open" on Windows). Machine-level, like the provider.
     sandbox_network_profile: Optional[str] = None
+    # The sites an `allowlist` sandbox may reach, "host:port" (a bare host means 443).
+    # Empty until the user ticks some in Settings ▸ Sandbox.
+    sandbox_network_hosts: list[str] = field(default_factory=list)
     # Developer tool folders under the home folder a sandbox may read (design doc, Windows
     # 3d.4): `[[sandbox_toolchains]]` tables with name, path, enabled, editing or adding to
     # the shipped list in coworker/sandbox/toolchains.py by name. Machine-level.
@@ -143,6 +146,7 @@ _FIELDS = {
     "sandbox_provider",
     "sandbox_credentials",
     "sandbox_network_profile",
+    "sandbox_network_hosts",
     "sandbox_toolchains",
     "compaction_cap_tokens",
     "compaction_summary_max_tokens",
@@ -170,6 +174,7 @@ _GLOBAL_ONLY_FIELDS = {
     "sandbox_provider",
     "sandbox_credentials",
     "sandbox_network_profile",
+    "sandbox_network_hosts",
     "sandbox_toolchains",
     "allowed_commands",
     "auto_allow",
@@ -196,6 +201,32 @@ def set_global_value(key: str, value: str, *, path: Optional[Path] = None) -> Pa
     kept = [line for line in lines if not re.match(rf"\s*{re.escape(key)}\s*=", line)]
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     target.write_text("\n".join([f'{key} = "{escaped}"', *kept]) + "\n", encoding="utf-8")
+    return target
+
+
+def set_global_list(key: str, values: list[str], *, path: Optional[Path] = None) -> Path:
+    """Set one top-level list-of-strings key in the machine's config.toml, like
+    set_global_value; an empty list removes the key. A hand-written array spread over
+    several lines is removed whole."""
+    if key not in _FIELDS:
+        raise ValueError(f"not a config key: {key}")
+    target = Path(path) if path is not None else global_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
+    kept: list[str] = []
+    inside = False
+    for line in lines:
+        if inside:
+            inside = "]" not in line
+            continue
+        if re.match(rf"\s*{re.escape(key)}\s*=", line):
+            inside = "[" in line and "]" not in line
+            continue
+        kept.append(line)
+    if values:
+        items = ", ".join('"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"' for v in values)
+        kept = [f"{key} = [{items}]", *kept]
+    target.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return target
 
 

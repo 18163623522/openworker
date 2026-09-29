@@ -2285,7 +2285,9 @@ export function App() {
                   {/* Not gated on `connected`: switching sessions keeps the previous socket's
                       connected=true until this one's `ready`, which also clears the flag. */}
                   {preparingSandbox && (
-                    <WaitingForAgent label={t("app.preparing_sandbox", { provider: preparingSandbox })} />
+                    <WaitingForAgent
+                      label={t(["seatbelt", "windows", "openshell"].includes(preparingSandbox) ? `app.preparing_sandbox_${preparingSandbox}` : "app.preparing_sandbox")}
+                    />
                   )}
                   {/* Compaction runs between provider turns (nothing streams during it), so
                       the transient takes over the waiting slot with a specific label. */}

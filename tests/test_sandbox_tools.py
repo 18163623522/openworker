@@ -194,3 +194,29 @@ def test_the_packed_runner_carries_the_toolkits_and_needs_no_site_packages(tmp_p
     done = subprocess.run([sys.executable, "-S", "-c", probe, str(zipapp), str(tmp_path / "ws")], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "['a.txt']"
+
+
+def test_a_session_workspace_makes_its_sandbox_on_first_use(tmp_path):
+    """RunnerWorkspace(start=False): nothing is made until the runner is needed, and the
+    file tools are still routed to the runner (never run here) before that."""
+    folder = tmp_path / "ws"
+    folder.mkdir()
+    (folder / "a.txt").write_text("hello\n")
+    provider = RunnerLocalProvider(cwd=folder, runner_path=build_runner_zipapp(tmp_path / "dist"))
+    made: list[str] = []
+    real_create = provider.create
+    provider.create = lambda: (made.append("create"), real_create())[1]
+    sandbox = RunnerWorkspace(provider, cwd=folder, start=False)
+    try:
+        assert not sandbox.started and made == []
+        ctx = AgentContext(workspace=folder, executor=sandbox.executor, sandbox=sandbox)
+        tools = {t.__name__: t for t in catalog.expand(["code_files"], ctx)}
+        assert getattr(tools["read_file"], "__wrapped_in_runner__", True)  # proxied, not local
+        assert "hello" in str(tools["read_file"]("a.txt"))  # the first call makes the sandbox
+        assert sandbox.started and made == ["create"]
+        assert sandbox.executor.run("echo again")["exit_code"] == 0 and made == ["create"]
+    finally:
+        sandbox.close()
+    unused = RunnerWorkspace(RunnerLocalProvider(cwd=folder, runner_path=build_runner_zipapp(tmp_path / "dist2")), cwd=folder, start=False)
+    unused.close()  # never started: nothing to take down
+    assert not unused.started

@@ -348,6 +348,8 @@ def build_engine(
             agent=agent.name,
             credentials=config.sandbox_credentials,
             network_profile=config.sandbox_network_profile,
+            extra_hosts=config.sandbox_network_hosts,
+            start=False,  # made when the first turn needs it, not when the session opens
             toolchains=config.sandbox_toolchains,
         )
         if ws is not None

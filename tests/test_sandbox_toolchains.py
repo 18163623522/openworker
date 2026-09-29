@@ -9,12 +9,12 @@ import os
 from coworker.sandbox import toolchains
 
 
-def test_the_shipped_lists_are_per_platform_and_switched_on():
+def test_the_shipped_lists_are_per_platform_and_switched_off():
     mac = toolchains.defaults("darwin")
     win = toolchains.defaults("win32")
     assert {e["name"] for e in mac} >= {"nvm", "pyenv", "cargo", "go", "uv"}
     assert {e["name"] for e in win} >= {"nvm", "npm", "pyenv", "scoop", "cargo"}
-    assert all(e["enabled"] and e["path"].startswith("~/") for e in mac + win)
+    assert all(not e["enabled"] and e["path"].startswith("~/") for e in mac + win)  # nothing until switched on (UX-053 v6)
     assert toolchains.defaults("linux") == []  # OpenShell mounts no home folder
 
 
@@ -31,6 +31,7 @@ def test_granted_is_only_what_is_on_and_exists_under_home(tmp_path):
     (home / "tools").mkdir()
     (tmp_path / "outside").mkdir()
     configured = [
+        {"name": "nvm", "enabled": True},
         {"name": "pyenv", "enabled": True},  # on, but missing here
         {"name": "cargo", "enabled": False},
         {"name": "mytools", "path": "~/tools"},
@@ -41,4 +42,5 @@ def test_granted_is_only_what_is_on_and_exists_under_home(tmp_path):
     assert got == [os.path.realpath(home / ".nvm"), os.path.realpath(home / "tools")]
     shown = {e["name"]: e for e in toolchains.for_display(configured, home=str(home), platform="darwin")}
     assert shown["nvm"]["exists"] and shown["nvm"]["shipped"]
-    assert not shown["pyenv"]["exists"] and shown["mytools"]["exists"] and not shown["mytools"]["shipped"]
+    assert "pyenv" not in shown and "go" not in shown  # shipped but not on this machine: not shown
+    assert shown["mytools"]["exists"] and not shown["mytools"]["shipped"]

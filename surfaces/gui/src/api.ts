@@ -2125,9 +2125,12 @@ export interface SandboxSettings {
   // place except for the base image (about 5 GB, pulled once); the radio stays enabled.
   providers: { name: string; usable: boolean; why: string; state?: "ready" | "needs_download" | "unavailable" }[];
   windows_setup: WindowsSetupInfo | null;
-  network_profile: string;
-  network_profiles: { name: string; hosts: string[] }[];
-  credentials: SandboxCredentialEntry[];
+  network_profile: string; // "allowlist" | "open"
+  network_profiles: { name: string }[];
+  network_sites: { group: string; hosts: string[] }[]; // the catalogue the sites dialog offers, "host:port"
+  network_hosts: string[]; // the sites the machine ticked, "host:port"; empty until it ticks some
+  credentials: SandboxCredentialEntry[]; // only the entries the user added (UX-053 v5)
+  credential_presets: SandboxCredentialEntry[]; // the "A CLI's login" picker: shipped, not yet added
   toolchains: SandboxToolchainEntry[];
   config_path: string;
 }
@@ -2138,7 +2141,7 @@ export async function getSandboxSettings(machineId?: string | null): Promise<San
 }
 
 export async function setSandboxSettings(
-  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "credentials" | "toolchains">>,
+  patch: Partial<Pick<SandboxSettings, "provider" | "network_profile" | "network_hosts" | "credentials" | "toolchains">>,
   machineId?: string | null,
 ): Promise<{ ok: boolean; error?: string; rebuilt_sessions?: string[] } & Partial<SandboxSettings>> {
   // `rebuilt_sessions`: after a provider change, the sessions whose engine the server

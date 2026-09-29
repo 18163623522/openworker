@@ -12,7 +12,7 @@
 #   - A Python venv at .venv (repo root) with this package installed editable, plus the
 #     build-only deps:
 #       python3 -m venv .venv
-#       .venv/bin/pip install -e '.[bedrock]' pyinstaller tzdata typer
+#       .venv/bin/pip install -e '.[bedrock,openshell]' pyinstaller tzdata typer
 #     `typer` is needed only at BUILD time: PyInstaller walks the `mcp` package and
 #     `mcp.cli` calls sys.exit() at import if typer is absent, which aborts the freeze.
 #     (aisuite installs like any other dependency — git-pinned in pyproject.toml.)
@@ -36,7 +36,7 @@
 # the spec strips coworker.connectors.experimental. Self-builders can opt in with:
 #   COWORKER_EXPERIMENTAL=1 ./build_dmg.sh
 # VENV PREREQS (a fresh worktree's venv, discovered the hard way 2026-08-21):
-#   .venv/bin/pip install -e ".[dev,messaging,browser,bedrock]" pyinstaller typer
+#   .venv/bin/pip install -e ".[dev,messaging,browser,bedrock,openshell]" pyinstaller typer
 # (`typer` because PyInstaller's submodule collection imports mcp.cli, which
 # sys.exit(1)s without it.)
 set -euo pipefail
@@ -71,6 +71,13 @@ if [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   # Allow codesign to use the key headlessly (no UI prompt exists on a runner).
   security set-key-partition-list -S "apple-tool:,apple:" -s -k "$KC_PASS" "$KC" >/dev/null
   security list-keychains -d user -s "$KC" login.keychain-db
+fi
+
+# OpenShell sandboxes talk to the gateway over gRPC; a sidecar without grpcio can never use
+# them (a DMG shipped that way on 2026-09-28).
+if ! "$PLATFORM/.venv/bin/python" -c "import grpc" 2>/dev/null; then
+  echo "ERROR: grpcio is missing from .venv; install the openshell extra (see VENV PREREQS above)" >&2
+  exit 1
 fi
 
 echo "==> [1/5] PyInstaller: bundling openworker-server ($TRIPLE)"

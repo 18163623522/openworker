@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import config as app_config
-from .providers import openshell
+from .providers import openshell, openshell_policy
 from .providers.openshell import PINNED_VERSION
 from .selection import openshell_problem, select
 
@@ -42,6 +42,10 @@ _INSTALLER = "https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh
 # Where the page's "Guide" links point: how OpenShell fits, what a machine needs, setup.
 GUIDE_URL = "https://github.com/andrewyng/openworker/blob/main/docs/openshell.md"
 DOCKER_INSTALL_URL = "https://docs.docker.com/engine/install/"
+DOCKER_DESKTOP_URL = "https://docs.docker.com/desktop/setup/install/mac-install/"
+# What a Mac user is told when Docker Desktop's Linux kernel lacks Landlock (engine 28.0.4,
+# kernel 6.10.14-linuxkit, seen 2026-09-28; engine 29.8.1, kernel 7.0.14, has it).
+DOCKER_LANDLOCK_FIX = "Update Docker Desktop: this version's Linux kernel has no Landlock, which OpenShell needs"
 _BIND_MOUNTS = "[openshell.drivers.docker]\nenable_bind_mounts = true\n"
 # The base image is pulled by the first `sandbox create` otherwise, which on a slow link
 # outlives the create's timeout and hangs the first session (OPE-205). So it is a check of
@@ -60,12 +64,13 @@ ROWS = {
     "gateway": "the gateway is running",
     "grpcio": "the `grpcio` package is installed",
     "landlock": "the kernel supports Landlock (OpenShell requires it)",
+    "docker_landlock": "Docker Desktop's Linux kernel supports Landlock (OpenShell requires it)",
     "config": "this machine is set to use OpenShell",
     "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
     "image": IMAGE_ROW,
 }
-# Steps the app may fix on its own without an administrator. `openshell` joins them at
-# run time when `admin_prefix()` finds a way to run as one; see `steps()`.
+# Steps the app may fix on its own. Installing OpenShell is never one of them: the user
+# installs it (UX-053 v6).
 FIXABLE = {"bind_mounts", "config", "image", "linger"}
 
 
@@ -84,7 +89,14 @@ class Step:
 
 
 def _run(argv: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    """A command that hangs past `timeout` (`docker info` does while Docker Desktop is
+    installed but not running) or cannot start counts as failed, never as an error."""
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", f"timed out after {timeout:g} s")
+    except OSError as exc:
+        return subprocess.CompletedProcess(argv, 127, "", str(exc))
 
 
 def _openshell_home() -> Path:
@@ -121,15 +133,6 @@ def admin_prefix() -> Optional[list[str]]:
     return None
 
 
-def install_handover_command() -> str:
-    """The ONE command a user runs in a terminal when the app cannot run the administrator
-    steps itself: linger first (the installer needs the user's systemd manager, which does
-    not run without it on WSL), then the installer. On a Mac, the installer alone."""
-    if sys.platform.startswith("linux"):
-        return f"sudo loginctl enable-linger {getpass.getuser()} && {installer_command()}"
-    return installer_command()
-
-
 def landlock_available() -> Optional[bool]:
     """Whether this kernel has Landlock: True/False on Linux, None elsewhere (a Mac's
     sandboxes run in Docker Desktop's own Linux VM, which cannot be asked from here).
@@ -141,6 +144,29 @@ def landlock_available() -> Optional[bool]:
         libc = ctypes.CDLL(None, use_errno=True)
         return libc.syscall(444, None, 0, 1) >= 0
     except Exception:
+        return None
+
+
+_LANDLOCK_PROBE = "import ctypes; print(ctypes.CDLL(None, use_errno=True).syscall(444, None, 0, 1))"
+
+
+def docker_landlock() -> Optional[bool]:
+    """On a Mac: whether Docker Desktop's Linux VM has Landlock, asked from a throwaway
+    container of the base image (no network), the same call as `landlock_available`.
+    None when it cannot be asked: not a Mac, Docker not answering, or the base image not
+    downloaded yet (it is checked again after the download)."""
+    if sys.platform != "darwin" or not shutil.which("docker"):
+        return None
+    image = openshell.sandbox_image()
+    if _run(["docker", "image", "inspect", image], 30).returncode != 0:
+        return None
+    done = _run(
+        ["docker", "run", "--rm", "--network", "none", "--security-opt", "seccomp=unconfined", "--entrypoint", openshell_policy.PYTHON, image, "-c", _LANDLOCK_PROBE],
+        90,
+    )  # fmt: skip
+    try:
+        return int((done.stdout.split() or [""])[-1]) >= 0
+    except ValueError:
         return None
 
 
@@ -165,25 +191,25 @@ def steps() -> list[Step]:
     docker = shutil.which("docker")
     docker_ok = bool(docker) and _run(["docker", "info", "--format", "{{.ServerVersion}}"], 30).returncode == 0
     out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, then add this user to the `docker` group and log in again", docs="" if docker_ok else DOCKER_INSTALL_URL))
+    if docker_ok:
+        kernel = docker_landlock()
+        if kernel is not None:
+            out.append(Step("docker_landlock", ROWS["docker_landlock"], kernel, "" if kernel else DOCKER_LANDLOCK_FIX, docs="" if kernel else DOCKER_DESKTOP_URL))
     exe = shutil.which("openshell")
-    version = _run([exe, "--version"], 15).stdout.strip().split()[-1] if exe else ""
+    version = (_run([exe, "--version"], 15).stdout.split() or [""])[-1] if exe else ""
     openshell_ok = version == PINNED_VERSION
-    # The app installs it when it can run as an administrator without a password (or
-    # needs none, on a Mac); otherwise the row carries the one command to run.
-    can_install = sys.platform == "darwin" or (sys.platform.startswith("linux") and admin_prefix() is not None)
+    # The user installs OpenShell (UX-053 v6): the app points at NVIDIA's guide and checks
+    # again; it never runs their installer. `setup` in a terminal still offers to.
     out.append(
         Step(
             "openshell",
             ROWS["openshell"],
             openshell_ok,
             "" if openshell_ok or not version else f"found {version}, not the tested release",
-            fixable=not openshell_ok and can_install,
-            command="" if openshell_ok or can_install else install_handover_command(),
             docs="" if openshell_ok else GUIDE_URL,
         )
     )
-    gateway_toml = _openshell_home() / "gateway.toml"
-    binds = gateway_toml.is_file() and "enable_bind_mounts = true" in gateway_toml.read_text(encoding="utf-8")
+    binds = _allows_bind_mounts(gateway_config_in_use())
     out.append(Step("bind_mounts", ROWS["bind_mounts"], binds, fixable=True))
     if sys.platform.startswith("linux"):
         linger = _run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger"], 15).stdout.strip() == "Linger=yes"
@@ -243,15 +269,62 @@ def apply_bind_mounts() -> Optional[str]:
     gateway_toml, gateway_env = home / "gateway.toml", home / "gateway.env"
     home.mkdir(parents=True, exist_ok=True)
     existing = gateway_toml.read_text(encoding="utf-8") if gateway_toml.is_file() else ""
-    if "[openshell.drivers.docker]" in existing:
+    if "[openshell.drivers.docker]" in existing and not _allows_bind_mounts(gateway_toml):
         return f"{gateway_toml} already has a [openshell.drivers.docker] table; add `enable_bind_mounts = true` to it by hand."
-    gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
+    if not _allows_bind_mounts(gateway_toml):
+        gateway_toml.write_text((existing.rstrip() + "\n\n" if existing.strip() else "") + _BIND_MOUNTS, encoding="utf-8")
     env_line = f"OPENSHELL_GATEWAY_CONFIG={gateway_toml}\n"
     env_text = gateway_env.read_text(encoding="utf-8") if gateway_env.is_file() else ""
     if "OPENSHELL_GATEWAY_CONFIG=" not in env_text:
         gateway_env.write_text(env_text + env_line, encoding="utf-8")
-    _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
+    return restart_gateway()
+
+
+def restart_gateway() -> Optional[str]:
+    """Restart the local gateway so it reads its config again: a Homebrew service on a Mac
+    (the formula's start script reads `gateway.env`), a user systemd unit on Linux. Returns
+    an error text, or None. Before 2026-09-28 the Mac was never restarted: the setting was
+    written, the running gateway kept Homebrew's own config, and sessions were refused."""
+    if sys.platform == "darwin":
+        if not shutil.which("brew"):
+            return "Homebrew is not on PATH, so the OpenShell gateway could not be restarted; run: brew services restart nvidia/openshell/openshell"
+        done = _run(["brew", "services", "restart", "nvidia/openshell/openshell"], 120)
+    else:
+        done = _run(["systemctl", "--user", "restart", "openshell-gateway"], 120)
+    if done.returncode != 0:
+        return f"the OpenShell gateway did not restart: {(done.stderr or done.stdout or '').strip()[:300]}"
     return None
+
+
+def _allows_bind_mounts(config: Optional[Path]) -> bool:
+    try:
+        return config is not None and config.is_file() and "enable_bind_mounts = true" in config.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def gateway_config_in_use() -> Optional[Path]:
+    """The config file the RUNNING gateway was started with: its `--config` argument, else
+    the one `gateway.env` names, else `gateway.toml` under the OpenShell config folder. A
+    file written after the gateway started is not in use until it restarts, so the check
+    reads what the process was given rather than what is on disk."""
+    home = _openshell_home()
+    listing = _run(["ps", "-Ao", "args="], 15).stdout if sys.platform != "win32" else ""
+    for line in listing.splitlines():
+        parts = line.split()
+        if not parts or not parts[0].endswith("openshell-gateway"):
+            continue
+        if "--config" in parts[:-1]:
+            return Path(parts[parts.index("--config") + 1])
+        break
+    env_file = home / "gateway.env"
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines() if env_file.is_file() else []:
+            if line.startswith("OPENSHELL_GATEWAY_CONFIG="):
+                return Path(line.split("=", 1)[1].strip())
+    except OSError:
+        pass
+    return home / "gateway.toml"
 
 
 def enable_linger() -> Optional[str]:
@@ -264,49 +337,6 @@ def enable_linger() -> Optional[str]:
     if prefix is not None and _run(prefix + ["loginctl", "enable-linger", user], 120).returncode == 0:
         return None
     return f"sudo loginctl enable-linger {user}"
-
-
-def _stream(argv: list[str], on_line: Optional[Callable[[str], None]], cancel: Optional[threading.Event]) -> tuple[Optional[int], str]:
-    """Run `argv` with stdin closed, feeding each output line to `on_line`. Returns the
-    exit code (None when cancelled) and the last line seen."""
-    last = ""
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    except OSError as exc:
-        return 127, f"could not run {argv[0]}: {exc}"
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        if cancel is not None and cancel.is_set():
-            proc.kill()
-            proc.wait()
-            return None, last
-        line = line.strip()
-        if line:
-            last = line[:160]
-            if on_line is not None:
-                on_line(last)
-    return proc.wait(), last
-
-
-def install_openshell(on_line: Optional[Callable[[str], None]] = None, cancel: Optional[threading.Event] = None) -> Optional[str]:
-    """Install the pinned OpenShell from the app (Settings ▸ Set up sandbox). On a Mac the
-    installer runs as the user. On Linux it runs as an administrator through
-    `admin_prefix()`, with linger enabled FIRST in the same run (the installer needs the
-    user's systemd manager, which does not run without linger on WSL and on a headless
-    box). Returns an error text, or None when it succeeded."""
-    if sys.platform == "darwin":
-        argv = ["sh", "-c", installer_command()]
-    else:
-        prefix = admin_prefix()
-        if prefix is None:
-            return "this machine has no way to run an administrator step without a password; run: " + install_handover_command()
-        argv = prefix + ["sh", "-c", f"loginctl enable-linger {getpass.getuser()} && {installer_command()}"]
-    code, last = _stream(argv, on_line, cancel)
-    if code is None:
-        return "installation cancelled"
-    if code != 0:
-        return f"the installer exited with {code}: {last}"
-    return None
 
 
 def apply_config() -> None:
