@@ -179,6 +179,8 @@ jobs:
           mkdir -p out
           cp packaging/dist/openworker-*-linux-${{ matrix.arch }}.tar.gz* out/
           cp packaging/dist/openworker-*-linux-${{ matrix.arch }}.tar.gz out/openworker-linux-${{ matrix.arch }}.tar.gz
+          # packaging/install.sh fetches the stable name for "latest" and checks it against this.
+          (cd out && sha256sum openworker-linux-${{ matrix.arch }}.tar.gz > openworker-linux-${{ matrix.arch }}.tar.gz.sha256)
           ls -la out
 
       - uses: actions/upload-artifact@v4
