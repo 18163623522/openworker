@@ -162,6 +162,34 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.queryByTestId("sandbox-openshell-dialog")).toBeNull();
   });
 
+  it("OpenShell on a Mac whose Docker Desktop kernel lacks Landlock: update Docker Desktop, then the reason", async () => {
+    snapshot = { ...base, platform: "darwin", providers: [{ name: "direct", usable: true, why: "" }, { name: "seatbelt", usable: true, why: "" }, { name: "openshell", usable: false, why: "", state: "unavailable" }] };
+    readinessNow = {
+      ...readiness,
+      steps: [
+        { ...readiness.steps[0], ok: true },
+        { key: "docker_landlock", what: "Docker Desktop's Linux kernel supports Landlock", ok: false, hint: "Update Docker Desktop", fixable: false, command: "", docs: "https://docs.docker.com/desktop/setup/install/mac-install/" },
+        { ...readiness.steps[1], ok: true },
+        { ...readiness.steps[2], ok: true },
+        readiness.steps[3],
+      ],
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    fireEvent.click(masterSwitch());
+    fireEvent.click(screen.getByTestId("sandbox-setup-openshell"));
+    await screen.findByTestId("sandbox-setup-landlock");
+    const dialog = screen.getByTestId("sandbox-openshell-dialog");
+    expect(dialog.querySelectorAll("li").length).toBe(3); // still three rows: the kernel folds into Docker's
+    expect(screen.getByTestId("sandbox-setup-row-docker").getAttribute("data-state")).toBe("bad");
+    const lines = screen.getByTestId("sandbox-setup-landlock").children;
+    expect(lines[0].textContent).toBe("Update Docker Desktop, then check again. Get Docker Desktop");
+    expect(lines[1].textContent).toBe("This version's Linux kernel has no Landlock, which OpenShell needs.");
+    expect((screen.getByTestId("sandbox-setup-docs-landlock") as HTMLAnchorElement).href).toBe("https://docs.docker.com/desktop/setup/install/mac-install/");
+    expect(screen.queryByTestId("sandbox-setup-start")).toBeNull(); // Check again, not Set up
+    expect(screen.getByTestId("sandbox-setup-check")).toBeTruthy();
+  });
+
   it("OpenShell: both checks pass, Set up runs; the rows stay and the third shows the download", async () => {
     snapshot = { ...base, platform: "darwin", providers: [{ name: "direct", usable: true, why: "" }, { name: "seatbelt", usable: true, why: "" }, { name: "openshell", usable: false, why: "", state: "needs_download" }] };
     readinessNow = { ...readiness, steps: [{ ...readiness.steps[0], ok: true }, { ...readiness.steps[1], ok: true }, { ...readiness.steps[2], ok: true }, readiness.steps[3]] };

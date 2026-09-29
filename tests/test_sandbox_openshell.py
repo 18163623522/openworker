@@ -426,3 +426,24 @@ def test_credential_grants_are_copied_into_a_real_sandbox(folder):
     finally:
         ws.close()
     assert not Path(copy).exists()  # the copies died with the sandbox
+
+
+def test_a_mac_whose_docker_kernel_lacks_landlock_is_told_to_update_docker_desktop(tmp_path, monkeypatch):
+    """The CLI only says ContainerExited; the reason is in the container's log. On a Mac the
+    usual one is Docker Desktop's kernel without Landlock, which the probe can confirm."""
+    from coworker.sandbox import setup_cmd
+    from coworker.sandbox.providers import openshell as os_mod
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("`openshell sandbox create --name` failed: Error: sandbox entered error phase while provisioning: ContainerExited: Container exited")
+
+    monkeypatch.setattr(os_mod, "preflight", lambda: {"version": os_mod.PINNED_VERSION})
+    monkeypatch.setattr(os_mod, "_cli", fail)
+    monkeypatch.setattr(os_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: False)
+    provider = os_mod.OpenShellProvider(roots=[{"path": str(tmp_path), "writable": True}], cwd=str(tmp_path))
+    with pytest.raises(os_mod.OpenShellUnavailable, match="Update Docker Desktop"):
+        provider._create()
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: True)  # another reason: the CLI's own words
+    with pytest.raises(RuntimeError, match="ContainerExited"):
+        provider._create()

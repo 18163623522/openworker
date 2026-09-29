@@ -2453,7 +2453,9 @@
       "sites_placeholder": "A site, for example api.example.com",
       "sites_sum": "{{list}}.",
       "sites_title": "Allowed sites",
-      "sites_total": "{{count}} allowed"
+      "sites_total": "{{count}} allowed",
+      "os_docker_update": "Update Docker Desktop, then check again.",
+      "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs."
     }
   },
   "misc": {

@@ -269,3 +269,38 @@ def test_the_folder_step_restarts_the_gateway_and_the_check_reads_the_config_in_
     monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
     ran.clear()
     assert setup_cmd.restart_gateway() is None and ran == [["systemctl", "--user", "restart", "openshell-gateway"]]
+
+
+def test_on_a_mac_the_docker_kernel_is_asked_for_landlock(monkeypatch):
+    """Docker Desktop 28.0.4 (kernel 6.10.14-linuxkit) has no Landlock and every OpenShell
+    sandbox exited at start (2026-09-28); 29.8.1 (7.0.14) has it."""
+    from types import SimpleNamespace
+
+    answers = {"probe": "-1\n", "image": 0}
+
+    def fake_run(argv, timeout=600):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(returncode=answers["image"], stdout="", stderr="")
+        if argv[:2] == ["docker", "run"]:
+            assert "--network" in argv and "none" in argv  # a throwaway probe, no network
+            return SimpleNamespace(returncode=0, stdout=answers["probe"], stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(setup_cmd, "_run", fake_run)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+    assert setup_cmd.docker_landlock() is False
+    answers["probe"] = "8\n"
+    assert setup_cmd.docker_landlock() is True
+    answers["image"] = 1  # the base image is not here yet: cannot ask, no row
+    assert setup_cmd.docker_landlock() is None
+    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
+    assert setup_cmd.docker_landlock() is None  # Linux asks its own kernel (the `landlock` row)
+    # In the checklist: a row right after Docker, with what to do.
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: False)
+    monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    keys = [s.key for s in setup_cmd.steps()]
+    row = {s.key: s for s in setup_cmd.steps()}["docker_landlock"]
+    assert keys[:2] == ["docker", "docker_landlock"] and not row.ok and not row.fixable
+    assert row.hint.startswith("Update Docker Desktop") and row.docs == setup_cmd.DOCKER_DESKTOP_URL

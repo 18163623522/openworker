@@ -292,6 +292,13 @@ class OpenShellProvider:
             log.warning("sandbox create failed for %s: %s", self.sandbox_name, exc)
             if "bind" in str(exc).lower() and "enable" in str(exc).lower():
                 raise OpenShellUnavailable("The OpenShell gateway does not allow bind mounts, so it cannot give a sandbox your folders. Set `enable_bind_mounts = true` under `[openshell.drivers.docker]` in the gateway config (`openworker machine sandbox setup` does this).") from exc
+            if "ContainerExited" in str(exc) and sys.platform == "darwin":
+                # The container's own log says why; the CLI does not. The usual reason on a
+                # Mac is a Docker Desktop kernel without Landlock, which can be asked.
+                from ..setup_cmd import DOCKER_LANDLOCK_FIX, docker_landlock
+
+                if docker_landlock() is False:
+                    raise OpenShellUnavailable(f"{DOCKER_LANDLOCK_FIX}. Then start the session again.") from exc
             raise
         self._wait_ready()
         # Spike finding K: the first exec after a sandbox turns Ready hangs until it times

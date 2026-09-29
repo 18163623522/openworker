@@ -187,6 +187,10 @@ enabled = true
   cannot be used right now. Run `openworker machine sandbox status` for the reason; the
   usual ones are the gateway not running, bind mounts not allowed, or the base image not
   downloaded yet.
+- **"Update Docker Desktop: this version's Linux kernel has no Landlock"** (a Mac) — OpenShell
+  requires Landlock, and older Docker Desktop kernels are built without it (engine 28.0.4,
+  kernel 6.10 had none; engine 29.8, kernel 7.0 has it). Update Docker Desktop, then check
+  again. Setup asks Docker's kernel directly once the base image is downloaded.
 - **"The sandbox base image is not downloaded yet"** — the one-time 5 GB download has
   not happened. Run `openworker machine sandbox setup` and accept the download, or run the
   `docker pull` command from the message; then start the session again.

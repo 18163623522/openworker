@@ -2413,7 +2413,9 @@
       "sites_placeholder": "网站，例如 api.example.com",
       "sites_sum": "{{list}}。",
       "sites_title": "允许的网站",
-      "sites_total": "已允许 {{count}} 个"
+      "sites_total": "已允许 {{count}} 个",
+      "os_docker_update": "请更新 Docker Desktop，然后重新检查。",
+      "os_docker_update_why": "此版本的 Linux 内核没有 Landlock，而 OpenShell 需要它。"
     }
   },
   "misc": {

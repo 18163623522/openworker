@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import config as app_config
-from .providers import openshell
+from .providers import openshell, openshell_policy
 from .providers.openshell import PINNED_VERSION
 from .selection import openshell_problem, select
 
@@ -42,6 +42,10 @@ _INSTALLER = "https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh
 # Where the page's "Guide" links point: how OpenShell fits, what a machine needs, setup.
 GUIDE_URL = "https://github.com/andrewyng/openworker/blob/main/docs/openshell.md"
 DOCKER_INSTALL_URL = "https://docs.docker.com/engine/install/"
+DOCKER_DESKTOP_URL = "https://docs.docker.com/desktop/setup/install/mac-install/"
+# What a Mac user is told when Docker Desktop's Linux kernel lacks Landlock (engine 28.0.4,
+# kernel 6.10.14-linuxkit, seen 2026-09-28; engine 29.8.1, kernel 7.0.14, has it).
+DOCKER_LANDLOCK_FIX = "Update Docker Desktop: this version's Linux kernel has no Landlock, which OpenShell needs"
 _BIND_MOUNTS = "[openshell.drivers.docker]\nenable_bind_mounts = true\n"
 # The base image is pulled by the first `sandbox create` otherwise, which on a slow link
 # outlives the create's timeout and hangs the first session (OPE-205). So it is a check of
@@ -60,6 +64,7 @@ ROWS = {
     "gateway": "the gateway is running",
     "grpcio": "the `grpcio` package is installed",
     "landlock": "the kernel supports Landlock (OpenShell requires it)",
+    "docker_landlock": "Docker Desktop's Linux kernel supports Landlock (OpenShell requires it)",
     "config": "this machine is set to use OpenShell",
     "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
     "image": IMAGE_ROW,
@@ -142,6 +147,29 @@ def landlock_available() -> Optional[bool]:
         return None
 
 
+_LANDLOCK_PROBE = "import ctypes; print(ctypes.CDLL(None, use_errno=True).syscall(444, None, 0, 1))"
+
+
+def docker_landlock() -> Optional[bool]:
+    """On a Mac: whether Docker Desktop's Linux VM has Landlock, asked from a throwaway
+    container of the base image (no network), the same call as `landlock_available`.
+    None when it cannot be asked: not a Mac, Docker not answering, or the base image not
+    downloaded yet (it is checked again after the download)."""
+    if sys.platform != "darwin" or not shutil.which("docker"):
+        return None
+    image = openshell.sandbox_image()
+    if _run(["docker", "image", "inspect", image], 30).returncode != 0:
+        return None
+    done = _run(
+        ["docker", "run", "--rm", "--network", "none", "--security-opt", "seccomp=unconfined", "--entrypoint", openshell_policy.PYTHON, image, "-c", _LANDLOCK_PROBE],
+        90,
+    )  # fmt: skip
+    try:
+        return int((done.stdout.split() or [""])[-1]) >= 0
+    except ValueError:
+        return None
+
+
 def image_store_free_gb() -> Optional[float]:
     """Free space where the driver keeps images, in GB, or None when it cannot be told."""
     try:
@@ -163,6 +191,10 @@ def steps() -> list[Step]:
     docker = shutil.which("docker")
     docker_ok = bool(docker) and _run(["docker", "info", "--format", "{{.ServerVersion}}"], 30).returncode == 0
     out.append(Step("docker", ROWS["docker"], docker_ok, "" if docker_ok else "install Docker, then add this user to the `docker` group and log in again", docs="" if docker_ok else DOCKER_INSTALL_URL))
+    if docker_ok:
+        kernel = docker_landlock()
+        if kernel is not None:
+            out.append(Step("docker_landlock", ROWS["docker_landlock"], kernel, "" if kernel else DOCKER_LANDLOCK_FIX, docs="" if kernel else DOCKER_DESKTOP_URL))
     exe = shutil.which("openshell")
     version = (_run([exe, "--version"], 15).stdout.split() or [""])[-1] if exe else ""
     openshell_ok = version == PINNED_VERSION

@@ -1043,10 +1043,12 @@ function OpenShellDialog({
   const byKey = (key: string) => rows.find((r) => r.key === key);
   const good = (r?: Row) => Boolean(r) && (r!.state ? r!.state === "ok" || r!.state === "fixed" : r!.ok);
   const docker = byKey("docker");
+  const kernel = byKey("docker_landlock"); // a Mac: does Docker Desktop's Linux kernel have Landlock
   const openshell = byKey("openshell");
-  const rest = rows.filter((r) => r.key !== "docker" && r.key !== "openshell");
+  const rest = rows.filter((r) => r.key !== "docker" && r.key !== "docker_landlock" && r.key !== "openshell");
   const blocked = rest.find((r) => r.state === "needs_you" || r.state === "failed");
-  const checksOk = good(docker) && good(openshell);
+  const dockerOk = good(docker) && (!kernel || good(kernel));
+  const checksOk = dockerOk && good(openshell);
   const allOk = rows.length > 0 && rows.every((r) => good(r));
   const done = job?.status === "done" || (!job && ready && allOk);
   const mark = (r?: Row): RowState => (!r ? "wait" : good(r) ? "ok" : "bad");
@@ -1105,9 +1107,17 @@ function OpenShellDialog({
         <ul className="rounded-lg border border-line divide-y divide-line" data-testid="sandbox-readiness">
           {line(
             "docker",
-            mark(docker),
+            !docker ? "wait" : dockerOk ? "ok" : "bad",
             t(mac ? "settingsx.sandbox.os_row_docker_mac" : "settingsx.sandbox.os_row_docker"),
-            docker && !good(docker) ? (
+            docker && good(docker) && kernel && !good(kernel) ? (
+              <span className="block text-meta text-muted mt-0.5" data-testid="sandbox-setup-landlock">
+                <span className="block">
+                  {t("settingsx.sandbox.os_docker_update")}{" "}
+                  {link(kernel.docs || "https://docs.docker.com/desktop/setup/install/mac-install/", t("settingsx.sandbox.get_docker_mac"), "sandbox-setup-docs-landlock")}
+                </span>
+                <span className="block">{t("settingsx.sandbox.os_docker_update_why")}</span>
+              </span>
+            ) : docker && !good(docker) ? (
               <span className="block text-meta text-muted mt-0.5">
                 {t(mac ? "settingsx.sandbox.os_docker_fix_mac" : "settingsx.sandbox.os_docker_fix")}{" "}
                 {docker.docs ? link(docker.docs, t(mac ? "settingsx.sandbox.get_docker_mac" : "settingsx.sandbox.get_docker"), "sandbox-setup-docs-docker") : null}
