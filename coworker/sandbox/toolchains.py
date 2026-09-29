@@ -3,8 +3,9 @@ macOS section 11 step 4).
 
 A sandbox hides the home folder, and with it the tools people install per user: Node
 versions under `.nvm`, Python versions under `.pyenv`, Cargo, Scoop. Without these the
-agent has no `node`. So a fixed list of tool folders is readable, never writable, and the
-user can switch each off or add one, machine-level, in Settings ▸ Sandbox
+agent has no `node`. So a fixed list of tool folders may be made readable, never writable:
+all off until the user switches one on (UX-053 v6), and the user can add one, machine-level,
+in Settings ▸ Sandbox
 (`[[sandbox_toolchains]]` in the machine's config.toml; a project cannot change it).
 
 Per platform. The Mac list is what the Seatbelt profile always granted; the Windows list
@@ -50,9 +51,9 @@ _WINDOWS: list[tuple[str, str, str]] = [
 
 
 def defaults(platform: str = sys.platform) -> list[dict[str, Any]]:
-    """The shipped list for a platform, every entry switched on."""
+    """The shipped list for a platform, every entry switched off."""
     rows = _WINDOWS if platform == "win32" else _MAC if platform == "darwin" else []
-    return [{"name": n, "title": t, "path": p, "enabled": True} for n, t, p in rows]
+    return [{"name": n, "title": t, "path": p, "enabled": False} for n, t, p in rows]
 
 
 def entries(configured: Optional[Sequence[dict[str, Any]]], platform: str = sys.platform) -> list[dict[str, Any]]:
@@ -96,10 +97,12 @@ def granted(
 
 
 def for_display(configured: Optional[Sequence[dict[str, Any]]], *, home: Optional[str] = None, platform: str = sys.platform) -> list[dict[str, Any]]:
-    """The entries with `exists` (on this machine) and `shipped` (in the default list)."""
+    """The entries with `exists` (on this machine) and `shipped` (in the default list). A
+    shipped folder this machine does not have is left out: there is nothing to show."""
     home = os.path.realpath(home or os.path.expanduser("~"))
     shipped = {e["name"] for e in defaults(platform)}
-    return [
+    rows = [
         {**e, "exists": bool(e.get("path")) and os.path.exists(_real(str(e["path"]), home)), "shipped": e["name"] in shipped}
         for e in entries(configured, platform)
     ]
+    return [r for r in rows if r["exists"] or not r["shipped"]]

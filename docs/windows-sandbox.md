@@ -170,8 +170,8 @@ Read only, from your profile, so the agent can run your tools:
 
 - developer tools installed per user, from a list you control in Settings ▸ Sandbox:
   nvm for Windows and npm's global folder (`AppData\Roaming`), pyenv-win, per-user
-  Python installs, Scoop, Cargo, rustup, Go, pipx and uv. Each has a switch; you can add
-  a folder. The session also inherits your `PATH`, so those tools resolve. Nothing under
+  Python installs, Scoop, Cargo, rustup, Go, pipx and uv. The page lists only the ones
+  this PC has, all off until you switch one on; you can add a folder. The session also inherits your `PATH`, so those tools resolve. Nothing under
   them is writable.
 
 Not readable:

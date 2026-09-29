@@ -50,11 +50,11 @@ Read only:
 - the session's read-only folders;
 - the system: `/usr`, `/bin`, `/System`, `/Library`, `/opt`, `/Applications`, `/private/etc`;
 - OpenWorker's managed tools folder, the tool runner and its Python;
-- under your home folder, only the developer toolchains on the list in Settings ▸
-  Sandbox — shipped: `.nvm`, `.volta`, `.bun`, `.deno`, `.pyenv`, `.rbenv`, `.asdf`,
-  `.sdkman`, `.cargo`, `.rustup`, `.local/bin`, `.local/share/uv`, `.local/share/mise`,
-  `.local/pipx`, `go`; each with a switch, and you can add a folder — plus git's settings
-  (`.gitconfig`, `.config/git`).
+- under your home folder, only the developer toolchains you switch on in Settings ▸
+  Sandbox — offered when your Mac has them: `.nvm`, `.volta`, `.bun`, `.deno`, `.pyenv`,
+  `.rbenv`, `.asdf`, `.sdkman`, `.cargo`, `.rustup`, `.local/bin`, `.local/share/uv`,
+  `.local/share/mise`, `.local/pipx`, `go`; all off until you switch one on, and you can
+  add a folder — plus git's settings (`.gitconfig`, `.config/git`).
 
 Network: `localhost` on the proxy's port, nothing else. `curl`, `git`, `pip` and `npm`
 follow the proxy variables; a program that ignores them has no network at all.

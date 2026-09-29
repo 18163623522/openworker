@@ -309,6 +309,7 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByTestId("sandbox-preset-npm").getAttribute("data-found")).toBe("yes");
     expect(within(screen.getByTestId("sandbox-preset-npm")).getByText("~/.npmrc · Install and publish private packages")).toBeTruthy();
     expect(within(screen.getByTestId("sandbox-preset-gcloud")).getByText("not found")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-badge-npm").querySelector("path")?.getAttribute("fill") ?? screen.getByTestId("sandbox-badge-npm").querySelector("svg")?.getAttribute("fill")).toBe("#CB3837"); // the real npm mark
     expect(within(screen.getByTestId("sandbox-preset-gcloud")).getByText("not on this Mac")).toBeTruthy();
     fireEvent.click(screen.getByTestId("sandbox-preset-npm-add"));
     await waitFor(() => expect(lastPatch().credentials[lastPatch().credentials.length - 1]).toEqual({ name: "npm", enabled: true }));

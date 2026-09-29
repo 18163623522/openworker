@@ -40,8 +40,9 @@ def test_snapshot_reports_the_default_rule_and_the_shipped_entries(config_file):
     assert (snap["windows_setup"] is None) == (sys.platform != "win32")
     from coworker.sandbox import toolchains
 
-    assert [e["name"] for e in snap["toolchains"]] == [e["name"] for e in toolchains.defaults()]
-    assert all(e["shipped"] and e["enabled"] and "exists" in e for e in snap["toolchains"])
+    # Only the shipped folders this machine has, all switched off.
+    assert {e["name"] for e in snap["toolchains"]} <= {e["name"] for e in toolchains.defaults()}
+    assert all(e["shipped"] and not e["enabled"] and e["exists"] for e in snap["toolchains"])
 
 
 def test_toolchain_switches_and_additions_are_written_slim(config_file):
@@ -49,7 +50,7 @@ def test_toolchain_switches_and_additions_are_written_slim(config_file):
 
     rows = [dict(e) for e in toolchains.defaults()]
     if rows:
-        rows[0]["enabled"] = False
+        rows[0]["enabled"] = True  # one switched on
     rows.append({"name": "mytools", "title": "My tools", "path": "~/tools", "enabled": True})
     out = settings.update({"toolchains": rows})
     assert out["ok"], out
@@ -58,8 +59,8 @@ def test_toolchain_switches_and_additions_are_written_slim(config_file):
     assert 'name = "mytools"' in text and 'path = "~/tools"' in text
     by = {e["name"]: e for e in settings.snapshot()["toolchains"]}
     assert by["mytools"]["enabled"] and not by["mytools"]["shipped"]
-    if rows[:-1]:
-        assert by[rows[0]["name"]]["enabled"] is False
+    if rows[:-1] and rows[0]["name"] in by:  # shown only when this machine has it
+        assert by[rows[0]["name"]]["enabled"] is True
     assert settings.update({"toolchains": [{"name": "x", "path": "relative/path"}]})["ok"] is False
 
 
