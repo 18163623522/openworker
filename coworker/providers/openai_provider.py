@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any, Optional
 
-from .effort import EffortPlan, mentions_effort, openai_compat_effort
+from .effort import NO_EFFORT, EffortPlan, mentions_effort, openai_compat_effort
 from .base import (
     AssistantTurn,
     ModelCapabilities,
@@ -137,13 +137,10 @@ def _param_fix_retry(kwargs: dict[str, Any], exc: Exception) -> dict[str, Any]:
     msg = str(exc).lower()
     if _EFFORT_ERROR in msg and kwargs.get("reasoning_effort") != "none":
         return {**kwargs, "reasoning_effort": "none"}
-    if (
-        "reasoning_effort" in kwargs
-        and kwargs.get("reasoning_effort") != "none"
-        and ("reasoning_effort" in msg or "effort" in msg)
-    ):
-        # OPE-176: the endpoint has no effort knob under that name — drop it and run on
-        # the server default; the reply's `effort` record says it was rejected.
+    if "reasoning_effort" in kwargs and ("reasoning_effort" in msg or "effort" in msg):
+        # OPE-176: the endpoint has no effort knob under that name (or, for the auto-title
+        # request, no "none" value) — drop it and run on the server default; the reply's
+        # `effort` record says it was rejected.
         fixed = dict(kwargs)
         fixed.pop("reasoning_effort")
         return fixed
@@ -329,7 +326,13 @@ class OpenAIProvider(ProviderClient):
         self, model: str, plan: Optional[EffortPlan], kwargs: dict[str, Any]
     ) -> Optional[dict[str, Any]]:
         record = _effort_record(plan, kwargs)
-        if plan is not None and plan.params and kwargs.get("reasoning_effort") is None:
+        if (
+            plan is not None
+            and plan.params
+            and kwargs.get("reasoning_effort") is None
+            # A rejected "none" says nothing about the real levels; keep sending those.
+            and plan.requested != NO_EFFORT
+        ):
             self.__dict__.setdefault("_effort_rejected", set()).add(model)
         return record
 
