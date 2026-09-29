@@ -190,12 +190,71 @@ def test_reap_leaves_a_sandbox_that_a_living_server_is_still_creating(tmp_path, 
     reg = registry_mod.SandboxRegistry(tmp_path / "registry.db")
     reg.record("ow-building", provider="openshell", session_id="s1", state="creating")  # this server, alive
     monkeypatch.setattr(registry_mod, "_openshell_present", lambda: True)
-    monkeypatch.setattr(openshell, "list_our_sandboxes", lambda: [{"name": "ow-building"}, {"name": "ow-orphan"}])
+    monkeypatch.setattr(openshell, "list_our_sandboxes", lambda registry: [{"name": "ow-building"}, {"name": "ow-orphan"}])
     deleted: list[str] = []
     monkeypatch.setattr(openshell, "_cli", lambda *args, **kw: deleted.append(args[2]))
     assert reg.reap() == ["ow-orphan"]
     assert deleted == ["ow-orphan"]  # the one being built by a live server is left alone
     assert reg.find("s1")["state"] == "creating"
+
+
+def test_each_state_folder_cleans_up_only_the_sandboxes_it_made(tmp_path, monkeypatch):
+    # Seen on the Linux VM 2026-09-29: a second OpenWorker with its own state folder (a test
+    # server) deleted the live sandbox of the machine's server on start, because its own
+    # registry did not list it. Each sandbox now carries its registry's id, and a registry's
+    # clean-up lists only sandboxes with its own id.
+    import json as _json
+
+    from coworker.sandbox import registry as registry_mod
+
+    machine = registry_mod.SandboxRegistry(tmp_path / "machine" / "registry.db")
+    other = registry_mod.SandboxRegistry(tmp_path / "test-server" / "registry.db")
+    assert machine.id != other.id
+    assert machine.id == registry_mod.registry_id(tmp_path / "machine" / "registry.db")  # stable
+    machine.record("ow-live", provider="openshell", session_id="s1")  # the machine's session
+    gateway = [
+        {"name": "ow-live", "labels": {"openworker": "1", "openworker-registry": machine.id}},
+        {"name": "ow-crashed", "labels": {"openworker": "1", "openworker-registry": other.id}},
+        {"name": "ow-unlabelled", "labels": {"openworker": "1"}},
+    ]
+    deleted: list[str] = []
+
+    def cli(*args, **kw):
+        if args[:2] == ("sandbox", "list"):
+            # Even a gateway that ignored the selector must not lead to a foreign delete.
+            return subprocess.CompletedProcess(args, 0, _json.dumps({"sandboxes": gateway}), "")
+        deleted.append(args[2])
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(registry_mod, "_openshell_present", lambda: True)
+    monkeypatch.setattr(openshell, "_cli", cli)
+    assert other.reap() == ["ow-crashed"]  # its own orphan only; the machine's live sandbox stays
+    assert deleted == ["ow-crashed"]
+    assert machine.reap() == [] and deleted == ["ow-crashed"]  # owned by a live server: kept
+
+
+def test_a_sandbox_is_created_with_its_registry_label(tmp_path, monkeypatch):
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
+    monkeypatch.setattr(openshell, "preflight", lambda: None)
+    project = tmp_path / "project"
+    project.mkdir()
+    seen: list = []
+
+    def cli(*args, **kw):
+        seen.append(args)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(openshell, "_cli", cli)
+    provider = openshell.OpenShellProvider(roots=[{"path": str(project), "writable": True}], registry="abc123")
+    with pytest.raises(RuntimeError, match="stop here"):
+        provider._create()
+    create = seen[0]
+    assert "openworker-registry=abc123" in create and "openworker=1" in create
+    # Without an explicit id the sandbox belongs to this state folder's registry.
+    from coworker.sandbox.registry import SandboxRegistry, registry_id
+
+    assert openshell.OpenShellProvider(roots=[{"path": str(project), "writable": True}]).registry == registry_id() == SandboxRegistry().id
 
 
 def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
@@ -294,7 +353,8 @@ def _open(folder, **kwargs):
 @live
 def test_a_session_in_a_real_sandbox(folder):
     (folder / "hello.txt").write_text("from the machine\n")
-    ws, roots = _open(folder, session_id="s-test", agent="swe-lead")
+    # Nothing is allowed until the machine ticks it: api.github.com is ticked for this test.
+    ws, roots = _open(folder, session_id="s-test", agent="swe-lead", extra_hosts=["api.github.com"])
     try:
         assert ws.describe()["enforcement"] == "full" and ws.describe()["runner"]["os"] == "Linux"
         row = ws.registry.find("s-test", "swe-lead")
@@ -377,10 +437,31 @@ def test_a_sandbox_left_behind_by_a_dead_server_is_removed(folder):
 
     orphan = OpenShellProvider(roots=[{"path": str(folder), "writable": True}], label="orphan")
     orphan.create()  # created, never recorded by a living server
-    names = lambda: {str(s.get("name")) for s in list_our_sandboxes()}  # noqa: E731
+    names = lambda: {str(s.get("name")) for s in list_our_sandboxes(SandboxRegistry().id)}  # noqa: E731
     assert orphan.sandbox_name in names()
     removed = SandboxRegistry().reap()
     assert orphan.sandbox_name in removed and orphan.sandbox_name not in names()
+
+
+@live
+def test_another_state_folder_never_removes_a_live_sandbox(folder, tmp_path):
+    """Two OpenWorker processes with different state folders share this user's gateway. The
+    second one's clean-up must leave the first one's sandbox alone (Linux VM, 2026-09-29)."""
+    from coworker.sandbox.providers.openshell import OpenShellProvider, list_our_sandboxes
+    from coworker.sandbox.registry import SandboxRegistry
+
+    mine = SandboxRegistry()
+    other = SandboxRegistry(tmp_path / "other-state" / "sandbox" / "registry.db")
+    live_one = OpenShellProvider(roots=[{"path": str(folder), "writable": True}], label="live", registry=mine.id)
+    live_one.create()
+    mine.record(live_one.sandbox_name, provider="openshell", session_id="live")
+    try:
+        assert live_one.sandbox_name not in other.reap()
+        assert live_one.sandbox_name in {str(s.get("name")) for s in list_our_sandboxes(mine.id)}
+        assert not list_our_sandboxes(other.id)
+    finally:
+        mine.close(live_one.sandbox_name)
+        live_one.destroy()
 
 
 @live

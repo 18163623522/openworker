@@ -309,10 +309,11 @@ def open_workspace(
         from .registry import SandboxRegistry
 
         label = "-".join(part for part in (session_id[:24], agent[:24]) if part)
+        registry = SandboxRegistry()
         return RunnerWorkspace(
-            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile, extra_hosts=added),
+            OpenShellProvider(roots=listed, cwd=str(cwd), label=label, credentials=grants, profile=profile, extra_hosts=added, registry=registry.id),
             cwd=cwd,
-            registry=SandboxRegistry(),
+            registry=registry,
             session_id=session_id,
             agent=agent,
             live_roots=roots,
