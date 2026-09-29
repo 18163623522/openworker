@@ -35,6 +35,7 @@ import yaml
 
 from ...secrets import state_dir
 from ..bundle import build_runner_zipapp
+from ..registry import REGISTRY_LABEL, registry_id
 from ..transport import Transport
 from .. import credentials as creds
 from . import openshell_policy as policy
@@ -215,10 +216,13 @@ class OpenShellProvider:
         label: str = "",
         credentials: Sequence[creds.Grant] = (),
         extra_hosts: Sequence[str] = (),
+        registry: Optional[str] = None,
     ) -> None:
         """`roots`: [{"path", "writable"}], primary first. `label`: who this sandbox is for
         (session and agent), stored on the sandbox so leftovers can be found. `extra_hosts`:
-        the machine's own additions to the network list ("host:port")."""
+        the machine's own additions to the network list ("host:port"). `registry`: the id
+        of the registry that records this sandbox (default: this state folder's); only that
+        registry's clean-up may delete it."""
         if not roots:
             raise ValueError("an OpenShell sandbox needs at least one folder")
         self.roots = [{"path": str(Path(r["path"]).expanduser().resolve()), "writable": bool(r.get("writable"))} for r in roots]
@@ -228,6 +232,7 @@ class OpenShellProvider:
         self.image = image or sandbox_image()
         # A label value may hold letters, digits, '-', '_' and '.', and at most 63 characters.
         self.label = "".join(c if c.isalnum() or c in "-_." else "-" for c in label)[:63].strip("-_.")
+        self.registry = registry or registry_id()
         self.sandbox_name = f"ow-{uuid.uuid4().hex[:12]}"
         self.sandbox_id: Optional[str] = None
         self._runner = build_runner_zipapp()
@@ -282,7 +287,7 @@ class OpenShellProvider:
             "sandbox", "create", "--name", self.sandbox_name, "--from", self.image,
             "--no-tty", "--detach", "--no-auto-providers",
             "--policy", str(policy_file), "--driver-config-json", driver_config,
-            "--label", f"{LABEL}=1", *[x for k, v in env.items() for x in ("--env", f"{k}={v}")],
+            "--label", f"{LABEL}=1", "--label", f"{REGISTRY_LABEL}={self.registry}", *[x for k, v in env.items() for x in ("--env", f"{k}={v}")],
         ]  # fmt: skip
         if self.label:
             args += ["--label", f"{LABEL}-owner={self.label}"]
@@ -365,13 +370,18 @@ class OpenShellProvider:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
-def list_our_sandboxes() -> list[dict[str, Any]]:
-    """Every sandbox on this gateway that OpenWorker created (for the registry's clean-up)."""
-    done = _cli("sandbox", "list", "--selector", f"{LABEL}=1", "-o", "json", timeout=60, check=False)
+def list_our_sandboxes(registry: str) -> list[dict[str, Any]]:
+    """The sandboxes on this gateway that the given registry made (for its clean-up). Other
+    OpenWorker processes of this user share the gateway; their sandboxes are not listed."""
+    selector = f"{LABEL}=1,{REGISTRY_LABEL}={registry}"
+    done = _cli("sandbox", "list", "--selector", selector, "-o", "json", timeout=60, check=False)
     if done.returncode != 0 or not done.stdout.strip():
         return []
     data = json.loads(done.stdout)
-    return data.get("sandboxes", data) if isinstance(data, dict) else data
+    listed = data.get("sandboxes", data) if isinstance(data, dict) else data
+    # Checked here too: whatever the gateway did with the selector, never hand back a
+    # sandbox that carries another registry's label (or none).
+    return [s for s in listed if (s.get("labels") or {}).get(REGISTRY_LABEL) == registry]
 
 
 class GrpcExecTransport:

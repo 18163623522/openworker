@@ -11,6 +11,7 @@ gone (a crash, a kill) so they do not pile up.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -26,6 +27,12 @@ from ..secrets import state_dir
 log = logging.getLogger(__name__)
 
 LOCAL_MACHINE = "local"
+# The label that says which registry (which state folder) made an OpenShell sandbox. The
+# gateway is shared by every OpenWorker process of this user on this machine, and each
+# process only knows the sandboxes in its own registry; without this label a second
+# OpenWorker with another state folder (a test server, a one-shot run) took every other
+# sandbox for an orphan and deleted it (seen on the Linux VM 2026-09-29).
+REGISTRY_LABEL = "openworker-registry"
 MAX_ENV = "OPENWORKER_SANDBOX_MAX"
 DEFAULT_MAX = 20
 
@@ -51,6 +58,13 @@ class SandboxLimitReached(RuntimeError):
     pass
 
 
+def registry_id(path: Optional[Path] = None) -> str:
+    """A short, stable id for a registry file: the same state folder always gives the same
+    id, and another state folder a different one. It is a label value on each sandbox."""
+    target = Path(path) if path is not None else state_dir() / "sandbox" / "registry.db"
+    return hashlib.sha256(str(target.expanduser().resolve()).encode()).hexdigest()[:16]
+
+
 def _alive(pid: int) -> bool:
     if sys.platform == "win32":
         # `os.kill(pid, 0)` is TerminateProcess on Windows, not a probe.
@@ -70,6 +84,7 @@ class SandboxRegistry:
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = Path(path) if path is not None else state_dir() / "sandbox" / "registry.db"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.id = registry_id(self.path)
         self._lock = threading.Lock()
         with self._connect() as db:
             db.executescript(_SCHEMA)
@@ -141,8 +156,9 @@ class SandboxRegistry:
 
     # -- clean-up ---------------------------------------------------------------------
     def reap(self) -> list[str]:
-        """Remove sandboxes whose server process is gone, and OpenShell sandboxes that carry
-        our label but that no living server owns. Returns the names removed."""
+        """Remove sandboxes whose server process is gone, and OpenShell sandboxes made from
+        THIS registry that no living server owns. A sandbox another registry made is never
+        touched here, whatever its state. Returns the names removed."""
         removed: list[str] = []
         rows = self.list(LOCAL_MACHINE)
         dead = [r for r in rows if not _alive(int(r["server_pid"]))]
@@ -151,7 +167,7 @@ class SandboxRegistry:
             from .providers import openshell
 
             try:
-                listed = openshell.list_our_sandboxes()
+                listed = openshell.list_our_sandboxes(self.id)
             except Exception:
                 listed = []
             openshell_names = {str(s.get("name") or s.get("metadata", {}).get("name") or "") for s in listed} - {""}
