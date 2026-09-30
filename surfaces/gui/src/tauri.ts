@@ -16,6 +16,15 @@ export const platformOS = (): string => {
   return /mac/i.test(navigator.userAgent) ? "macos" : /win/i.test(navigator.userAgent) ? "windows" : "linux";
 };
 
+// macOS major version (26 for Tahoe), injected by the shell; 0 when unknown (browser dev).
+// macOS 26 places the traffic lights itself, higher than the position the shell asks for,
+// so the top strip lays out differently there (styles.css, `.macos-26`).
+export const macosMajor = (): number => {
+  const injected = (globalThis as any).__OCW_OS_VERSION__;
+  const major = typeof injected === "string" ? parseInt(injected.split(".")[0], 10) : NaN;
+  return Number.isFinite(major) ? major : 0;
+};
+
 export type DictationStatus = {
   recording: boolean;
   model_installed: boolean;
