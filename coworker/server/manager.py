@@ -7251,8 +7251,10 @@ class SessionManager:
                 temperature=0.2,
                 # Reasoning-routed models spend hidden tokens BEFORE emitting text; a
                 # tight cap plus default effort yields an empty completion and a silent
-                # no-op. Effort "none" reaches only the OpenAI-compat path (the native
-                # providers whitelist their settings), and 64 leaves headroom either way.
+                # no-op. Effort "none" means "no thinking": every provider's effort
+                # mapper handles it (OpenAI-vocabulary endpoints get it on the wire,
+                # Anthropic omits the field; see effort.NO_EFFORT), and 64 leaves
+                # headroom either way.
                 max_tokens=64,
                 reasoning_effort="none",
             )
