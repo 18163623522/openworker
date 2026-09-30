@@ -830,9 +830,16 @@ def sandbox_status() -> dict:
 
 
 def _announce_sandbox() -> None:
+    """Say at start how sessions will run. A refusal here is not final: each session checks
+    again when it starts, so a gateway that is still coming up after a reboot (the unit
+    starts seconds before it) only delays sessions, it does not lose them."""
     info = sandbox_status()
     if info.get("refused"):
-        print(f"\n[openworker] SESSIONS WILL BE REFUSED: {info['refused']}\n", file=sys.stderr)
+        print(
+            f"\n[openworker] sessions cannot start yet: {info['refused']}\n"
+            "[openworker] Each session checks again when it starts.\n",
+            file=sys.stderr,
+        )
     elif info.get("warning"):
         bar = "!" * 78
         print(f"\n{bar}\n[openworker] {info['warning']}\n{bar}\n", file=sys.stderr)
@@ -881,7 +888,9 @@ def _systemd_unit(state: Path, exe: str, name: str = "") -> str:
     return (
         "[Unit]\n"
         f"Description=OpenWorker headless (joined machine{label})\n"
-        "After=network-online.target\n"
+        # After the OpenShell gateway too, when it is installed: started before it, the
+        # first sessions after a reboot wait for it (seen 2026-09-29, a 7 s gap).
+        "After=network-online.target openshell-gateway.service\n"
         "Wants=network-online.target\n"
         "\n"
         "[Service]\n"
@@ -893,6 +902,22 @@ def _systemd_unit(state: Path, exe: str, name: str = "") -> str:
         "[Install]\n"
         "WantedBy=default.target\n"
     )
+
+
+def _linger_on() -> bool:
+    """Whether this user's services keep running without a login session (`loginctl
+    enable-linger`). Unknown counts as off, so the reminder is printed."""
+    import getpass
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["loginctl", "show-user", getpass.getuser(), "-p", "Linger"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0 and done.stdout.strip() == "Linger=yes"
 
 
 def installed_units(unit_dir: Path) -> list[dict]:
@@ -999,10 +1024,11 @@ def _cmd_service(state: Path, args, platform: Optional[str] = None, home: Option
     print(f"wrote {unit_path}")
     if _systemctl_user("daemon-reload") and _systemctl_user("enable", "--now", derived):
         print(f"service enabled and started (systemctl --user status {derived}).")
-        print(
-            "To keep it running after logout/reboot without a login session:\n"
-            f"  sudo loginctl enable-linger {__import__('getpass').getuser()}"
-        )
+        if not _linger_on():
+            print(
+                "To keep it running after logout/reboot without a login session:\n"
+                f"  sudo loginctl enable-linger {__import__('getpass').getuser()}"
+            )
     else:
         print(
             "systemd user session not reachable from here — enable it manually:\n"
