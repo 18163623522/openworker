@@ -2134,7 +2134,16 @@
       "send_sub": "代码工作在 ⌂ {{machine}} 上的文件夹里进行 —— 输入那台机器上的路径，或从临时位置开始。",
       "path_placeholder": "/home/you/project  （{{machine}} 上的路径）",
       "use_temp": "在 {{machine}} 上使用临时文件夹",
-      "temp_note": "临时文件夹只在你发送时于 ⌂ {{machine}} 上创建，git 已就绪。你一选定，消息即发送。"
+      "temp_note": "临时文件夹只在你发送时于 ⌂ {{machine}} 上创建，git 已就绪。你一选定，消息即发送。",
+      "draft_title": "{{name}} 应在 ⌂ {{machine}} 的哪个文件夹中工作？",
+      "draft_sub": "输入 {{machine}} 上的文件夹路径。下方列出最近使用的文件夹。",
+      "check": "检查",
+      "checking": "检查中…",
+      "found": "✓ 已在 {{machine}} 上找到该文件夹",
+      "found_branch": "✓ 已在 {{machine}} 上找到该文件夹 · git 分支 {{branch}}",
+      "not_found": "{{machine}} 上没有 {{path}} 这个文件夹。",
+      "use": "使用此文件夹",
+      "type_path": "输入 {{machine}} 上的路径…"
     },
     "access": {
       "another_machine": "另一台机器",

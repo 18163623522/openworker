@@ -11,6 +11,7 @@ import { chooseFolder } from "../tauri";
 import { fullPersonaName } from "../personaScope";
 import { baseName } from "../paths";
 import { Icon } from "./Icon";
+import { MachineFolderDialog } from "./MachineFolderDialog";
 
 // UX-029: the session-setup row — per-SESSION choices (coworker + folder) in their own
 // quiet chip row above the composer, a different species from the per-MESSAGE controls
@@ -61,6 +62,8 @@ export function personaGroups(personas: Persona[]): { group: string; items: Pers
 export function SessionSetupRow(props: Props) {
   const { t } = useTranslation();
   const [openMenu, setOpenMenu] = useState<"coworker" | "folder" | "machine" | null>(null);
+  // On a machine, the Mac's file picker cannot see the folders: a dialog takes a typed path.
+  const [machineDialog, setMachineDialog] = useState(false);
   const [recents, setRecents] = useState<RecentWorkspace[] | null>(null);
   const [error, setError] = useState("");
   const personas = (props.personas || []).filter((p) => p.enabled);
@@ -70,6 +73,12 @@ export function SessionSetupRow(props: Props) {
 
   const toggle = (menu: "coworker" | "folder" | "machine") => {
     setError("");
+    if (menu === "folder" && currentMachine) {
+      // The folder lives on the machine: no menu, the path dialog.
+      setOpenMenu(null);
+      setMachineDialog(true);
+      return;
+    }
     if (menu === "folder" && openMenu !== "folder") {
       getRecentWorkspaces().then(setRecents).catch(() => setRecents([]));
     }
@@ -97,6 +106,17 @@ export function SessionSetupRow(props: Props) {
   return (
     <div className="max-w-3xl mx-auto mb-1.5 px-1 flex items-center gap-1.5" data-testid="setup-row">
       {openMenu && <div className="fixed inset-0 z-20" onClick={() => setOpenMenu(null)} />}
+      {machineDialog && currentMachine && (
+        <MachineFolderDialog
+          coworkerName={fullPersonaName(current?.name, props.agent)}
+          machine={currentMachine}
+          onPick={(path, branch) => {
+            setMachineDialog(false);
+            props.onPickFolder(path, branch);
+          }}
+          onCancel={() => setMachineDialog(false)}
+        />
+      )}
 
       {/* Coworker chip — name only, no icon (owner call). */}
       <div className="relative">

@@ -2334,16 +2334,16 @@ export function App() {
               <SessionSetupRow
                 personas={personas}
                 agent={agent}
-                showFolder={!machine && !cloudMode}
+                showFolder={!cloudMode}
                 folderName={workspace && !tempWorkspace ? baseName(workspace) : null}
                 machines={machines}
                 machine={machine}
                 cloud={cloudMode}
                 onPickMachine={(id) => {
                   setMachine(id);
-                  // A remote draft never carries a LOCAL folder — the box provisions
-                  // its own scratch (remote folder browsing is a follow-up).
-                  if (id) {
+                  // A folder picked here belongs to one place: switching machines (or back to
+                  // this computer) drops it. The folder chip then takes a path on the new one.
+                  if (id !== machine) {
                     setWorkspace(null);
                     setBranch(null);
                     setShowGate(false);
