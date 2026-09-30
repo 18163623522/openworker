@@ -127,4 +127,10 @@ def bound_tool_result(
         return out
 
     path = spill(f"{step:04d}-{safe_tool}.txt", text)
-    return head_tail(text, max_bytes - _MARKER_RESERVE, spill_path=path, total_bytes=_nbytes(text))
+    bounded = head_tail(text, max_bytes - _MARKER_RESERVE, spill_path=path, total_bytes=_nbytes(text))
+    # The marker names the spill file, and a long path can outgrow the reserve; tighten once
+    # (OPE-199: the cap was overshot by the length of the path).
+    over = _nbytes(bounded) - max_bytes
+    if over > 0:
+        bounded = head_tail(text, max_bytes - _MARKER_RESERVE - over, spill_path=path, total_bytes=_nbytes(text))
+    return bounded
