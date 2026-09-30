@@ -65,7 +65,10 @@ def _toolkit_sources() -> list[Path]:
 
 
 def runner_dir() -> Path:
-    return state_dir() / "sandbox"
+    """Where the packed runner lives. A folder of its own: OpenShell mounts this whole
+    folder read-only into every sandbox, so nothing else may live here (the registry
+    beside it used to be readable from inside, with every session's folders; 2026-09-29)."""
+    return state_dir() / "sandbox" / "runner"
 
 
 def build_runner_zipapp(dest_dir: Optional[Path] = None) -> Path:

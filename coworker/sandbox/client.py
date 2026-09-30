@@ -39,6 +39,10 @@ class _Pending:
         self.error: Optional[P.RunnerError] = None
 
 
+# Seconds to wait for the runner's first answer after the sandbox starts.
+_HELLO_TIMEOUT = 60.0
+
+
 class RunnerClient:
     def __init__(self, open_transport: Callable[[], Transport], *, ping_seconds: float = P.PING_SECONDS) -> None:
         self._open = open_transport
@@ -73,7 +77,10 @@ class RunnerClient:
         if old is not None:
             old.close()
         threading.Thread(target=self._read_loop, args=(transport, generation), daemon=True).start()
-        hello = self._call_on(transport, "runner.hello", {"protocol_version": P.PROTOCOL_VERSION}, timeout=20)
+        # The first answer can take a while on a cold machine: a VM just started reads
+        # the runner and the image's Python from a disk that is still warming up (the very
+        # first sandbox on the Linux VM missed 20 s, 2026-09-29). Later calls are fast.
+        hello = self._call_on(transport, "runner.hello", {"protocol_version": P.PROTOCOL_VERSION}, timeout=_HELLO_TIMEOUT)
         previous, self.instance_id, self.hello = self.instance_id, hello["instance_id"], hello
         if previous is None:
             threading.Thread(target=self._ping_loop, daemon=True).start()

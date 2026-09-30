@@ -239,9 +239,9 @@ class OpenShellProvider:
         # The session's private folder (copied credentials, the policy file). NOT under
         # /tmp: the gateway installed by NVIDIA's installer is a systemd service with
         # PrivateTmp=true, so a bind-mount source under /tmp does not exist for it and the
-        # sandbox fails to create (OPE-208). NOT under the state dir's `sandbox/` either:
-        # that whole folder is mounted read-only into every sandbox for the runner, and
-        # copied keys must never be readable from another session's sandbox. The server's
+        # sandbox fails to create (OPE-208). NOT under the runner's folder either: that
+        # folder is mounted read-only into every sandbox, and copied keys must never be
+        # readable from another session's sandbox. The server's
         # pid is in the name so the registry's reap can remove folders of a dead server.
         self._tmp = tempfile.mkdtemp(prefix=f"ow-openshell-{os.getpid()}-", dir=runtime_dir())
         self.grants = list(credentials)

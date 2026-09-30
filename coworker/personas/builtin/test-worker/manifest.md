@@ -1,6 +1,7 @@
 ---
 ships: false
 id: test-worker
+group: engineering
 name: Test Worker
 icon: check
 tagline: Verifies teammates' work against acceptance criteria

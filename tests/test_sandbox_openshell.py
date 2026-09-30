@@ -235,7 +235,7 @@ def test_each_state_folder_cleans_up_only_the_sandboxes_it_made(tmp_path, monkey
 
 def test_a_sandbox_is_created_with_its_registry_label(tmp_path, monkeypatch):
     monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
     monkeypatch.setattr(openshell, "preflight", lambda: None)
     project = tmp_path / "project"
     project.mkdir()
@@ -291,12 +291,12 @@ def test_the_private_folder_is_visible_to_the_gateway_and_to_no_sandbox(tmp_path
     from coworker.sandbox import bundle
 
     monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(bundle, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
-    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner-x.pyz")
+    monkeypatch.setattr(bundle, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
     provider = openshell.OpenShellProvider(roots=ROOTS)
     private = Path(provider._tmp)
     assert private.parent == tmp_path / openshell.RUNTIME_DIR_NAME
-    assert not str(private).startswith(str(tmp_path / "sandbox") + os.sep)  # not inside the mounted folder
+    assert not str(private).startswith(str(tmp_path / "sandbox" / "runner") + os.sep)  # not inside the mounted folder
     # Not in the system temp dir itself (the old place). The state dir under test may well
     # live under /tmp (pytest's default basetemp on CI), so compare parents, not prefixes.
     assert private.parent != Path(tempfile.gettempdir()).resolve() and private.parent.name == openshell.RUNTIME_DIR_NAME
@@ -528,3 +528,20 @@ def test_a_mac_whose_docker_kernel_lacks_landlock_is_told_to_update_docker_deskt
     monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: True)  # another reason: the CLI's own words
     with pytest.raises(RuntimeError, match="ContainerExited"):
         provider._create()
+
+
+def test_only_the_runner_is_mounted_into_a_sandbox(tmp_path, monkeypatch):
+    # The registry (every session's ids, coworkers and folders) sat beside the runner in
+    # `sandbox/`, and that whole folder was the read-only runner mount: any sandbox could
+    # read it (Linux VM, 2026-09-29). The runner now has a folder of its own.
+    from coworker.sandbox import bundle
+    from coworker.sandbox.registry import SandboxRegistry
+
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    runner = bundle.build_runner_zipapp()
+    registry = SandboxRegistry()
+    assert runner.parent == tmp_path / "sandbox" / "runner"
+    assert registry.path.parent == tmp_path / "sandbox"
+    assert not str(registry.path).startswith(str(runner.parent) + os.sep)
+    sources = [m["source"] for m in policy.mounts(ROOTS, str(runner.parent))["docker"]["mounts"]]
+    assert str(runner.parent) in sources and str(tmp_path / "sandbox") not in sources

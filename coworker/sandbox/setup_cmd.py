@@ -232,7 +232,9 @@ def steps() -> list[Step]:
         grpc_ok = False
     out.append(Step("grpcio", ROWS["grpcio"], grpc_ok, command="" if grpc_ok else "pip install 'openworker[openshell]'"))
     configured = app_config.load_config().sandbox_provider
-    out.append(Step("config", ROWS["config"], configured == "openshell", "" if configured == "openshell" else f"sandbox_provider = {configured!r} in {app_config.global_config_path()}", fixable=True))
+    # The hint reads as a sentence: "not set" or "set to X", never Python's None.
+    config_hint = "" if configured == "openshell" else (f"set to {configured!r}" if configured else "not set") + " (`setup` sets it)"
+    out.append(Step("config", ROWS["config"], configured == "openshell", config_hint, fixable=True))
     if gateway_ok and exe:
         present = openshell.image_present()
         if present is not None:  # only a local docker/podman driver can be asked; others get no row

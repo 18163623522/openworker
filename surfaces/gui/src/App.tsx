@@ -71,7 +71,7 @@ import { itemsFromMessages } from "./itemsFromMessages";
 import { addTurnUsage, emptyUsage, teamUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
-import { isTauri, platformOS, startWindowDrag } from "./tauri";
+import { isTauri, macosMajor, platformOS, startWindowDrag } from "./tauri";
 import { Icon } from "./components/Icon";
 import { Sidebar } from "./components/Sidebar";
 import { ThinkingBlock, Transcript } from "./components/Transcript";
@@ -1844,6 +1844,12 @@ export function App() {
   // compensations (traffic-light insets, lowered top strips) must not apply there —
   // they rendered as misalignments under Windows' native bar (caught 2026-07-21).
   const overlay = (desktop && platformOS() === "macos") || simOverlay;
+  // macOS 26 draws the traffic lights ~9px higher than macOS 15 does for this window, so
+  // the wordmark, the reveal button and the topbar cluster move up with them (`?overlay=26`
+  // previews it in the browser).
+  const lightsHigh =
+    overlay && (macosMajor() >= 26 || new URLSearchParams(window.location.search).get("overlay") === "26");
+  const overlayClass = overlay ? " tauri-overlay" + (lightsHigh ? " macos-26" : "") : "";
   const beginWindowDrag = (event: PointerEvent) => {
     if (!desktop || event.button !== 0) return;
     startWindowDrag();
@@ -1870,7 +1876,7 @@ export function App() {
 
   if (booting || !uiReady) {
     return (
-      <div className={"app boot-splash" + (overlay ? " tauri-overlay" : "")}>
+      <div className={"app boot-splash" + overlayClass}>
         {/* overlay (not desktop): ?overlay=1 previews the splash's top-left in the browser
             too — the wordmark/traffic-light alignment is exactly what it exists to tune. */}
         {overlay && (
@@ -1903,7 +1909,7 @@ export function App() {
     <div
       className={
         "app" +
-        (overlay ? " tauri-overlay" : "") +
+        overlayClass +
         (navCollapsed ? " nav-collapsed" : "") +
         (navCollapsed && navPeek ? " nav-peek" : "")
       }
@@ -2334,16 +2340,16 @@ export function App() {
               <SessionSetupRow
                 personas={personas}
                 agent={agent}
-                showFolder={!machine && !cloudMode}
+                showFolder={!cloudMode}
                 folderName={workspace && !tempWorkspace ? baseName(workspace) : null}
                 machines={machines}
                 machine={machine}
                 cloud={cloudMode}
                 onPickMachine={(id) => {
                   setMachine(id);
-                  // A remote draft never carries a LOCAL folder — the box provisions
-                  // its own scratch (remote folder browsing is a follow-up).
-                  if (id) {
+                  // A folder picked here belongs to one place: switching machines (or back to
+                  // this computer) drops it. The folder chip then takes a path on the new one.
+                  if (id !== machine) {
                     setWorkspace(null);
                     setBranch(null);
                     setShowGate(false);

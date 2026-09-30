@@ -1451,7 +1451,8 @@
     "consent_recommended_tag": "(recommended)",
     "consent_optional_tag": "(optional)",
     "consent_enabled_note": "✓ Enabled — it's in your coworker picker.",
-    "consent_recommended_mode": "Recommended mode: {{mode}}."
+    "consent_recommended_mode": "Recommended mode: {{mode}}.",
+    "group_engineering": "Engineering"
   },
   "provider": {
     "all_providers": "‹ All providers",
@@ -1695,7 +1696,9 @@
     "manage_coworkers": "Manage coworkers…",
     "choose_folder": "Choose folder",
     "choose_another_folder": "Choose another folder…",
-    "choose_a_folder": "Choose a folder…"
+    "choose_a_folder": "Choose a folder…",
+    "group_engineering": "Engineering",
+    "group_security": "Security"
   },
   "mcp": {
     "preset_granola_blurb": "Meeting notes & transcripts — sign in with your Granola account.",
@@ -2032,7 +2035,8 @@
       "expired": "Enrollment window expired.",
       "rearm": "Re-arm",
       "waiting": "Waiting for the machine…",
-      "token_expires": "token expires in {{countdown}}"
+      "token_expires": "token expires in {{countdown}}",
+      "port_note": "This Mac's app is on port {{port}} because 8765 was busy when it started. Tunnels and machines set up for 8765 cannot reach it until 8765 is free and the app restarts."
     },
     "keys": {
       "title": "Keys on {{name}}",
@@ -2171,7 +2175,16 @@
       "send_sub": "Code work happens inside a folder on ⌂ {{machine}} — enter a path there, or start somewhere temporary.",
       "path_placeholder": "/home/you/project  (path on {{machine}})",
       "use_temp": "Use temporary folder on {{machine}}",
-      "temp_note": "A temporary folder is created on ⌂ {{machine}} only when you send, with git ready. Your message sends as soon as you choose."
+      "temp_note": "A temporary folder is created on ⌂ {{machine}} only when you send, with git ready. Your message sends as soon as you choose.",
+      "draft_title": "Where should {{name}} work on ⌂ {{machine}}?",
+      "draft_sub": "Type a folder path on {{machine}}. Recent folders are listed.",
+      "check": "Check",
+      "checking": "Checking…",
+      "found": "✓ Folder found on {{machine}}",
+      "found_branch": "✓ Folder found on {{machine}} · git branch {{branch}}",
+      "not_found": "No folder at {{path}} on {{machine}}.",
+      "use": "Use this folder",
+      "type_path": "Type a path on {{machine}}…"
     },
     "access": {
       "another_machine": "another machine",
@@ -2455,7 +2468,8 @@
       "sites_title": "Allowed sites",
       "sites_total": "{{count}} allowed",
       "os_docker_update": "Update Docker Desktop, then check again.",
-      "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs."
+      "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs.",
+      "applies_note": "Applies to sessions you start from now on. Open sessions keep running as they are."
     }
   },
   "misc": {

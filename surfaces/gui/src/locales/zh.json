@@ -1431,7 +1431,8 @@
     "consent_recommended_tag": "（推荐）",
     "consent_optional_tag": "（可选）",
     "consent_enabled_note": "✓ 已启用 —— 已在你的同事选择器中。",
-    "consent_recommended_mode": "推荐模式：{{mode}}。"
+    "consent_recommended_mode": "推荐模式：{{mode}}。",
+    "group_engineering": "工程"
   },
   "provider": {
     "all_providers": "‹ 全部 provider",
@@ -1661,7 +1662,9 @@
     "manage_coworkers": "管理同事…",
     "choose_folder": "选择文件夹",
     "choose_another_folder": "选择其他文件夹…",
-    "choose_a_folder": "选择一个文件夹…"
+    "choose_a_folder": "选择一个文件夹…",
+    "group_engineering": "工程",
+    "group_security": "安全"
   },
   "mcp": {
     "preset_granola_blurb": "会议笔记与转录——用你的 Granola 账户登录。",
@@ -1993,7 +1996,8 @@
       "expired": "注册窗口已过期。",
       "rearm": "重新开启",
       "waiting": "正在等待机器…",
-      "token_expires": "令牌将在 {{countdown}} 后过期"
+      "token_expires": "令牌将在 {{countdown}} 后过期",
+      "port_note": "本机应用当前使用端口 {{port}}，因为启动时 8765 被占用。为 8765 设置的隧道和机器在 8765 空出并重启应用前无法连接。"
     },
     "keys": {
       "title": "{{name}} 上的密钥",
@@ -2131,7 +2135,16 @@
       "send_sub": "代码工作在 ⌂ {{machine}} 上的文件夹里进行 —— 输入那台机器上的路径，或从临时位置开始。",
       "path_placeholder": "/home/you/project  （{{machine}} 上的路径）",
       "use_temp": "在 {{machine}} 上使用临时文件夹",
-      "temp_note": "临时文件夹只在你发送时于 ⌂ {{machine}} 上创建，git 已就绪。你一选定，消息即发送。"
+      "temp_note": "临时文件夹只在你发送时于 ⌂ {{machine}} 上创建，git 已就绪。你一选定，消息即发送。",
+      "draft_title": "{{name}} 应在 ⌂ {{machine}} 的哪个文件夹中工作？",
+      "draft_sub": "输入 {{machine}} 上的文件夹路径。下方列出最近使用的文件夹。",
+      "check": "检查",
+      "checking": "检查中…",
+      "found": "✓ 已在 {{machine}} 上找到该文件夹",
+      "found_branch": "✓ 已在 {{machine}} 上找到该文件夹 · git 分支 {{branch}}",
+      "not_found": "{{machine}} 上没有 {{path}} 这个文件夹。",
+      "use": "使用此文件夹",
+      "type_path": "输入 {{machine}} 上的路径…"
     },
     "access": {
       "another_machine": "另一台机器",
@@ -2415,7 +2428,8 @@
       "sites_title": "允许的网站",
       "sites_total": "已允许 {{count}} 个",
       "os_docker_update": "请更新 Docker Desktop，然后重新检查。",
-      "os_docker_update_why": "此版本的 Linux 内核没有 Landlock，而 OpenShell 需要它。"
+      "os_docker_update_why": "此版本的 Linux 内核没有 Landlock，而 OpenShell 需要它。",
+      "applies_note": "对此后新开始的会话生效。已打开的会话保持原样继续运行。"
     }
   },
   "misc": {
