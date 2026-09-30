@@ -1451,7 +1451,8 @@
     "consent_recommended_tag": "(recommended)",
     "consent_optional_tag": "(optional)",
     "consent_enabled_note": "✓ Enabled — it's in your coworker picker.",
-    "consent_recommended_mode": "Recommended mode: {{mode}}."
+    "consent_recommended_mode": "Recommended mode: {{mode}}.",
+    "group_engineering": "Engineering"
   },
   "provider": {
     "all_providers": "‹ All providers",
@@ -1695,7 +1696,9 @@
     "manage_coworkers": "Manage coworkers…",
     "choose_folder": "Choose folder",
     "choose_another_folder": "Choose another folder…",
-    "choose_a_folder": "Choose a folder…"
+    "choose_a_folder": "Choose a folder…",
+    "group_engineering": "Engineering",
+    "group_security": "Security"
   },
   "mcp": {
     "preset_granola_blurb": "Meeting notes & transcripts — sign in with your Granola account.",

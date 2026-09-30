@@ -1,6 +1,7 @@
 ---
 ships: false
 id: design-worker
+group: engineering
 name: Design Worker
 icon: layout
 tagline: UI/UX implementation under a team lead

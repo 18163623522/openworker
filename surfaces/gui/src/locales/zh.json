@@ -1431,7 +1431,8 @@
     "consent_recommended_tag": "（推荐）",
     "consent_optional_tag": "（可选）",
     "consent_enabled_note": "✓ 已启用 —— 已在你的同事选择器中。",
-    "consent_recommended_mode": "推荐模式：{{mode}}。"
+    "consent_recommended_mode": "推荐模式：{{mode}}。",
+    "group_engineering": "工程"
   },
   "provider": {
     "all_providers": "‹ 全部 provider",
@@ -1661,7 +1662,9 @@
     "manage_coworkers": "管理同事…",
     "choose_folder": "选择文件夹",
     "choose_another_folder": "选择其他文件夹…",
-    "choose_a_folder": "选择一个文件夹…"
+    "choose_a_folder": "选择一个文件夹…",
+    "group_engineering": "工程",
+    "group_security": "安全"
   },
   "mcp": {
     "preset_granola_blurb": "会议笔记与转录——用你的 Granola 账户登录。",

@@ -1,6 +1,7 @@
 ---
 ships: false
 id: swe-lead
+group: engineering
 name: SWE Lead
 icon: users
 tagline: Leads a software team — plans, staffs, assigns, verifies

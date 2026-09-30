@@ -1,6 +1,7 @@
 ---
 ships: false
 id: swe-worker
+group: engineering
 name: SWE Worker
 icon: code
 tagline: Implements work items under a team lead
