@@ -766,6 +766,13 @@ function AddMachineCard({
                   <>
                     {t("machines.add.ssh_help")}
                     <div className="font-mono mt-1">{`ssh -N -R ${port}:localhost:${port} user@your-vm`}</div>
+                    {/* OPE-212: the app holds port 8765 so tunnels and joined machines survive a
+                        restart; only when 8765 was taken at start does it sit elsewhere. */}
+                    {joinUrl && port !== "8765" && (
+                      <div className="mt-1 text-warnInk" data-testid="machines-port-note">
+                        {t("machines.add.port_note", { port })}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>

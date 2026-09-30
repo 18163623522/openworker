@@ -2035,7 +2035,8 @@
       "expired": "Enrollment window expired.",
       "rearm": "Re-arm",
       "waiting": "Waiting for the machine…",
-      "token_expires": "token expires in {{countdown}}"
+      "token_expires": "token expires in {{countdown}}",
+      "port_note": "This Mac's app is on port {{port}} because 8765 was busy when it started. Tunnels and machines set up for 8765 cannot reach it until 8765 is free and the app restarts."
     },
     "keys": {
       "title": "Keys on {{name}}",

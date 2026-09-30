@@ -1,8 +1,9 @@
 //! OpenWorker desktop shell.
 //!
 //! Tauri is a thin native window over the existing React SPA. It:
-//!   1. picks a free localhost port and starts the Python `openworker-server` as a managed
-//!      sidecar on that port (so it never clashes with a hand-run server on 8765);
+//!   1. starts the Python `openworker-server` as a managed sidecar on localhost port 8765
+//!      (a fixed port: joined machines and their tunnels keep working across restarts;
+//!      OPE-212), falling back to a free port only when 8765 is taken;
 //!   2. injects the sidecar HTTP/WS addresses and per-launch authentication token before the
 //!      SPA loads (single codebase — the browser build still hits 8765);
 //!   3. lives in the system tray: closing the window hides it (keeps MyHelper + the scheduler
@@ -36,11 +37,34 @@ struct ServerProcess(Mutex<Option<Child>>);
 /// releases the hold (kills `caffeinate` on macOS, clears the execution state on Windows).
 struct KeepAwake(Mutex<Option<KeepAwakeGuard>>);
 
+/// The port machines are told to reach this app on. Fixed, so a joined machine's stored
+/// address and its SSH tunnel survive an app restart (OPE-212: with a random port every
+/// restart cut every machine off). The server listens on loopback and needs the launch
+/// token on every request, so the port number itself protects nothing.
+const DEFAULT_PORT: u16 = 8765;
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
-        .unwrap_or(8765)
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// 8765 when it is free (or OPENWORKER_PORT, for developers running two copies); otherwise
+/// a free port, and the Machines page says so, since tunnels to 8765 then lead nowhere.
+fn choose_port() -> u16 {
+    if let Some(p) = std::env::var("OPENWORKER_PORT").ok().and_then(|v| v.parse::<u16>().ok()) {
+        return p;
+    }
+    // A restart (an update, a relaunch) can find the previous sidecar still shutting
+    // down; give 8765 a few seconds to come free before settling for another port.
+    for _ in 0..10 {
+        if std::net::TcpListener::bind(("127.0.0.1", DEFAULT_PORT)).is_ok() {
+            return DEFAULT_PORT;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    free_port()
 }
 
 fn launch_token() -> String {
@@ -698,7 +722,7 @@ async fn install_update(
 }
 
 pub fn run() {
-    let port = free_port();
+    let port = choose_port();
     let api_token = launch_token();
     let http = format!("http://127.0.0.1:{port}");
     let ws = format!("ws://127.0.0.1:{port}");

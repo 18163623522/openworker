@@ -140,8 +140,8 @@ _ENGINE_LOCK = None
 
 
 def _warn_if_state_shared() -> None:
-    """The desktop sidecar runs on a random port precisely so it can coexist with
-    a hand-run `openworker-server` on the same state dir, so this entrypoint only
+    """The desktop sidecar can coexist with a hand-run `openworker-server` on the same
+    state dir (the app moves to a free port when 8765 is taken), so this entrypoint only
     WARNS about a second engine (statelock.py). `openworker up` refuses outright;
     set COWORKER_STATE_LOCK=strict to make this server refuse too."""
     global _ENGINE_LOCK
@@ -177,7 +177,7 @@ def main(argv=None) -> None:
 
     # Publish the ACTUAL bound port so loopback URLs (the managed-OAuth callback)
     # target this process, not config.port. The desktop shell runs the sidecar on
-    # a random free port (to coexist with a hand-run server on 8765), so the
+    # port 8765, or a free port when that is taken (a hand-run server), so the
     # managed-connect redirect must follow the real port, not the 8765 default.
     os.environ["COWORKER_PORT"] = str(args.port)
     generated_token_path = _ensure_api_token(args.port)

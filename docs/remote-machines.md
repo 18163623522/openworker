@@ -51,8 +51,9 @@ You should see `controller: not joined` — a fresh, unenrolled machine.
 
 ## Reachability: how the machine finds your desktop
 
-The machine connects to your desktop app's local server (port 8765). Your
-desktop binds to localhost only, so pick one of these:
+The machine connects to your desktop app's local server on port 8765. (If 8765
+is taken when the app starts, it uses another port and the Add a machine card
+shows it.) Your desktop binds to localhost only, so pick one of these:
 
 **Option A — Tailscale (recommended).** Install [Tailscale](https://tailscale.com)
 on both computers. In the desktop app, enable listening on the tailnet

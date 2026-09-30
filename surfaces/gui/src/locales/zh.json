@@ -1996,7 +1996,8 @@
       "expired": "注册窗口已过期。",
       "rearm": "重新开启",
       "waiting": "正在等待机器…",
-      "token_expires": "令牌将在 {{countdown}} 后过期"
+      "token_expires": "令牌将在 {{countdown}} 后过期",
+      "port_note": "本机应用当前使用端口 {{port}}，因为启动时 8765 被占用。为 8765 设置的隧道和机器在 8765 空出并重启应用前无法连接。"
     },
     "keys": {
       "title": "{{name}} 上的密钥",
