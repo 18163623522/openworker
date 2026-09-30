@@ -2458,7 +2458,8 @@
       "sites_title": "Allowed sites",
       "sites_total": "{{count}} allowed",
       "os_docker_update": "Update Docker Desktop, then check again.",
-      "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs."
+      "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs.",
+      "applies_note": "Applies to sessions you start from now on. Open sessions keep running as they are."
     }
   },
   "misc": {

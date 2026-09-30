@@ -404,6 +404,9 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
           <span className="flex-1 min-w-0">
             <span className="block text-ui font-medium text-ink">{t("settingsx.sandbox.switch_title")}</span>
             <span className="block text-meta text-muted max-w-[640px]">{t("settingsx.sandbox.switch_desc")}</span>
+            {/* OPE-209: the switch, the type and the network list apply when a session starts;
+                an open session keeps the walls it started with. Said here, once. */}
+            <span className="block text-meta text-faint max-w-[640px] mt-0.5" data-testid="sandbox-applies-note">{t("settingsx.sandbox.applies_note")}</span>
           </span>
         </div>
       </div>
