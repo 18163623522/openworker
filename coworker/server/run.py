@@ -136,7 +136,31 @@ def _ensure_api_token(port: int) -> Path | None:
     )
 
 
+_ENGINE_LOCK = None
+
+
+def _warn_if_state_shared() -> None:
+    """The desktop sidecar can coexist with a hand-run `openworker-server` on the same
+    state dir (the app moves to a free port when 8765 is taken), so this entrypoint only
+    WARNS about a second engine (statelock.py). `openworker up` refuses outright;
+    set COWORKER_STATE_LOCK=strict to make this server refuse too."""
+    global _ENGINE_LOCK
+    from ..statelock import EngineBusy, acquire
+
+    strict = os.environ.get("COWORKER_STATE_LOCK") == "strict"
+    try:
+        _ENGINE_LOCK = acquire(state_dir(), timeout=10.0 if strict else 0.0)
+    except EngineBusy as exc:
+        if strict:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(3)
+        print(f"warning: {exc}", file=sys.stderr)
+
+
 def main(argv=None) -> None:
+    from ..sandbox.launch import maybe_run_runner
+
+    maybe_run_runner(list(sys.argv[1:] if argv is None else argv))  # `sandbox-runner ...`
     _ensure_ca_bundle()
     cfg = load_config()  # global config supplies defaults
     parser = argparse.ArgumentParser(prog="openworker-server")
@@ -153,7 +177,7 @@ def main(argv=None) -> None:
 
     # Publish the ACTUAL bound port so loopback URLs (the managed-OAuth callback)
     # target this process, not config.port. The desktop shell runs the sidecar on
-    # a random free port (to coexist with a hand-run server on 8765), so the
+    # port 8765, or a free port when that is taken (a hand-run server), so the
     # managed-connect redirect must follow the real port, not the 8765 default.
     os.environ["COWORKER_PORT"] = str(args.port)
     generated_token_path = _ensure_api_token(args.port)
@@ -161,6 +185,7 @@ def main(argv=None) -> None:
         import uvicorn
 
         _exit_when_orphaned()
+        _warn_if_state_shared()
         app = build_app(args.cwd, args.model, args.mode)
         uvicorn.run(
             app, host=args.host, port=args.port, ws_max_size=_WS_MAX_FRAME_BYTES
