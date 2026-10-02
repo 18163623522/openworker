@@ -516,6 +516,31 @@ describe("ApprovalCard — §1.9 egress cards", () => {
     expect(screen.getByText(/leaves this computer → bbc\.com/)).toBeTruthy();
   });
 
+  it("a site off the sandbox's allowed sites says so and offers to add it (OPE-219)", () => {
+    const onApprove = vi.fn();
+    const walled = fetchApproval({
+      args: { url: "https://weather.com/today" },
+      reason: "weather.com is not on your allowed sites",
+      escalation: { kind: "human_required", reason: "weather.com is not on your allowed sites" },
+      siteWall: "weather.com",
+    });
+    render(<ApprovalCard item={walled} onApprove={onApprove} />);
+    // Its own plain line, not the generic "requires a human decision" banner.
+    expect(screen.getByTestId("approval-site-wall").textContent).toBe("weather.com is not on your allowed sites.");
+    expect(screen.queryByTestId("approval-escalation")).toBeNull();
+    // Once, this session, and the durable choice that writes the machine's list.
+    expect(screen.getByText("Allow weather.com for this session")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("approval-always-site"));
+    expect(onApprove).toHaveBeenCalledWith("always_site");
+    expect(screen.getByTestId("approval-always-site").textContent).toBe("Always allow weather.com");
+  });
+
+  it("an ordinary fetch card has no allowed-sites line or button", () => {
+    render(<ApprovalCard item={fetchApproval()} onApprove={vi.fn()} />);
+    expect(screen.queryByTestId("approval-site-wall")).toBeNull();
+    expect(screen.queryByTestId("approval-always-site")).toBeNull();
+  });
+
   it("web_fetch with an unparseable url falls back to once/deny only", () => {
     render(<ApprovalCard item={fetchApproval({ args: { url: "not a url" } })} onApprove={vi.fn()} />);
     expect(screen.queryByText(/for this session/)).toBeNull();

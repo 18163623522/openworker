@@ -660,7 +660,9 @@
       "always_trust": "Always allow this tool",
       "always_trust_title": "Allow {{name}} without asking, permanently — survives restarts; revoke any time on the server's page in Connectors",
       "this_run": "Allow for this request",
-      "this_run_title": "Covers {{name}} until the agent finishes answering your current message. Later calls in this answer run without showing you their arguments first — you'll see them in the transcript afterward. Nothing survives past this answer."
+      "this_run_title": "Covers {{name}} until the agent finishes answering your current message. Later calls in this answer run without showing you their arguments first — you'll see them in the transcript afterward. Nothing survives past this answer.",
+      "always_site": "Always allow {{host}}",
+      "always_site_title": "Adds {{host}} to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine"
     },
     "preview_less": "show less",
     "preview_all_lines": "show all {{n}} lines",
@@ -681,7 +683,8 @@
     "save_skill_footer": "Approving adds it to your skills on this computer — usable in every conversation from then on.",
     "search_note": "Queries go to your configured search provider.",
     "search_note_current": "Queries go to your configured search provider (currently: {{provider}}).",
-    "reviewer_unsure": "reviewer wasn’t sure: {{note}}"
+    "reviewer_unsure": "reviewer wasn’t sure: {{note}}",
+    "site_wall_note": "{{host}} is not on your allowed sites."
   },
   "search": {
     "placeholder": "Search chats",

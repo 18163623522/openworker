@@ -389,6 +389,19 @@ function Buttons({
           {t("approval.btn.always_search")}
         </button>
       )}
+      {/* OPE-219: the one durable choice on the allowed-sites card. It writes the site into
+          the machine's sandbox list, so it is offered in Auto-approve too: standing policy
+          the user sets, not an in-flow session grant. */}
+      {!offerStanding && item.siteWall && (
+        <button
+          className="btn"
+          title={t("approval.btn.always_site_title", { host: item.siteWall })}
+          onClick={() => onApprove("always_site")}
+          data-testid="approval-always-site"
+        >
+          {t("approval.btn.always_site", { host: item.siteWall })}
+        </button>
+      )}
       {!autoApprove && item.name === "run_shell" && (
         <button className="btn" onClick={() => onApprove("always_command")}>
           {t("approval.btn.always_command")}
@@ -473,7 +486,15 @@ export function ApprovalCard({
     </div>
   ) : null;
   // Quiet, not a warning: the reviewer hesitating is context, not danger.
-  const reviewerUnsure = <ApprovalEscalation escalation={item.escalation} reviewerUnsure={item.reviewerUnsure} />;
+  // OPE-219: a site the sandbox's allowed sites do not include. Its own plain line, in
+  // place of the generic "requires a human decision" banner the engine also sends.
+  const reviewerUnsure = item.siteWall ? (
+    <div className="text-meta text-muted mt-1" data-testid="approval-site-wall">
+      {t("approval.site_wall_note", { host: item.siteWall })}
+    </div>
+  ) : (
+    <ApprovalEscalation escalation={item.escalation} reviewerUnsure={item.reviewerUnsure} />
+  );
 
   // §35 compact row: routine workspace writes — one line, preview expands inline from the
   // tool args. Standing/grant flows keep the full card (they carry §25 consent weight).

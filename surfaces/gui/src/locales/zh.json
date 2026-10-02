@@ -650,7 +650,9 @@
       "always_trust": "总是允许此工具",
       "always_trust_title": "永久允许{{name}}且不再询问 —— 重启后依然生效；可随时在连接器中该服务器页面撤销",
       "this_run": "本次请求内允许",
-      "this_run_title": "在智能体回答完您当前这条消息之前，{{name}} 的后续调用将不再展示参数、直接执行 —— 事后可在会话记录中查看。回答结束后此授权即失效，不会保留任何设置。"
+      "this_run_title": "在智能体回答完您当前这条消息之前，{{name}} 的后续调用将不再展示参数、直接执行 —— 事后可在会话记录中查看。回答结束后此授权即失效，不会保留任何设置。",
+      "always_site": "始终允许 {{host}}",
+      "always_site_title": "将 {{host}} 加入 设置 ▸ 沙盒 的允许网站列表，对本机的命令和网页工具生效"
     },
     "preview_less": "收起",
     "preview_all_lines": "展开全部 {{n}} 行",
@@ -670,7 +672,8 @@
     "save_skill_footer": "批准后会将其添加到本机的技能中 —— 此后每个会话都可使用。",
     "search_note": "查询会发送到你配置的搜索服务商。",
     "search_note_current": "查询会发送到你配置的搜索服务商（当前：{{provider}}）。",
-    "reviewer_unsure": "审查器不确定：{{note}}"
+    "reviewer_unsure": "审查器不确定：{{note}}",
+    "site_wall_note": "{{host}} 不在你允许的网站列表中。"
   },
   "search": {
     "placeholder": "搜索会话",
