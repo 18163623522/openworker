@@ -2642,5 +2642,26 @@
     "open_worker_pane": "View {{name}} beside the lead",
     "full_session": "Open full session",
     "chat_off": "Team chat is off for this team"
+  },
+  "sandboxchip": {
+    "provider_openshell": "OpenShell",
+    "provider_seatbelt": "macOS sandbox",
+    "provider_windows": "Windows sandbox",
+    "sites_one": "{{count}} site",
+    "sites_other": "{{count}} sites",
+    "any_site": "any site",
+    "not_sandboxed": "Not sandboxed",
+    "title": "This session is sandboxed",
+    "sub": "{{provider}}. Commands and file tools run inside it. It was set when the session started.",
+    "folders": "Folders",
+    "read_write": "read and write",
+    "read_only": "read only",
+    "sites_label": "Sites",
+    "no_sites": "None. Add sites in Settings ▸ Sandbox.",
+    "any_site_long": "Any site",
+    "logins": "Shared logins",
+    "not_title": "This session is not sandboxed",
+    "not_sub": "It was opened before the sandbox was switched on. Its commands run on this computer without the sandbox. Start a new session to use the sandbox.",
+    "open_settings": "Open Settings ▸ Sandbox"
   }
 }

@@ -8935,6 +8935,31 @@
           "reason": "Check the invoice object's PDF field",
           "category": "network"
         },
+        "site-off-the-allowed-sites": {
+          "name": "web_fetch",
+          "arguments": {
+            "url": "https://weather.com/weather/today/l/San+Francisco+CA"
+          },
+          "reason": "weather.com is not on your allowed sites",
+          "escalation": {
+            "kind": "human_required",
+            "reason": "weather.com is not on your allowed sites"
+          },
+          "site_wall": "weather.com"
+        },
+        "search-provider-off-the-allowed-sites": {
+          "name": "web_search",
+          "arguments": {
+            "query": "weather in San Francisco today"
+          },
+          "reason": "api.search.brave.com is not on your allowed sites",
+          "escalation": {
+            "kind": "human_required",
+            "reason": "api.search.brave.com is not on your allowed sites"
+          },
+          "search_provider": "brave",
+          "site_wall": "api.search.brave.com"
+        },
         "connector-action": {
           "name": "github_create_pull_request",
           "arguments": {
@@ -9176,6 +9201,60 @@
               "url": "https://docs.stripe.com/api/invoices/object"
             },
             "escalation": null,
+            "provenance": ""
+          }
+        },
+        "site-off-the-allowed-sites": {
+          "id": "gallery-item",
+          "session_id": "gallery-session",
+          "kind": "approval",
+          "title": "Run `web_fetch`?",
+          "body": "weather.com is not on your allowed sites",
+          "state": "pending",
+          "resolution": null,
+          "inbox": "default",
+          "created_at": "2026-09-17T09:30:00Z",
+          "resolved_at": null,
+          "visibility": "inbox",
+          "session_title": "Mention #3 · Invoice PDF download",
+          "session_agent": "swe-lead",
+          "session_exists": true,
+          "data": {
+            "tool": "web_fetch",
+            "arguments": {
+              "url": "https://weather.com/weather/today/l/San+Francisco+CA"
+            },
+            "escalation": {
+              "kind": "human_required",
+              "reason": "weather.com is not on your allowed sites"
+            },
+            "provenance": ""
+          }
+        },
+        "search-provider-off-the-allowed-sites": {
+          "id": "gallery-item",
+          "session_id": "gallery-session",
+          "kind": "approval",
+          "title": "Run `web_search`?",
+          "body": "api.search.brave.com is not on your allowed sites",
+          "state": "pending",
+          "resolution": null,
+          "inbox": "default",
+          "created_at": "2026-09-17T09:30:00Z",
+          "resolved_at": null,
+          "visibility": "inbox",
+          "session_title": "Mention #3 · Invoice PDF download",
+          "session_agent": "swe-lead",
+          "session_exists": true,
+          "data": {
+            "tool": "web_search",
+            "arguments": {
+              "query": "weather in San Francisco today"
+            },
+            "escalation": {
+              "kind": "human_required",
+              "reason": "api.search.brave.com is not on your allowed sites"
+            },
             "provenance": ""
           }
         },

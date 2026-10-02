@@ -81,6 +81,7 @@ import { SearchModal } from "./components/SearchModal";
 import { SessionIntro } from "./components/SessionIntro";
 import { FolderGate } from "./components/FolderGate";
 import { SessionSetupRow } from "./components/SessionSetupRow";
+import { SandboxChip, type SessionSandbox } from "./components/SandboxChip";
 import { SendFolderDialog } from "./components/SendFolderDialog";
 import { Onboarding } from "./components/Onboarding";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -251,6 +252,8 @@ export function App() {
   // OPE-206: the provider name while this session's sandbox is being built (the socket
   // is open, `ready` has not come yet); null otherwise. Drives the waiting row.
   const [preparingSandbox, setPreparingSandbox] = useState<string | null>(null);
+  // OPE-218: which walls this session runs behind, for the header chip. From `ready`.
+  const [sandboxInfo, setSandboxInfo] = useState<SessionSandbox | null>(null);
   // The server refused to build this session (its sandbox cannot be used) and closed the
   // socket for good: no reconnect strip, the error notice in the transcript says why.
   const [sessionRefused, setSessionRefused] = useState(false);
@@ -880,6 +883,7 @@ export function App() {
           break;
         case "ready":
           setPreparingSandbox(null);
+          setSandboxInfo(d.sandbox || null);
           setSessionRefused(false);
           setConnected(true);
           if (d.model) setModel(d.model);
@@ -2182,6 +2186,11 @@ export function App() {
                 <span>{t("topbar.artifacts")}</span>
                 <span className="topbar-artifacts-count">{artifactCount}</span>
               </button>
+            )}
+            {/* OPE-218: which walls this session runs behind. No chip when the machine has
+                no sandbox; amber only for a session opened before the sandbox was switched on. */}
+            {surface === "session" && (
+              <SandboxChip info={sandboxInfo} onOpenSettings={() => openSettings("sandbox")} />
             )}
             {/* §32: the panel toggle is the ONE session-panel entry, for every non-chat persona
                 (the rail now carries Access, so code-family gets it too). */}

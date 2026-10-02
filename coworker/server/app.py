@@ -167,6 +167,17 @@ from ..inbox import VIS_INBOX, VIS_INLINE, args_preview
 from ..permissions import Mode
 from ..providers import AssistantTurn
 from .. import toolchain
+
+
+def _session_sandbox(engine: Any) -> dict[str, Any]:
+    """The session's sandbox, for its header chip. Never raises: a header must not break
+    a session."""
+    try:
+        from ..sandbox.settings import session_sandbox
+
+        return session_sandbox(engine)
+    except Exception:  # noqa: BLE001
+        return {"state": "off"}
 from ..teams.model import AuthorityError as TeamsAuthorityError
 from ..teams.model import BoardError as TeamsBoardError
 from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
@@ -2934,6 +2945,8 @@ def create_app(manager: SessionManager) -> FastAPI:
                     "agent": getattr(engine, "agent_name", "code"),
                     "model": engine.model,
                     "mode": engine.permissions.mode.value,
+                    # OPE-218: the header chip says which walls this session runs behind.
+                    "sandbox": _session_sandbox(engine),
                     "workspace": (
                         str(getattr(engine, "executor").cwd)
                         if getattr(engine, "executor", None)

@@ -79,6 +79,31 @@ export const approvalStates: CardState[] = [
     },
   },
   {
+    id: "site-off-the-allowed-sites",
+    title: "A site that is not on the allowed sites",
+    note: "The session is sandboxed with \"Only the sites you allow\" and the page is on a site outside the list. The card says so and offers to add the site to the machine's list (OPE-219). In Bypass the call is refused with no card.",
+    payload: {
+      name: "web_fetch",
+      arguments: { url: "https://weather.com/weather/today/l/San+Francisco+CA" },
+      reason: "weather.com is not on your allowed sites",
+      escalation: { kind: "human_required", reason: "weather.com is not on your allowed sites" },
+      site_wall: "weather.com",
+    },
+  },
+  {
+    id: "search-provider-off-the-allowed-sites",
+    title: "Web search when the search provider is not on the allowed sites",
+    note: "A search goes to one site, the configured provider. Same card, for that host.",
+    payload: {
+      name: "web_search",
+      arguments: { query: "weather in San Francisco today" },
+      reason: "api.search.brave.com is not on your allowed sites",
+      escalation: { kind: "human_required", reason: "api.search.brave.com is not on your allowed sites" },
+      search_provider: "brave",
+      site_wall: "api.search.brave.com",
+    },
+  },
+  {
     id: "connector-action",
     title: "Connector action",
     note: "Acts on a connected service: no session-wide grant.",

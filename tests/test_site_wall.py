@@ -116,3 +116,39 @@ def test_add_site_joins_the_machines_list_once(tmp_path, monkeypatch):
     assert hosts == ["weather.com:443"]
     settings.add_site("weather.com")
     assert app_config.load_config().sandbox_network_hosts == hosts  # no duplicate
+
+
+# -- what the session header is told (OPE-218) ----------------------------------------------
+
+
+def test_session_sandbox_summary(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from coworker.sandbox import settings
+
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    grant = SimpleNamespace(name="gh", title="GitHub CLI")
+    provider = SimpleNamespace(
+        name="openshell", profile="allowlist", extra_hosts=["github.com:443"],
+        roots=[{"path": "/home/sam/code/app", "writable": True}], grants=[grant],
+    )
+    engine = SimpleNamespace(
+        sandbox_workspace=SimpleNamespace(provider=provider, started=False),
+        permissions=SimpleNamespace(sandbox_sites=["github.com:443", "weather.com"]),
+    )
+    info = settings.session_sandbox(engine)
+    assert info["state"] == "sandboxed" and info["provider"] == "openshell" and info["network"] == "allowlist"
+    assert info["sites"] == ["github.com:443", "weather.com"]  # the live list, with what the user added
+    assert info["folders"] == [{"path": "/home/sam/code/app", "writable": True}] and info["logins"] == ["GitHub CLI"]
+    assert info["started"] is False
+
+    provider.profile = "open"
+    engine.permissions.sandbox_sites = None
+    assert settings.session_sandbox(engine)["sites"] == []  # any site: no list to show
+
+    # A session with no sandbox: "off" when the machine has none either...
+    plain = SimpleNamespace(sandbox_workspace=SimpleNamespace(), permissions=SimpleNamespace(sandbox_sites=None))
+    assert settings.session_sandbox(plain) == {"state": "off"}
+    # ...and "not sandboxed" when the machine is now set to use one (opened before the switch).
+    (tmp_path / "config.toml").write_text('sandbox_provider = "openshell"\n')
+    assert settings.session_sandbox(plain) == {"state": "not_sandboxed", "provider": "openshell"}

@@ -2602,5 +2602,26 @@
     "open_worker_pane": "在主代理旁查看 {{name}}",
     "full_session": "打开完整会话",
     "chat_off": "此团队未启用团队聊天"
+  },
+  "sandboxchip": {
+    "provider_openshell": "OpenShell",
+    "provider_seatbelt": "macOS 沙盒",
+    "provider_windows": "Windows 沙盒",
+    "sites_one": "{{count}} 个网站",
+    "sites_other": "{{count}} 个网站",
+    "any_site": "任意网站",
+    "not_sandboxed": "未在沙盒中",
+    "title": "此会话在沙盒中运行",
+    "sub": "{{provider}}。命令和文件工具在其中运行。沙盒在会话开始时确定。",
+    "folders": "文件夹",
+    "read_write": "可读写",
+    "read_only": "只读",
+    "sites_label": "网站",
+    "no_sites": "无。可在 设置 ▸ 沙盒 中添加网站。",
+    "any_site_long": "任意网站",
+    "logins": "共享的登录",
+    "not_title": "此会话未在沙盒中运行",
+    "not_sub": "它在开启沙盒之前打开，其命令在本机上不经沙盒运行。新建会话即可使用沙盒。",
+    "open_settings": "打开 设置 ▸ 沙盒"
   }
 }
