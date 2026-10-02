@@ -156,6 +156,10 @@ def _grant_offered(outcome, request) -> bool:
         return risk is RiskClass.EXEC
     if outcome is ApprovalOutcome.ALWAYS_DOMAIN:
         return risk is RiskClass.EGRESS and bool(args.get("url"))
+    if outcome is ApprovalOutcome.ALWAYS_SITE:
+        # OPE-219: only the allowed-sites card offers it, and only egress tools raise it.
+        # (The engine applies it only when the wall named a site for this call.)
+        return risk is RiskClass.EGRESS
     if outcome is ApprovalOutcome.ALWAYS_TRUST:
         # OPE-136 §4: durable per-tool trust is the MCP family's sanctioned lever —
         # the coarsest grant knowledge allows there, and offered nowhere else
@@ -5942,6 +5946,7 @@ class SessionManager:
             ApprovalOutcome.ALWAYS_TOOL,
             ApprovalOutcome.ALWAYS_COMMAND,
             ApprovalOutcome.ALWAYS_DOMAIN,
+            ApprovalOutcome.ALWAYS_SITE,
             # ALWAYS_TRUST was unlisted (a raw resolve could mint an inert-but-real
             # trust rule for a non-MCP tool — evaluate ignores those, but the store
             # shouldn't carry them); THIS_RUN validates like every grant.

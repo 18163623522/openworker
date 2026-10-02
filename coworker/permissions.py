@@ -258,6 +258,9 @@ class Decision:
     # Set when a task-scoped standing rule allowed the call ("tool → target") so the
     # engine can audit the exact rule and the tool card can say so (§25).
     rule: str = ""
+    # The host the sandbox's allowed-sites wall stopped (OPE-219). The card then says why
+    # it is asking and offers to add the site to the list.
+    site: str = ""
 
 
 def standing_rule_candidate(
@@ -297,6 +300,18 @@ class PermissionEngine:
     # subdomain suffix (see `_domain_allowed`).
     allowed_domains: list[str] = field(default_factory=list)
     session_allow_domains: set[str] = field(default_factory=set)
+    # The sandbox's allowed sites, as a wall for the web tools too (OPE-219). None: no wall
+    # (the session is not sandboxed, or its network setting is "Allow everything"). A list,
+    # possibly empty: the session runs with "Only the sites you allow", so `web_fetch`,
+    # `web_search` and `browser_open_url` may reach only these hosts ("host[:port]",
+    # "*.example.com"), the same list its commands are held to. These tools run in the
+    # OpenWorker process, outside the sandbox; before this the list did not apply to them
+    # and Bypass reached any site (reported on 0.3.0, 2026-10-02).
+    sandbox_sites: Optional[list[str]] = None
+    # Where `web_search` goes: the configured provider's host (it has no url argument).
+    search_host: Optional[Callable[[], str]] = None
+    # Persists a site the user chose to always allow (adds it to the machine's list).
+    grant_site: Optional[Callable[[str], None]] = None
     # Session-wide read-only grant (owner ask 2026-08-11): auto-allow shell commands the
     # conservative classifier (coworker/readonly.py) accepts. User-elected per session.
     session_readonly: bool = False
@@ -429,6 +444,27 @@ class PermissionEngine:
                 human_only=True,  # deferred-execution files: a human sees every one (§ floor)
             )
 
+        # THE ALLOWED-SITES WALL (OPE-219). Like the folder wall, no mode removes it: in
+        # Bypass a site that is not on the list is refused outright, with no card (owner
+        # ruling 2026-10-02); in the asking modes it reaches a person, never the reviewer,
+        # who may not widen the user's list. A site on the list runs without a card.
+        walled_site = ""
+        on_site_wall = False
+        if is_egress and self.sandbox_sites is not None:
+            host = self.egress_host(tool_name, arguments)
+            if host and self._site_allowed(host):
+                on_site_wall = True
+            else:
+                walled_site = host or "this site"
+                if self.mode is Mode.BYPASS_APPROVALS:
+                    return Decision(
+                        False,
+                        f"{walled_site} is not on this machine's allowed sites, so the sandbox "
+                        "setting blocks it. The user can add it in Settings > Sandbox > Choose sites.",
+                        needs_user=False,
+                        site=walled_site,
+                    )
+
         # Full access.
         if self.mode is Mode.BYPASS_APPROVALS:
             return Decision(True, "full access")
@@ -467,6 +503,16 @@ class PermissionEngine:
                     self._under_root(t) for t in read_targets(command)
                 ):
                     return Decision(True, "read-only command (session grant)")
+        if on_site_wall:
+            return Decision(True, "site on the allowed sites")
+        if walled_site:
+            return Decision(
+                False,
+                f"{walled_site} is not on your allowed sites",
+                needs_user=True,
+                human_only=True,
+                site=walled_site,
+            )
         if is_egress:
             url = str(arguments.get("url", ""))
             if self._domain_allowed(url, include_session=honor_session_grants):
@@ -563,6 +609,58 @@ class PermissionEngine:
             host = host[4:]
         if host:
             self.session_allow_domains.add(host)
+
+    def allow_site_always(self, url_or_domain: str) -> None:
+        """"Always allow <site>" on the allowed-sites card: the site joins the machine's
+        list (Settings > Sandbox), for commands and web tools alike. Without a store wired
+        (ephemeral engines in tests) it degrades to this session."""
+        host = _host_of(url_or_domain)
+        if not host:
+            return
+        if self.sandbox_sites is not None and not self._on_site_list(host):
+            self.sandbox_sites.append(host)
+        if self.grant_site is not None:
+            self.grant_site(host)
+        else:
+            self.session_allow_domains.add(host)
+
+    def egress_host(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        """Where an egress tool is going: its url's host, or for `web_search` (a fixed
+        destination, no url) the configured search provider's host."""
+        url = str((arguments or {}).get("url", "") or "")
+        if url:
+            return _host_of(url)
+        if self.search_host is not None:
+            try:
+                return _host_of(self.search_host() or "")
+            except Exception:  # noqa: BLE001 - an unknown provider reads as "not allowed"
+                return ""
+        return ""
+
+    def _on_site_list(self, host: str) -> bool:
+        """Whether `host` is on the sandbox's list. The web tools speak HTTP(S) only, so
+        the entry's port is not compared; `*.example.com` covers subdomains, as in the
+        sandbox's own proxy (netproxy.allows)."""
+        for entry in self.sandbox_sites or []:
+            name = str(entry).strip().lower()
+            if not name:
+                continue
+            if "://" in name:
+                name = _host_of(name)
+            name = name.rsplit(":", 1)[0] if ":" in name and not name.endswith("]") else name
+            if name.startswith("*."):
+                if host.endswith(name[1:]) and host != name[2:]:
+                    return True
+            elif host == name:
+                return True
+        return False
+
+    def _site_allowed(self, host: str) -> bool:
+        """On the machine's list, or granted by the user for this session. A session grant
+        counts in every mode here: a person gave it, on a card only a person can answer."""
+        if self._on_site_list(host):
+            return True
+        return any(host == d or host.endswith("." + d) for d in self.session_allow_domains)
 
     # -- helpers ----------------------------------------------------------------
     def _candidate(self, path: str) -> Path:

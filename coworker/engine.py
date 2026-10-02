@@ -72,6 +72,9 @@ class ApprovalOutcome(str, Enum):
     ALWAYS_TOOL = "always_tool"
     ALWAYS_COMMAND = "always_command"
     ALWAYS_DOMAIN = "always_domain"
+    # OPE-219: the allowed-sites card's durable choice. The site joins the machine's
+    # sandbox list (Settings > Sandbox), for commands and web tools alike.
+    ALWAYS_SITE = "always_site"
     # Session-wide grant for classifier-approved read-only shell commands (readonly.py).
     READONLY_SESSION = "readonly_session"
     # OPE-136 durable trust: persist a per-tool "don't ask" rule for an MCP tool —
@@ -1698,6 +1701,9 @@ class TurnEngine:
                         else {}
                     ),
                     "category": getattr(metadata, "category", ""),
+                    # OPE-219: the host the sandbox's allowed-sites wall stopped. The card
+                    # says so and offers to add the site to the machine's list.
+                    **({"site_wall": decision.site} if decision.site else {}),
                     # The exact target a standing rule could pin, or None when the call
                     # isn't eligible (no declared target arg / exec risk). Surfaces use it
                     # to offer "Allow every time" on automation-run approval cards only.
@@ -1804,6 +1810,16 @@ class TurnEngine:
                     self.permissions.allow_domain_for_session(
                         str(tool_call.arguments.get("url", ""))
                     )
+                elif outcome is ApprovalOutcome.ALWAYS_SITE and decision.site:
+                    self.permissions.allow_site_always(decision.site)
+                # A session grant given on the allowed-sites card must also open the
+                # wall for that site, or the next call would raise the same card
+                # (web_search has no url: its site is the search provider's host).
+                if decision.site and outcome in (
+                    ApprovalOutcome.ALWAYS_TOOL,
+                    ApprovalOutcome.ALWAYS_DOMAIN,
+                ):
+                    self.permissions.allow_domain_for_session(decision.site)
                 elif outcome is ApprovalOutcome.READONLY_SESSION:
                     self.permissions.allow_readonly_for_session()
                 elif outcome is ApprovalOutcome.ALWAYS_TRUST:

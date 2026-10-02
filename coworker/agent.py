@@ -726,6 +726,21 @@ def build_engine(
         engine.compaction_settings = lambda: dict(_compaction_overrides)
     engine.executor = executor  # type: ignore[attr-defined]
     engine.sandbox_workspace = sandbox_workspace  # type: ignore[attr-defined]
+    # OPE-219: a sandboxed session with "Only the sites you allow" holds its web tools to
+    # the same list as its commands. They run in this process, outside the sandbox, so the
+    # permission engine is the wall for them. No sandbox, or "Allow everything": no wall.
+    _sandbox_provider = getattr(sandbox_workspace, "provider", None)
+    if _sandbox_provider is not None and getattr(_sandbox_provider, "profile", "") == "allowlist":
+        from .sandbox import settings as _sandbox_settings
+        from .web import provider_host as _provider_host
+
+        engine.permissions.sandbox_sites = list(getattr(_sandbox_provider, "extra_hosts", None) or [])
+        engine.permissions.search_host = lambda: _provider_host(secrets)
+
+        def _grant_site(host: str) -> None:
+            _sandbox_settings.add_site(host)
+
+        engine.permissions.grant_site = _grant_site
     engine.todo = todo  # type: ignore[attr-defined]
     engine.agent_name = agent.name  # type: ignore[attr-defined]
     engine.roots = root_list  # type: ignore[attr-defined]  # shared list; Slice C mutates in place

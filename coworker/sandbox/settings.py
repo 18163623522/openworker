@@ -305,3 +305,17 @@ def _unset(key: str) -> None:
     lines = target.read_text(encoding="utf-8").splitlines()
     kept = [line for line in lines if not re.match(rf"\s*{re.escape(key)}\s*=", line)]
     target.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def add_site(host: str) -> list[str]:
+    """Add one site to the machine's allowed sites (the "Always allow <site>" choice on the
+    allowed-sites card, OPE-219) and return the new list. A site already on it changes
+    nothing. Raises ValueError for a host the list cannot hold."""
+    from .network_profiles import clean_host
+
+    entry = clean_host(host)
+    current = list(app_config.load_config().sandbox_network_hosts or [])
+    if entry not in current:
+        current.append(entry)
+        app_config.set_global_list("sandbox_network_hosts", current)
+    return current
