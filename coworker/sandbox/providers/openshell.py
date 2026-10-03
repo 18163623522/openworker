@@ -366,6 +366,15 @@ class OpenShellProvider:
             return  # not made yet: the next create renders the list as it stands
         _cli("policy", "set", self.sandbox_name, "--policy", str(self._write_policy()), "--wait", timeout=120)
 
+    reports_blocked = False  # see blocked_since
+
+    def blocked_since(self, since: float) -> list[tuple[float, str]]:
+        """(time, "host:port") of the connections the sandbox refused since then. Not read
+        yet on OpenShell: its denial log (`policy.local/v1/denials`, asked from inside the
+        sandbox) has to be checked on a real gateway first, so this reports nothing and the
+        agent asks for a site from the command's own error."""
+        return []
+
     def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. Mounts and the file policy are fixed when a sandbox
         is created, so this one is deleted and a new one is created with the new folders.

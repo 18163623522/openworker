@@ -130,6 +130,10 @@ def _grants_of(engine) -> dict[str, Any]:
     return out
 
 
+# Tools whose approval can change the session's allowed sites (the chip refreshes after one).
+_SITE_TOOLS = {"request_network_access", "web_fetch", "web_search", "browser_open_url"}
+
+
 def _grant_offered(outcome, request) -> bool:
     """Whether a persistent grant is legitimately offered for this tool — the server-side
     mirror of what the approval card actually renders (`ApprovalCard.tsx`).
@@ -145,6 +149,7 @@ def _grant_offered(outcome, request) -> bool:
     - ALWAYS_DOMAIN only means anything for a tool carrying a url.
     """
     from ..engine import ApprovalOutcome
+    from ..permissions import NETWORK_ACCESS_TOOL
     from ..risk import RiskClass, classify
 
     name = getattr(request, "tool_name", "")
@@ -152,6 +157,10 @@ def _grant_offered(outcome, request) -> bool:
     args = getattr(request, "arguments", None) or {}
     risk = classify(name, metadata)
 
+    if name == NETWORK_ACCESS_TOOL:
+        # OPE-219: the network-access card offers this session (sent as the domain grant)
+        # and "Always allow"; nothing tool-wide, so each new site gets its own card.
+        return outcome in (ApprovalOutcome.ALWAYS_DOMAIN, ApprovalOutcome.ALWAYS_SITE)
     if outcome is ApprovalOutcome.ALWAYS_COMMAND:
         return risk is RiskClass.EXEC
     if outcome is ApprovalOutcome.ALWAYS_DOMAIN:
@@ -5621,6 +5630,15 @@ class SessionManager:
             message = {**message, "data": {**data, **self.team_card_extras(session_id, data.get("members") or [])}}
         if message.get("type") == "mode_notice" and engine:
             message = {**message, "data": {**data, "mode": engine.permissions.mode.value}}
+        if message.get("type") == "tool_finished" and engine and data.get("name") in _SITE_TOOLS:
+            # OPE-218/219: a card on one of these may have allowed a site; the header chip
+            # shows the session's list as it stands now.
+            from ..sandbox.settings import session_sandbox
+
+            try:
+                message = {**message, "data": {**data, "sandbox": session_sandbox(engine)}}
+            except Exception:  # noqa: BLE001 - the chip must not break a tool result
+                pass
         if message.get("type") == "permission_required" and data.get("name") == "decide_worker_call":
             worker_call = self.worker_call_for(data.get("arguments") or {}, lead_session=session_id)
             if worker_call:

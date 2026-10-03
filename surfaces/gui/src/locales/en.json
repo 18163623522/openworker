@@ -639,7 +639,8 @@
       "search_provider_dest": "your search provider",
       "mcp_server_fallback": "the MCP server",
       "mcp_local": "runs a local program on this computer",
-      "mcp_unknown": "acts through an MCP server"
+      "mcp_unknown": "acts through an MCP server",
+      "network_access": "opens the sandbox to a site"
     },
     "btn": {
       "allow_every_time": "Allow every time",
@@ -662,7 +663,10 @@
       "this_run": "Allow for this request",
       "this_run_title": "Covers {{name}} until the agent finishes answering your current message. Later calls in this answer run without showing you their arguments first — you'll see them in the transcript afterward. Nothing survives past this answer.",
       "always_site": "Always allow {{host}}",
-      "always_site_title": "Adds {{host}} to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine"
+      "always_site_title": "Adds {{host}} to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine",
+      "network_session": "Allow for this session",
+      "network_always_title": "Adds the site to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine",
+      "network_always_many": "Always allow these sites"
     },
     "preview_less": "show less",
     "preview_all_lines": "show all {{n}} lines",
@@ -684,7 +688,13 @@
     "search_note": "Queries go to your configured search provider.",
     "search_note_current": "Queries go to your configured search provider (currently: {{provider}}).",
     "reviewer_unsure": "reviewer wasn’t sure: {{note}}",
-    "site_wall_note": "{{host}} is not on your allowed sites."
+    "site_wall_note": "{{host}} is not on your allowed sites.",
+    "network": {
+      "not_seen": "No command has tried this site yet.",
+      "blocked_now": "The sandbox blocked this site a moment ago.",
+      "blocked_minutes_one": "The sandbox blocked this site {{count}} minute ago.",
+      "blocked_minutes_other": "The sandbox blocked this site {{count}} minutes ago."
+    }
   },
   "search": {
     "placeholder": "Search chats",
@@ -2662,6 +2672,7 @@
     "logins": "Shared logins",
     "not_title": "This session is not sandboxed",
     "not_sub": "It was opened before the sandbox was switched on. Its commands run on this computer without the sandbox. Start a new session to use the sandbox.",
-    "open_settings": "Open Settings ▸ Sandbox"
+    "open_settings": "Open Settings ▸ Sandbox",
+    "session_sites_label": "Sites allowed for this session only"
   }
 }

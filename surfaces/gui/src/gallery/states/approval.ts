@@ -104,6 +104,43 @@ export const approvalStates: CardState[] = [
     },
   },
   {
+    id: "network-access-for-a-blocked-site",
+    title: "The agent asks for a site its commands cannot reach",
+    note: "A command failed inside the sandbox, the result named the blocked site, and the agent called request_network_access. The card gives the agent's reason and what the sandbox itself saw. A site for commands is never \"once\": this session, always, or no. Only a person answers; in Bypass the call is refused with no card (OPE-219).",
+    payload: {
+      name: "request_network_access",
+      arguments: { hosts: ["registry.npmjs.org"], reason: "npm install needs the package registry to download dependencies." },
+      reason: "asks to let this session's commands reach registry.npmjs.org",
+      escalation: { kind: "human_required", reason: "asks to let this session's commands reach registry.npmjs.org" },
+      category: "sandbox",
+      network_request: {
+        evidence: true,
+        reason: "npm install needs the package registry to download dependencies.",
+        hosts: [{ host: "registry.npmjs.org:443", blocked_seconds_ago: 20 }],
+      },
+    },
+  },
+  {
+    id: "network-access-before-any-attempt",
+    title: "The agent asks ahead for two sites, one never tried",
+    note: "The agent may ask before running a command. A site no command has tried says so, which is the person's cue to look twice at the reason.",
+    payload: {
+      name: "request_network_access",
+      arguments: { hosts: ["api.acme.dev", "db.acme.dev:5432"], reason: "The deploy script pushes the build to the Acme API and runs a migration on the database." },
+      reason: "asks to let this session's commands reach api.acme.dev, db.acme.dev:5432",
+      escalation: { kind: "human_required", reason: "asks to let this session's commands reach api.acme.dev, db.acme.dev:5432" },
+      category: "sandbox",
+      network_request: {
+        evidence: true,
+        reason: "The deploy script pushes the build to the Acme API and runs a migration on the database.",
+        hosts: [
+          { host: "api.acme.dev:443", blocked_seconds_ago: 240 },
+          { host: "db.acme.dev:5432", blocked_seconds_ago: null },
+        ],
+      },
+    },
+  },
+  {
     id: "connector-action",
     title: "Connector action",
     note: "Acts on a connected service: no session-wide grant.",

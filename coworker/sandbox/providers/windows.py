@@ -329,6 +329,12 @@ class WindowsProvider:
         if new and self._proxy is not None:
             self._proxy.add_hosts(new)
 
+    reports_blocked = True  # its proxy records what it refuses
+
+    def blocked_since(self, since: float) -> list[tuple[float, str]]:
+        """(time, "host:port") of the connections the sandbox refused since then."""
+        return self._proxy.blocked_since(since) if self._proxy is not None else []
+
     def regrant(self, roots: Sequence[dict[str, Any]]) -> None:
         """The session's folders changed. The confinement is per sandbox, not per folder,
         so the entries move and the daemon stays: a new folder is usable at once, a removed

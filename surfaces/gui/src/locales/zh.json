@@ -629,7 +629,8 @@
       "search_provider_dest": "你的搜索服务商",
       "mcp_server_fallback": "MCP 服务器",
       "mcp_local": "在本机运行一个本地程序",
-      "mcp_unknown": "通过 MCP 服务器执行操作"
+      "mcp_unknown": "通过 MCP 服务器执行操作",
+      "network_access": "让沙盒可以访问一个网站"
     },
     "btn": {
       "allow_every_time": "每次都允许",
@@ -652,7 +653,10 @@
       "this_run": "本次请求内允许",
       "this_run_title": "在智能体回答完您当前这条消息之前，{{name}} 的后续调用将不再展示参数、直接执行 —— 事后可在会话记录中查看。回答结束后此授权即失效，不会保留任何设置。",
       "always_site": "始终允许 {{host}}",
-      "always_site_title": "将 {{host}} 加入 设置 ▸ 沙盒 的允许网站列表，对本机的命令和网页工具生效"
+      "always_site_title": "将 {{host}} 加入 设置 ▸ 沙盒 的允许网站列表，对本机的命令和网页工具生效",
+      "network_session": "本次会话允许",
+      "network_always_title": "将该网站加入 设置 ▸ 沙盒 的允许网站列表，对本机的命令和网页工具生效",
+      "network_always_many": "始终允许这些网站"
     },
     "preview_less": "收起",
     "preview_all_lines": "展开全部 {{n}} 行",
@@ -673,7 +677,13 @@
     "search_note": "查询会发送到你配置的搜索服务商。",
     "search_note_current": "查询会发送到你配置的搜索服务商（当前：{{provider}}）。",
     "reviewer_unsure": "审查器不确定：{{note}}",
-    "site_wall_note": "{{host}} 不在你允许的网站列表中。"
+    "site_wall_note": "{{host}} 不在你允许的网站列表中。",
+    "network": {
+      "not_seen": "还没有命令访问过这个网站。",
+      "blocked_now": "沙盒刚刚拦截了对这个网站的访问。",
+      "blocked_minutes_one": "沙盒在 {{count}} 分钟前拦截了对这个网站的访问。",
+      "blocked_minutes_other": "沙盒在 {{count}} 分钟前拦截了对这个网站的访问。"
+    }
   },
   "search": {
     "placeholder": "搜索会话",
@@ -2622,6 +2632,7 @@
     "logins": "共享的登录",
     "not_title": "此会话未在沙盒中运行",
     "not_sub": "它在开启沙盒之前打开，其命令在本机上不经沙盒运行。新建会话即可使用沙盒。",
-    "open_settings": "打开 设置 ▸ 沙盒"
+    "open_settings": "打开 设置 ▸ 沙盒",
+    "session_sites_label": "仅本次会话允许的网站"
   }
 }

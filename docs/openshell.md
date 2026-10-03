@@ -137,6 +137,15 @@ site for the session's commands, at once: the running sandbox takes the new entr
 restart. "Once" is that one web call only. Connectors and MCP servers are not covered by the
 list; each has its own approval.
 
+When a command needs a site that is not on the list, it fails inside the sandbox. The
+coworker can then ask you for the site: a card names it, gives the coworker's reason, and
+says whether the sandbox has in fact blocked it. You choose **Allow for this session**,
+**Always allow**, or **Deny**; the site opens for the running session without a restart.
+On OpenShell the coworker is not yet told which sites were blocked; it asks from the
+command's own error. With full access (no approvals) the coworker cannot ask;
+add the site in Settings ▸ Sandbox yourself. The header chip lists the session's sites, those
+from Settings and those allowed for this session only.
+
 OpenShell enforces the list in the container.
 
 ## Sharing a credential on purpose

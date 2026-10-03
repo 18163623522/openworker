@@ -231,6 +231,12 @@ class SeatbeltProvider:
         if new and self._proxy is not None:
             self._proxy.add_hosts(new)
 
+    reports_blocked = True  # its proxy records what it refuses
+
+    def blocked_since(self, since: float) -> list[tuple[float, str]]:
+        """(time, "host:port") of the connections the sandbox refused since then."""
+        return self._proxy.blocked_since(since) if self._proxy is not None else []
+
     def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. A profile is fixed when a process starts, so the
         daemon is started again with a new one; the client sees a runner restart.

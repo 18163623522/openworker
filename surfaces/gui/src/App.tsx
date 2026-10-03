@@ -1003,6 +1003,8 @@ export function App() {
           setItems((p) => [...p, questionItemFromPayload(d)]);
           break;
         case "tool_finished":
+          // A card on this tool may have allowed a site: the header chip follows (OPE-219).
+          if (d.sandbox) setSandboxInfo(d.sandbox);
           if (d.tool_call_id) {
             const calls = finishedGateCalls.current.get(gateScope) || new Set<string>();
             calls.add(d.tool_call_id);

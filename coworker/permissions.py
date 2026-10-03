@@ -13,7 +13,7 @@ import shlex
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 from urllib.parse import urlsplit
 
 # Constructs whose *contents* we cannot evaluate, so a command carrying one is never
@@ -91,6 +91,37 @@ PERSISTENT_AUTHORITY_TOOLS = {
     "update_scheduled_task",
     "delete_scheduled_task",
 }
+
+
+# The agent's way to ask for a site its commands cannot reach (OPE-219). It changes what the
+# sandbox lets out, so only a person answers it, and full access cannot grant it.
+NETWORK_ACCESS_TOOL = "request_network_access"
+NETWORK_ACCESS_MAX_HOSTS = 5
+
+
+def network_request_hosts(arguments: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """The hosts a `request_network_access` call names, as ("host:port" entries, rejected
+    inputs). Exact host names only: no wildcards, no addresses, nothing that is not a name,
+    since the entry is shown to a person and opened on the sandbox as written."""
+    from .sandbox.network_profiles import clean_host
+
+    raw = (arguments or {}).get("hosts")
+    items = [raw] if isinstance(raw, str) else list(raw or []) if isinstance(raw, (list, tuple)) else []
+    good: list[str] = []
+    bad: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        try:
+            entry = clean_host(text)
+        except ValueError:
+            bad.append(text[:80])
+            continue
+        name = entry.rsplit(":", 1)[0]
+        if name.startswith("*.") or name.replace(".", "").isdigit():
+            bad.append(text[:80])
+        elif entry not in good:
+            good.append(entry)
+    return good, bad
 
 
 def protected_paths() -> list[Path]:
@@ -261,6 +292,8 @@ class Decision:
     # The host the sandbox's allowed-sites wall stopped (OPE-219). The card then says why
     # it is asking and offers to add the site to the list.
     site: str = ""
+    # The "host:port" entries a `request_network_access` call still needs a person for.
+    network_hosts: tuple[str, ...] = ()
 
 
 def standing_rule_candidate(
@@ -315,6 +348,11 @@ class PermissionEngine:
     grant_site: Optional[Callable[[str], Optional[list[str]]]] = None
     # Opens a site on the session's running sandbox, so commands reach it too (OPE-219).
     open_site: Optional[Callable[[str], None]] = None
+    # "host:port" entries a person allowed for this session only (either card, or the
+    # session's own list in the app). The machine's list is `sandbox_sites`.
+    session_sites: list[str] = field(default_factory=list)
+    # A site the person allowed that the running sandbox could not take: entry -> why.
+    site_open_errors: dict[str, str] = field(default_factory=dict)
     # Session-wide read-only grant (owner ask 2026-08-11): auto-allow shell commands the
     # conservative classifier (coworker/readonly.py) accepts. User-elected per session.
     session_readonly: bool = False
@@ -376,7 +414,9 @@ class PermissionEngine:
         # this"; the OPE-136 gate-order pin caught that the class-based check alone
         # didn't deliver it (save_skill in Discuss reached the human-only card).
         consequential = (
-            is_consequential(risk) or tool_name in PERSISTENT_AUTHORITY_TOOLS
+            is_consequential(risk)
+            or tool_name in PERSISTENT_AUTHORITY_TOOLS
+            or tool_name == NETWORK_ACCESS_TOOL
         )
 
         # SELF-PROTECTION FLOOR — runs before mode, allowlists and every auto-approve path,
@@ -420,6 +460,11 @@ class PermissionEngine:
                 # edited, but never by an auto-approve path — a human must see it.
                 if _is_protected_in_project(self._candidate(path)):
                     needs_human_for_protected = True
+
+        # Asking for a site (OPE-219): a change to the allowed-sites wall. Only a person
+        # answers it; full access cannot, like every other change to a wall.
+        if tool_name == NETWORK_ACCESS_TOOL:
+            return self._evaluate_network_request(arguments)
 
         # Authority outliving the session reaches a person, over the reviewer and over
         # every allowlist below (OPE-117). Placed ahead of the non-consequential return on
@@ -628,8 +673,7 @@ class PermissionEngine:
                 self.sandbox_sites[:] = [str(x) for x in stored]
         else:
             self.session_allow_domains.add(host)
-        if self.open_site is not None:
-            self.open_site(host)
+        self._open(host)
 
     def allow_site_for_session(self, url_or_domain: str) -> None:
         """"Allow for this session" on the allowed-sites card: the web tools and, through the
@@ -638,8 +682,95 @@ class PermissionEngine:
         if not host:
             return
         self.allow_domain_for_session(host)
-        if self.open_site is not None:
-            self.open_site(host)
+        self._note_session_site(host)
+        self._open(host)
+
+    def allow_network_hosts(self, entries: Sequence[str], *, always: bool) -> None:
+        """A person allowed these "host:port" entries (the network-access card, or the
+        session's list in the app): for this session, or for good when `always` and a store
+        is wired. Commands reach them through the running sandbox; the web tools too."""
+        for entry in entries:
+            host = str(entry).rsplit(":", 1)[0]
+            if always and self.grant_site is not None:
+                stored = self.grant_site(str(entry))
+                if stored is not None and self.sandbox_sites is not None:
+                    self.sandbox_sites[:] = [str(x) for x in stored]
+            else:
+                self.session_allow_domains.add(host)
+                self._note_session_site(str(entry))
+            self._open(str(entry))
+
+    def _note_session_site(self, host_or_entry: str) -> None:
+        from .sandbox.network_profiles import clean_host
+
+        try:
+            entry = clean_host(host_or_entry)
+        except ValueError:
+            return
+        if entry not in self.session_sites and not self._entry_allowed(entry):
+            self.session_sites.append(entry)
+
+    def _open(self, host_or_entry: str) -> None:
+        """Tell the running sandbox. A failure does not undo the person's choice for the
+        web tools; it is kept so the agent and the app can say the commands lack the site."""
+        if self.open_site is None:
+            return
+        try:
+            self.open_site(host_or_entry)
+            self.site_open_errors.pop(host_or_entry, None)
+        except Exception as exc:  # noqa: BLE001
+            self.site_open_errors[host_or_entry] = str(exc) or type(exc).__name__
+
+    def _entry_allowed(self, entry: str) -> bool:
+        """Whether a "host:port" entry is already open to this session's commands: on the
+        machine's list (same port; `*.example.com` covers subdomains) or allowed for the
+        session."""
+        from .sandbox.network_profiles import clean_host
+
+        if entry in self.session_sites:
+            return True
+        host, _, port = entry.rpartition(":")
+        for item in self.sandbox_sites or []:
+            try:
+                name, _, item_port = clean_host(str(item)).rpartition(":")
+            except ValueError:
+                continue
+            if item_port != port:
+                continue
+            if name.startswith("*."):
+                if host.endswith(name[1:]) and host != name[2:]:
+                    return True
+            elif host == name:
+                return True
+        return False
+
+    def _evaluate_network_request(self, arguments: dict[str, Any]) -> Decision:
+        if self.sandbox_sites is None:
+            return Decision(False, "this session has no allowed-sites list to change", needs_user=False)
+        wanted, bad = network_request_hosts(arguments)
+        if bad or not wanted or len(wanted) > NETWORK_ACCESS_MAX_HOSTS:
+            return Decision(
+                False,
+                f"give `hosts` as one to {NETWORK_ACCESS_MAX_HOSTS} exact host names, such as registry.npmjs.org "
+                "or db.example.com:5432 (no wildcards, no IP addresses)" + (f"; not accepted: {', '.join(bad)}" if bad else ""),
+                needs_user=False,
+            )
+        pending = [entry for entry in wanted if not self._entry_allowed(entry)]
+        if not pending:
+            return Decision(True, "already on the allowed sites")
+        if self.mode is Mode.BYPASS_APPROVALS:
+            return Decision(
+                False,
+                "The allowed sites cannot be changed from this session. Tell the user; they can add the site in Settings > Sandbox > Choose sites.",
+                needs_user=False,
+            )
+        return Decision(
+            False,
+            "asks to let this session's commands reach " + ", ".join(e[:-4] if e.endswith(":443") else e for e in pending),
+            needs_user=True,
+            human_only=True,
+            network_hosts=tuple(pending),
+        )
 
     def egress_host(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Where an egress tool is going: its url's host, or for `web_search` (a fixed

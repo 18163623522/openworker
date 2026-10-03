@@ -346,6 +346,8 @@ def session_sandbox(engine: Any) -> dict[str, Any]:
             "provider": str(getattr(provider, "name", "") or ""),
             "network": profile,
             "sites": [str(x) for x in sites] if profile == "allowlist" else [],
+            # Allowed by the person for this session only (a card, or the session's list).
+            "session_sites": [str(x) for x in (getattr(getattr(engine, "permissions", None), "session_sites", None) or [])] if profile == "allowlist" else [],
             "folders": [
                 {"path": str(r.get("path", "")), "writable": bool(r.get("writable"))}
                 for r in (getattr(provider, "roots", None) or [])

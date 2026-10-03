@@ -742,7 +742,8 @@ def build_engine(
 
         def _open_site(host: str) -> None:
             # The running sandbox takes the site too, so commands reach it from now on. A
-            # failure here must not undo the person's choice for the web tools: log it.
+            # failure is logged and raised: the permission engine keeps it, so the agent
+            # and the app can say that commands still lack the site.
             import logging
 
             from .sandbox.network_profiles import clean_host
@@ -751,9 +752,16 @@ def build_engine(
                 sandbox_workspace.add_hosts([clean_host(host)])
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).warning("could not open %s on the session's sandbox: %s", host, exc)
+                raise
 
         engine.permissions.grant_site = _grant_site
         engine.permissions.open_site = _open_site
+        # The agent can ask for a site, except where nobody can answer (full access).
+        from .permissions import Mode as _Mode
+        from .tools.network import request_network_access_tool
+
+        registry.register(request_network_access_tool(engine.permissions))
+        sandbox_workspace.can_ask_network = lambda: engine.permissions.mode is not _Mode.BYPASS_APPROVALS
     engine.todo = todo  # type: ignore[attr-defined]
     engine.agent_name = agent.name  # type: ignore[attr-defined]
     engine.roots = root_list  # type: ignore[attr-defined]  # shared list; Slice C mutates in place

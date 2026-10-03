@@ -30,6 +30,15 @@ describe("SandboxChip", () => {
     expect(openSettings).toHaveBeenCalled();
   });
 
+  it("counts and lists the sites allowed for this session apart from the machine's", () => {
+    render(<SandboxChip info={{ ...sandboxed, session_sites: ["registry.npmjs.org:443", "db.acme.dev:5432"] }} />);
+    const chip = screen.getByTestId("sandbox-chip");
+    expect(chip.textContent).toBe("OpenShell · 5 sites");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("sandbox-chip-session-sites").textContent).toBe("registry.npmjs.org, db.acme.dev:5432");
+    expect(screen.getByTestId("sandbox-chip-panel").textContent).toContain("Sites allowed for this session only");
+  });
+
   it("any site, and one site", () => {
     const { rerender } = render(<SandboxChip info={{ ...sandboxed, provider: "seatbelt", network: "open", sites: [] }} />);
     expect(screen.getByTestId("sandbox-chip").textContent).toBe("macOS sandbox · any site");
