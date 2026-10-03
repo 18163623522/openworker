@@ -313,6 +313,8 @@ class PermissionEngine:
     # Persists a site the user chose to always allow (adds it to the machine's list) and
     # returns that list, so this session's copy carries the same entries.
     grant_site: Optional[Callable[[str], Optional[list[str]]]] = None
+    # Opens a site on the session's running sandbox, so commands reach it too (OPE-219).
+    open_site: Optional[Callable[[str], None]] = None
     # Session-wide read-only grant (owner ask 2026-08-11): auto-allow shell commands the
     # conservative classifier (coworker/readonly.py) accepts. User-elected per session.
     session_readonly: bool = False
@@ -626,6 +628,18 @@ class PermissionEngine:
                 self.sandbox_sites[:] = [str(x) for x in stored]
         else:
             self.session_allow_domains.add(host)
+        if self.open_site is not None:
+            self.open_site(host)
+
+    def allow_site_for_session(self, url_or_domain: str) -> None:
+        """"Allow for this session" on the allowed-sites card: the web tools and, through the
+        running sandbox, the commands of this session reach the site; nothing is stored."""
+        host = _host_of(url_or_domain)
+        if not host:
+            return
+        self.allow_domain_for_session(host)
+        if self.open_site is not None:
+            self.open_site(host)
 
     def egress_host(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Where an egress tool is going: its url's host, or for `web_search` (a fixed

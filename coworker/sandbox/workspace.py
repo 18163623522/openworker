@@ -16,7 +16,7 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from .runner.executor import Executor
 
@@ -213,6 +213,13 @@ class RunnerWorkspace(Workspace):
 
     def describe(self) -> dict[str, Any]:
         return {**self.provider.describe(), "runner": {k: self.hello.get(k) for k in ("runner_version", "os", "machine", "instance_id")}}
+
+    def add_hosts(self, hosts: Sequence[str]) -> None:
+        """The person allowed a site (OPE-219): the sandbox's network list grows at once, for
+        commands as well as the web tools. Under the start lock, so a sandbox being made
+        takes the list as it stands afterwards."""
+        with self._start_lock:
+            self.provider.add_hosts(hosts)
 
     def close(self) -> None:
         if not self.started:

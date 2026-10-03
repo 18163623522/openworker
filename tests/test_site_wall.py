@@ -159,3 +159,20 @@ def test_session_sandbox_summary(tmp_path, monkeypatch):
     # ...and "not sandboxed" when the machine is now set to use one (opened before the switch).
     (tmp_path / "config.toml").write_text('sandbox_provider = "openshell"\n')
     assert settings.session_sandbox(plain) == {"state": "not_sandboxed", "provider": "openshell"}
+
+
+def test_a_session_or_always_choice_opens_the_site_on_the_running_sandbox(tmp_path):
+    """The card's lasting choices reach commands too: the engine tells the sandbox. "Allow
+    once" is one web-tool call and never touches it."""
+    opened: list[str] = []
+    eng = engine(tmp_path, Mode.INTERACTIVE, open_site=opened.append, grant_site=lambda host: [*SITES, f"{host}:443"])
+    eng.allow_site_for_session("https://www.weather.com/today")
+    assert opened == ["www.weather.com"]
+    assert eng.evaluate("web_fetch", {"url": "https://weather.com/x"}, None).allowed
+    assert "weather.com:443" not in eng.sandbox_sites  # this session only: nothing stored
+    eng.allow_site_always("https://docs.python.org/3/")
+    assert opened == ["www.weather.com", "docs.python.org"] and "docs.python.org:443" in eng.sandbox_sites
+    # No sandbox hook (an engine without a sandbox): the choices still work for the web tools.
+    plain = engine(tmp_path, Mode.INTERACTIVE)
+    plain.allow_site_for_session("https://weather.com/")
+    assert plain.evaluate("web_fetch", {"url": "https://weather.com/x"}, None).allowed

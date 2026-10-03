@@ -740,7 +740,20 @@ def build_engine(
         def _grant_site(host: str) -> list[str]:
             return _sandbox_settings.add_site(host)
 
+        def _open_site(host: str) -> None:
+            # The running sandbox takes the site too, so commands reach it from now on. A
+            # failure here must not undo the person's choice for the web tools: log it.
+            import logging
+
+            from .sandbox.network_profiles import clean_host
+
+            try:
+                sandbox_workspace.add_hosts([clean_host(host)])
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning("could not open %s on the session's sandbox: %s", host, exc)
+
         engine.permissions.grant_site = _grant_site
+        engine.permissions.open_site = _open_site
     engine.todo = todo  # type: ignore[attr-defined]
     engine.agent_name = agent.name  # type: ignore[attr-defined]
     engine.roots = root_list  # type: ignore[attr-defined]  # shared list; Slice C mutates in place

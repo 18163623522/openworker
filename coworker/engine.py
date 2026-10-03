@@ -1819,7 +1819,7 @@ class TurnEngine:
                     ApprovalOutcome.ALWAYS_TOOL,
                     ApprovalOutcome.ALWAYS_DOMAIN,
                 ):
-                    self.permissions.allow_domain_for_session(decision.site)
+                    self.permissions.allow_site_for_session(decision.site)
                 elif outcome is ApprovalOutcome.READONLY_SESSION:
                     self.permissions.allow_readonly_for_session()
                 elif outcome is ApprovalOutcome.ALWAYS_TRUST:

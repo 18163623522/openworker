@@ -257,6 +257,32 @@ def test_a_sandbox_is_created_with_its_registry_label(tmp_path, monkeypatch):
     assert openshell.OpenShellProvider(roots=[{"path": str(project), "writable": True}]).registry == registry_id() == SandboxRegistry().id
 
 
+def test_adding_a_site_sets_the_policy_on_the_running_sandbox(tmp_path, monkeypatch):
+    """OPE-219: the network section of an OpenShell policy reloads on a running sandbox, so
+    a site the person allows is rendered into the whole policy and set with `--wait`."""
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
+    project = tmp_path / "project"
+    project.mkdir()
+    seen: list = []
+    monkeypatch.setattr(openshell, "_cli", lambda *args, **kw: seen.append(args))
+    provider = openshell.OpenShellProvider(roots=[{"path": str(project), "writable": True}], extra_hosts=["github.com:443"], registry="abc123")
+    # Not made yet: the list grows and nothing is asked of the gateway.
+    provider.add_hosts(["pypi.org:443"])
+    assert provider.extra_hosts == ["github.com:443", "pypi.org:443"] and seen == []
+    provider._create_tried = True
+    provider._identity = (1000, 1000, None)
+    provider.add_hosts(["weather.com:443", "github.com:443"])
+    (call,) = seen
+    assert call[:3] == ("policy", "set", provider.sandbox_name) and call[-1] == "--wait"
+    written = yaml.safe_load(Path(call[call.index("--policy") + 1]).read_text())
+    hosts = {e["host"] for rule in written["network_policies"].values() for e in rule["endpoints"]}
+    assert {"github.com", "pypi.org", "weather.com"} <= hosts
+    assert written["process"] == {"run_as_user": "1000", "run_as_group": "1000"}  # the static sections are unchanged
+    provider.add_hosts(["weather.com:443"])  # already there: no second call
+    assert len(seen) == 1
+
+
 def test_a_workspace_reserves_its_name_before_creating_the_sandbox(tmp_path):
     from coworker.sandbox import registry as registry_mod
     from coworker.sandbox.workspace import RunnerWorkspace

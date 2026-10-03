@@ -37,16 +37,21 @@ class AllowListProxy:
         self.profile = network_profiles.check(profile)
         self._hosts = {h.lower() for h in network_profiles.hosts(profile)}
         self._extra: set[tuple[str, int]] = set()
-        for item in extra_hosts:
-            host, _, port = str(item).rpartition(":")
-            if host and port.isdigit():
-                self._extra.add((host.lower().rstrip("."), int(port)))
+        self.add_hosts(extra_hosts)
         self.denied: deque[str] = deque(maxlen=50)  # recent refusals, newest last
         self._server = _listen()
         self._server.listen(64)
         self.port: int = self._server.getsockname()[1]
         self._closed = False
         threading.Thread(target=self._accept, name=f"sandbox-proxy-{profile}", daemon=True).start()
+
+    def add_hosts(self, hosts: Sequence[str]) -> None:
+        """Let more "host:port" entries out, from now on: the person allowed a site for this
+        session or for good (OPE-219). The list only grows while a sandbox runs."""
+        for item in hosts:
+            host, _, port = str(item).rpartition(":")
+            if host and port.isdigit():
+                self._extra.add((host.lower().rstrip("."), int(port)))
 
     @property
     def url(self) -> str:

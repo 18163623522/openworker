@@ -229,6 +229,7 @@ class OpenShellProvider:
         self.cwd = str(Path(cwd).expanduser().resolve()) if cwd else self.roots[0]["path"]
         self.profile = policy.network_profiles.check(profile)
         self.extra_hosts = list(extra_hosts)
+        self._identity: tuple = (None, None, None)  # uid, gid, home; set when the sandbox is made
         self.image = image or sandbox_image()
         # A label value may hold letters, digits, '-', '_' and '.', and at most 63 characters.
         self.label = "".join(c if c.isalnum() or c in "-_." else "-" for c in label)[:63].strip("-_.")
@@ -277,9 +278,8 @@ class OpenShellProvider:
         # git's settings, and HOME stays the runtime folder.
         self.copied = creds.copy_in(self.grants, self._tmp) if self.grants else None
         home = self.copied.home if self.copied is not None else None
-        extra_hosts = sorted({*self.extra_hosts, *(self.copied.hosts if self.copied is not None else [])})
-        policy_file = Path(self._tmp) / "policy.yaml"
-        policy_file.write_text(yaml.safe_dump(policy.render(self.roots, profile=self.profile, uid=uid, gid=gid, home=home, extra_hosts=extra_hosts), sort_keys=False), encoding="utf-8")
+        self._identity = (uid, gid, home)
+        policy_file = self._write_policy()
         driver_config = json.dumps(policy.mounts(self.roots, str(self._runner.parent), home))
         command = [policy.PYTHON, "-S", f"{policy.RUNNER_MOUNT}/{self._runner.name}", "serve", "--socket", _SOCKET, "--cwd", self.cwd]
         env = {"HOME": policy.RUNTIME_DIR, **(self.copied.env if self.copied is not None else {})}
@@ -343,6 +343,28 @@ class OpenShellProvider:
             info = client.call("fs.list", {"path": root["path"], "limit": 1}, timeout=30)
             if "entries" not in info:
                 raise RuntimeError(f"the folder {root['path']} is not reachable inside the sandbox")
+
+    def _write_policy(self) -> Path:
+        """The whole policy as it stands: folders, identity, the network list with the
+        machine's additions and the hosts the copied credentials need."""
+        uid, gid, home = self._identity
+        extra_hosts = sorted({*self.extra_hosts, *(self.copied.hosts if self.copied is not None else [])})
+        policy_file = Path(self._tmp) / "policy.yaml"
+        policy_file.write_text(yaml.safe_dump(policy.render(self.roots, profile=self.profile, uid=uid, gid=gid, home=home, extra_hosts=extra_hosts), sort_keys=False), encoding="utf-8")
+        return policy_file
+
+    def add_hosts(self, hosts: Sequence[str]) -> None:
+        """Let the running sandbox reach more "host:port" entries (OPE-219: the person allowed
+        a site for this session or for good). OpenShell hot-reloads the network section of a
+        policy, so the whole policy is rendered again and set on the sandbox; the static
+        sections are the same, `--wait` returns once the sandbox has loaded it."""
+        new = [str(h) for h in hosts if str(h) not in self.extra_hosts]
+        if not new:
+            return
+        self.extra_hosts.extend(new)
+        if not getattr(self, "_create_tried", False):
+            return  # not made yet: the next create renders the list as it stands
+        _cli("policy", "set", self.sandbox_name, "--policy", str(self._write_policy()), "--wait", timeout=120)
 
     def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. Mounts and the file policy are fixed when a sandbox
