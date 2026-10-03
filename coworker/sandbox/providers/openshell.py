@@ -18,9 +18,11 @@ What a sandbox gets:
 from __future__ import annotations
 
 import json
+from collections import deque
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +205,69 @@ def _gateway() -> tuple[str, Path]:
     return endpoint, home / "gateways" / name / "mtls"
 
 
+# A refusal in the sandbox's log, as OpenShell 0.0.116 writes it:
+#   [1791068681.547] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(85) -> www.iana.org:443 [policy:- …]
+_DENIED_LINE = re.compile(r"^\[(\d+(?:\.\d+)?)\].*\bDENIED\b\s+\S+?\(\d+\)\s+->\s+(\S+:\d+)")
+
+
+class DenialLog:
+    """What a sandbox refused, read from its own log (`openshell logs <name> --tail`).
+
+    The log is followed by one long-lived reader, so asking costs nothing per command. A
+    line arrives up to about half a second after the refusal (OpenShell sends its log in
+    batches), which is `OpenShellProvider.blocked_lag`. The reader starts with the log's
+    recent history, so refusals from before it started are there too."""
+
+    def __init__(self, sandbox_name: str) -> None:
+        self.entries: deque[tuple[float, str]] = deque(maxlen=200)
+        self._seen: set[tuple[float, str]] = set()
+        self._process: Optional[subprocess.Popen] = None
+        exe = shutil.which("openshell")
+        if exe is None:
+            return
+        try:
+            self._process = subprocess.Popen(
+                [exe, "logs", sandbox_name, "--tail", "--source", "sandbox"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env={**os.environ, "NO_COLOR": "1"},
+            )  # fmt: skip
+        except OSError:
+            return
+        threading.Thread(target=self._read, name=f"openshell-denials-{sandbox_name}", daemon=True).start()
+
+    @property
+    def alive(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def _read(self) -> None:
+        try:
+            for line in self._process.stdout:  # type: ignore[union-attr]
+                self.take(line)
+        except (OSError, ValueError):
+            pass
+
+    def take(self, line: str) -> None:
+        found = _DENIED_LINE.search(line)
+        if not found:
+            return
+        from ..netproxy import _blocked_entry
+
+        entry = _blocked_entry(found.group(2))  # a host name or nothing: it is shown to the agent and the person
+        item = (float(found.group(1)), entry)
+        if entry and item not in self._seen:
+            self._seen.add(item)
+            self.entries.append(item)
+
+    def since(self, since: float) -> list[tuple[float, str]]:
+        return [item for item in list(self.entries) if item[0] >= since]
+
+    def stop(self) -> None:
+        if self._process is not None:
+            try:
+                self._process.kill()
+            except OSError:
+                pass
+
+
 class OpenShellProvider:
     name = "openshell"
 
@@ -230,6 +295,7 @@ class OpenShellProvider:
         self.profile = policy.network_profiles.check(profile)
         self.extra_hosts = list(extra_hosts)
         self._identity: tuple = (None, None, None)  # uid, gid, home; set when the sandbox is made
+        self._denials: Optional[DenialLog] = None  # follows the sandbox's log once it is made
         self.image = image or sandbox_image()
         # A label value may hold letters, digits, '-', '_' and '.', and at most 63 characters.
         self.label = "".join(c if c.isalnum() or c in "-_." else "-" for c in label)[:63].strip("-_.")
@@ -306,6 +372,7 @@ class OpenShellProvider:
                     raise OpenShellUnavailable(f"{DOCKER_LANDLOCK_FIX}. Then start the session again.") from exc
             raise
         self._wait_ready()
+        self._denials = DenialLog(self.sandbox_name)  # what it refuses, for the agent and the card
         # Spike finding K: the first exec after a sandbox turns Ready hangs until it times
         # out, and the next one works. Spend that on a throwaway call.
         try:
@@ -377,14 +444,20 @@ class OpenShellProvider:
             return
         _cli("policy", "set", self.sandbox_name, "--policy", str(self._write_policy()), "--wait", timeout=120)
 
-    reports_blocked = False  # see blocked_since
+    # A refusal reaches the log reader up to about this long after it happened.
+    blocked_lag = 0.6
+
+    @property
+    def reports_blocked(self) -> bool:
+        """Whether the sandbox's log is being followed. When it is not (the reader died with
+        the gateway), nothing may be read into an empty answer."""
+        return self._denials is not None and self._denials.alive
 
     def blocked_since(self, since: float) -> list[tuple[float, str]]:
-        """(time, "host:port") of the connections the sandbox refused since then. Not read
-        yet on OpenShell: its denial log (`policy.local/v1/denials`, asked from inside the
-        sandbox) has to be checked on a real gateway first, so this reports nothing and the
-        agent asks for a site from the command's own error."""
-        return []
+        """(time, "host:port") of the connections the sandbox refused since then, from its
+        own log, read from outside (the in-sandbox `policy.local/v1/denials` is switched off
+        unless agent policy proposals are on, which we do not use)."""
+        return self._denials.since(since) if self._denials is not None else []
 
     def regrant(self, roots: Sequence[dict[str, Any]], *, before_create: Optional[Callable[[], None]] = None) -> None:
         """The session's folders changed. Mounts and the file policy are fixed when a sandbox
@@ -401,6 +474,9 @@ class OpenShellProvider:
 
     def _delete(self) -> None:
         log.info("deleting sandbox %s", self.sandbox_name)
+        if self._denials is not None:
+            self._denials.stop()
+            self._denials = None
         try:
             _cli("sandbox", "delete", self.sandbox_name, timeout=90, check=False)
         except (subprocess.TimeoutExpired, OpenShellUnavailable):

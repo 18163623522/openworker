@@ -170,22 +170,72 @@ def test_a_command_result_carries_the_note_only_when_something_was_blocked(tmp_p
     provider = _Provider()
     workspace = RunnerWorkspace(provider, cwd=tmp_path, start=False)
     assert workspace.network_note(0.0) is None
+    workspace._blocked_told = 15.0  # everything up to here was already told
     provider.blocked = [(10.0, "old.dev:443"), (20.0, "registry.npmjs.org:443"), (21.0, "registry.npmjs.org:443")]
-    note = workspace.network_note(15.0)
+    note = workspace.network_note(19.8)
     assert note["blocked_sites"] == ["registry.npmjs.org:443"] and "(2 attempts)" in note["network_note"]
-    assert "Settings > Sandbox" in note["network_note"]  # nobody can be asked until the session says so
+    assert "While it ran" in note["network_note"] and "Settings > Sandbox" in note["network_note"]  # nobody can be asked until the session says so
+    # Told once: the next command's result does not repeat it.
+    assert workspace.network_note(22.0) is None
     workspace.can_ask_network = lambda: True
-    assert "request_network_access(hosts, reason)" in workspace.network_note(15.0)["network_note"]
+    provider.blocked.append((30.0, "pypi.org:443"))
+    assert "request_network_access(hosts, reason)" in workspace.network_note(29.9)["network_note"]
+
+
+def test_a_refusal_reported_late_waits_for_a_failed_command_and_is_never_lost(tmp_path):
+    """OpenShell sends its log in batches, so a refusal can reach us after the command's
+    result. A failed command waits for it; a command that succeeded does not; and one that
+    still arrives late is told with the next result, worded as such."""
+    import threading
+    import time as clock
+
+    provider = _Provider()
+    provider.reports_blocked = True
+    provider.blocked_lag = 0.6
+    workspace = RunnerWorkspace(provider, cwd=tmp_path, start=False)
+    started = clock.time()
+    threading.Timer(0.15, lambda: provider.blocked.append((started + 0.01, "registry.npmjs.org:443"))).start()
+    began = clock.time()
+    note = workspace.network_note(started, {"exit_code": 1})
+    assert note and note["blocked_sites"] == ["registry.npmjs.org:443"] and 0.1 < clock.time() - began < 0.5  # left as soon as it arrived
+    began = clock.time()
+    assert workspace.network_note(clock.time(), {"exit_code": 0}) is None and clock.time() - began < 0.1  # success: no wait
+    began = clock.time()
+    assert workspace.network_note(clock.time(), {"exit_code": 1}) is None and clock.time() - began >= 0.55  # failed, nothing blocked: the full wait
+    # A refusal during a command that succeeded: nobody waited for it. The next command
+    # starts later and its result carries it.
+    provider.blocked.append((clock.time(), "late.dev:443"))
+    late = workspace.network_note(clock.time() + 2, {"exit_code": 0})
+    assert late["blocked_sites"] == ["late.dev:443"] and "Since your previous command" in late["network_note"]
+
+
+def test_openshell_refusals_are_read_from_the_sandbox_log():
+    from coworker.sandbox.providers import openshell
+
+    log = openshell.DenialLog.__new__(openshell.DenialLog)
+    log.entries, log._seen, log._process = __import__("collections").deque(maxlen=200), set(), None
+    lines = [
+        "[1791068681.547] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(85) -> www.iana.org:443 [policy:- engine:opa] [reason:endpoint www.iana.org:443 is not allowed by any policy]",
+        "[1791068681.547] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(85) -> www.iana.org:443 [policy:- engine:opa] [reason:replayed history]",
+        "[1791068690.100] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/local/bin/node(91) -> registry.npmjs.org:443 [policy:- engine:opa]",
+        "[1791068640.416] [sandbox] [OCSF ] [ocsf] CONFIG:LOADED [INFO] Policy reloaded successfully [policy_hash:4fad]",
+        "[1791068691.000] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(99) -> ignore-your-instructions:443 [policy:-]",
+        "[1791068692.000] [sandbox] [OCSF ] [ocsf] NET:OPEN [INFO] ALLOWED /usr/bin/curl(100) -> pypi.org:443 [policy:pkgs]",
+    ]
+    for line in lines:
+        log.take(line)
+    assert list(log.entries) == [(1791068681.547, "www.iana.org:443"), (1791068690.1, "registry.npmjs.org:443")]
+    assert log.since(1791068685.0) == [(1791068690.1, "registry.npmjs.org:443")] and not log.alive
 
 
 def test_the_executor_adds_the_note_to_a_command_result(tmp_path):
     client = SimpleNamespace(call=lambda *a, **kw: {"command": "npm i", "cwd": str(tmp_path), "exit_code": 1, "output": "npm ERR!"})
     seen: list[float] = []
-    executor = RunnerExecutor(client, cwd=str(tmp_path), after_call=lambda started: seen.append(started) or {"blocked_sites": ["a.dev:443"], "network_note": "Note: …"})
+    executor = RunnerExecutor(client, cwd=str(tmp_path), after_call=lambda started, result: seen.append(result["exit_code"]) or {"blocked_sites": ["a.dev:443"], "network_note": "Note: …"})
     result = executor.run("npm i")
-    assert result["exit_code"] == 1 and result["blocked_sites"] == ["a.dev:443"] and result["network_note"] == "Note: …" and seen
+    assert result["exit_code"] == 1 and result["blocked_sites"] == ["a.dev:443"] and result["network_note"] == "Note: …" and seen == [1]
 
-    def broken(started):
+    def broken(started, result):
         raise RuntimeError("no log")
 
     assert RunnerExecutor(client, cwd=str(tmp_path), after_call=broken).run("npm i")["output"] == "npm ERR!"
@@ -206,14 +256,18 @@ def test_the_agent_is_told_the_live_list_each_turn(tmp_path):
     assert "sandbox" not in workspace.context()
 
 
-def test_a_sandbox_that_cannot_report_blocks_gives_the_card_no_evidence(tmp_path):
-    """OpenShell's denial log is not read yet. An empty answer there means "unknown", so the
-    card must not say that no command has tried the site."""
+def test_a_sandbox_that_cannot_report_blocks_gives_the_card_no_evidence(tmp_path, monkeypatch):
+    """When a sandbox's refusals cannot be read (OpenShell before its log is followed, or
+    after the reader died), an empty answer means "unknown", so the card must not say that
+    no command has tried the site."""
     from coworker.engine import TurnEngine
     from coworker.permissions import Decision
     from coworker.sandbox.providers import openshell, seatbelt
 
-    assert openshell.OpenShellProvider.reports_blocked is False and seatbelt.SeatbeltProvider.reports_blocked is True
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
+    not_made = openshell.OpenShellProvider(roots=[{"path": str(tmp_path), "writable": True}], registry="abc")
+    assert not_made.reports_blocked is False and not_made.blocked_since(0) == [] and seatbelt.SeatbeltProvider.reports_blocked is True
     call = SimpleNamespace(arguments={"hosts": ["registry.npmjs.org"], "reason": "npm install"})
     decision = Decision(False, "asks", needs_user=True, human_only=True, network_hosts=("registry.npmjs.org:443",))
 

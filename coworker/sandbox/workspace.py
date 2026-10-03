@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -102,6 +103,9 @@ class RunnerWorkspace(Workspace):
         # Whether the agent can ask the person for a site (`request_network_access`): set by
         # the session's builder; false where nobody can answer (full access, no such tool).
         self.can_ask_network: Callable[[], bool] = lambda: False
+        # Refusals up to here have been told to the agent. One that reaches us after its
+        # command's result (OpenShell's log lags) is told with the next result, not lost.
+        self._blocked_told = time.time()
         if start:
             self.ensure_started()
         else:
@@ -254,16 +258,33 @@ class RunnerWorkspace(Workspace):
         ask = getattr(self.provider, "blocked_since", None)
         return list(ask(since)) if ask is not None else []
 
-    def network_note(self, started: float) -> Optional[dict[str, Any]]:
-        """What joins a command's result when the sandbox blocked something while it ran:
-        the sites, and a note that says plainly what is and is not known. The attempts are
-        tied to the time the command ran, not to the command."""
-        counts: dict[str, int] = {}
-        for _, entry in self.blocked_since(started):
-            counts[entry] = counts.get(entry, 0) + 1
-        if not counts:
+    def network_note(self, started: float, result: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+        """What joins a command's result when the sandbox blocked something: the sites, and
+        a note that says plainly what is and is not known. The attempts are tied to the time
+        the command ran, not to the command.
+
+        Where the sandbox reports late (`blocked_lag`), a failed command waits that long
+        for its refusal, and leaves as soon as one arrives; a command that succeeded does
+        not wait. A refusal that still arrives after its result is told with the next one."""
+        new = self._blocked_untold()
+        lag = float(getattr(self.provider, "blocked_lag", 0.0) or 0.0)
+        failed = result is not None and (result.get("exit_code") != 0 or bool(result.get("timed_out")) or bool(result.get("error")))
+        if not new and lag and failed and self.reports_blocked:
+            deadline = time.time() + lag
+            while not new and time.time() < deadline:
+                time.sleep(0.05)
+                new = self._blocked_untold()
+        if not new:
             return None
-        return {"blocked_sites": list(counts), "network_note": network_note_text(counts, can_ask=self._asking())}
+        self._blocked_told = max(when for when, _ in new)
+        counts: dict[str, int] = {}
+        for _, entry in new:
+            counts[entry] = counts.get(entry, 0) + 1
+        late = any(when < started - 0.5 for when, _ in new)
+        return {"blocked_sites": list(counts), "network_note": network_note_text(counts, can_ask=self._asking(), late=late)}
+
+    def _blocked_untold(self) -> list[tuple[float, str]]:
+        return [item for item in self.blocked_since(self._blocked_told) if item[0] > self._blocked_told]
 
     def describe(self) -> dict[str, Any]:
         return {**self.provider.describe(), "runner": {k: self.hello.get(k) for k in ("runner_version", "os", "machine", "instance_id")}}
@@ -307,9 +328,10 @@ def _site_name(entry: str) -> str:
     return entry[:-4] if entry.endswith(":443") else entry
 
 
-def network_note_text(counts: dict[str, int], *, can_ask: bool) -> str:
+def network_note_text(counts: dict[str, int], *, can_ask: bool, late: bool = False) -> str:
     """The note itself (owner wording 2026-10-03: open about what the sandbox saw, and
-    about not knowing whether it is what broke the command)."""
+    about not knowing whether it is what broke the command). `late`: some of the refusals
+    happened before this command started and were only now reported."""
     lines = [f"  - {entry}" + (f" ({n} attempts)" if n > 1 else "") for entry, n in list(counts.items())[:_NOTE_SITES]]
     if len(counts) > _NOTE_SITES:
         lines.append(f"  - and {len(counts) - _NOTE_SITES} more")
@@ -320,7 +342,9 @@ def network_note_text(counts: dict[str, int], *, can_ask: bool) -> str:
     )
     return (
         "Note: this command ran in a sandbox, and the sandbox's network rules may have affected it.\n"
-        "While it ran, the sandbox blocked connections to:\n" + "\n".join(lines) + "\n"
+        + ("Since your previous command, the sandbox blocked connections to:\n" if late else "While it ran, the sandbox blocked connections to:\n")
+        + "\n".join(lines)
+        + "\n"
         "These attempts may have come from this command or from something else running in this session. " + ask
     )
 

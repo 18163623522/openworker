@@ -141,8 +141,8 @@ When a command needs a site that is not on the list, it fails inside the sandbox
 coworker can then ask you for the site: a card names it, gives the coworker's reason, and
 says whether the sandbox has in fact blocked it. You choose **Allow for this session**,
 **Always allow**, or **Deny**; the site opens for the running session without a restart.
-On OpenShell the coworker is not yet told which sites were blocked; it asks from the
-command's own error. With full access (no approvals) the coworker cannot ask;
+The coworker is told which sites the sandbox blocked while a command ran, so it asks for the
+right one. With full access (no approvals) the coworker cannot ask;
 add the site in Settings ▸ Sandbox yourself.
 
 The session's **Access** section lists its sites. Those you allowed for this session only
