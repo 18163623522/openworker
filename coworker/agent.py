@@ -737,8 +737,8 @@ def build_engine(
         engine.permissions.sandbox_sites = list(getattr(_sandbox_provider, "extra_hosts", None) or [])
         engine.permissions.search_host = lambda: _provider_host(secrets)
 
-        def _grant_site(host: str) -> None:
-            _sandbox_settings.add_site(host)
+        def _grant_site(host: str) -> list[str]:
+            return _sandbox_settings.add_site(host)
 
         engine.permissions.grant_site = _grant_site
     engine.todo = todo  # type: ignore[attr-defined]

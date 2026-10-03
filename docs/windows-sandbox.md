@@ -140,6 +140,14 @@ One elevated PowerShell script, one prompt. It:
 
 A credential entry (below) also lets through the sites its tool needs.
 
+The coworker's **web search** and **web fetch** tools run in the OpenWorker app, not in the
+sandbox, and follow the same list. A site that is not on it asks you first; the card offers
+once, this session, or **Always allow**, which adds the site to the list. With full access
+(no approvals) the fetch is refused instead. A site added this way is open to the web tools
+at once; commands reach it from the next session, because the running sandbox keeps the
+list it started with. Connectors and MCP servers are not covered by the list; each has its
+own approval.
+
 Choosing a mode never touches the firewall. The rules are written once at setup; OpenWorker
 picks the account. In the closed mode a sandbox can still **listen** on a local port (a dev
 server your browser can open); it cannot **connect** to one, other than the proxy.

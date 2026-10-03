@@ -310,8 +310,9 @@ class PermissionEngine:
     sandbox_sites: Optional[list[str]] = None
     # Where `web_search` goes: the configured provider's host (it has no url argument).
     search_host: Optional[Callable[[], str]] = None
-    # Persists a site the user chose to always allow (adds it to the machine's list).
-    grant_site: Optional[Callable[[str], None]] = None
+    # Persists a site the user chose to always allow (adds it to the machine's list) and
+    # returns that list, so this session's copy carries the same entries.
+    grant_site: Optional[Callable[[str], Optional[list[str]]]] = None
     # Session-wide read-only grant (owner ask 2026-08-11): auto-allow shell commands the
     # conservative classifier (coworker/readonly.py) accepts. User-elected per session.
     session_readonly: bool = False
@@ -620,7 +621,9 @@ class PermissionEngine:
         if self.sandbox_sites is not None and not self._on_site_list(host):
             self.sandbox_sites.append(host)
         if self.grant_site is not None:
-            self.grant_site(host)
+            stored = self.grant_site(host)
+            if stored is not None and self.sandbox_sites is not None:
+                self.sandbox_sites[:] = [str(x) for x in stored]
         else:
             self.session_allow_domains.add(host)
 

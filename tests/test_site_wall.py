@@ -60,6 +60,13 @@ def test_session_and_always_choices(tmp_path):
     assert eng2.evaluate("web_fetch", {"url": "https://docs.python.org/3/library/"}, None).allowed
     assert eng2.evaluate("web_fetch", {"url": "https://python.org/"}, None).needs_user  # that host only
 
+    # The store returns the list as it keeps it (with ports); the session takes that copy,
+    # so the header chip and Settings show the same entries.
+    eng3 = engine(tmp_path, Mode.INTERACTIVE, grant_site=lambda host: ["github.com:443", f"{host}:443"])
+    eng3.allow_site_always("https://docs.python.org/3/")
+    assert eng3.sandbox_sites == ["github.com:443", "docs.python.org:443"]
+    assert eng3.evaluate("web_fetch", {"url": "https://docs.python.org/3/library/"}, None).allowed
+
 
 def test_web_search_is_held_to_the_provider_host(tmp_path):
     eng = engine(tmp_path, Mode.BYPASS_APPROVALS, search_host=lambda: "api.search.brave.com")

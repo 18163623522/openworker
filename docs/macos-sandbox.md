@@ -71,6 +71,14 @@ Two choices, shared with the other sandboxes:
 
 A credential entry (below) also lets through the sites its tool needs.
 
+The coworker's **web search** and **web fetch** tools run in the OpenWorker app, not in the
+sandbox, and follow the same list. A site that is not on it asks you first; the card offers
+once, this session, or **Always allow**, which adds the site to the list. With full access
+(no approvals) the fetch is refused instead. A site added this way is open to the web tools
+at once; commands reach it from the next session, because the running sandbox keeps the
+list it started with. Connectors and MCP servers are not covered by the list; each has its
+own approval.
+
 ## Sharing a credential on purpose
 
 By default the sandbox has none of your logins, which also means `git push` over SSH has
