@@ -366,6 +366,17 @@ class OpenShellProvider:
             return  # not made yet: the next create renders the list as it stands
         _cli("policy", "set", self.sandbox_name, "--policy", str(self._write_policy()), "--wait", timeout=120)
 
+    def remove_hosts(self, hosts: Sequence[str]) -> None:
+        """Take "host:port" entries back from the running sandbox: the policy is rendered
+        without them and set again. OpenShell closes connections opened under the old rules."""
+        gone = [str(h) for h in hosts if str(h) in self.extra_hosts]
+        if not gone:
+            return
+        self.extra_hosts = [h for h in self.extra_hosts if h not in gone]
+        if not getattr(self, "_create_tried", False):
+            return
+        _cli("policy", "set", self.sandbox_name, "--policy", str(self._write_policy()), "--wait", timeout=120)
+
     reports_blocked = False  # see blocked_since
 
     def blocked_since(self, since: float) -> list[tuple[float, str]]:

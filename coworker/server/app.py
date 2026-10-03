@@ -800,6 +800,19 @@ def create_app(manager: SessionManager) -> FastAPI:
     def session_remove_root(session_id: str, path: str) -> dict[str, Any]:
         return manager.remove_root(session_id, path)
 
+    # OPE-219: the session's allowed sites, for its header chip and Access section.
+    @app.get("/v1/sessions/{session_id}/sites")
+    def session_sites(session_id: str) -> dict[str, Any]:
+        return {"sandbox": manager.session_sites(session_id)}
+
+    @app.post("/v1/sessions/{session_id}/sites")
+    def session_allow_site(session_id: str, body: dict) -> dict[str, Any]:
+        return manager.allow_session_site(session_id, str((body or {}).get("host", "")))
+
+    @app.delete("/v1/sessions/{session_id}/sites")
+    def session_remove_site(session_id: str, host: str) -> dict[str, Any]:
+        return manager.remove_session_site(session_id, host)
+
     @app.get("/v1/sessions/{session_id}/artifacts")
     def session_artifacts(session_id: str) -> dict[str, Any]:
         return {"artifacts": manager.list_artifacts(session_id)}

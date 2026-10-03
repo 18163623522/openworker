@@ -648,6 +648,28 @@ export async function removeRoot(
   return res.json();
 }
 
+// -- the session's allowed sites (OPE-219) -------------------------------------
+// The answer carries the session's sandbox as the header chip shows it.
+type SitesAnswer = { ok: boolean; error?: string; sandbox?: any };
+
+export async function allowSessionSite(sessionId: string, host: string): Promise<SitesAnswer> {
+  const res = await fetch(`${sessionApiBase(sessionId)}/v1/sessions/${encodeURIComponent(sessionId)}/sites`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ host }),
+  });
+  return res.json();
+}
+
+export async function removeSessionSite(sessionId: string, host: string): Promise<SitesAnswer> {
+  const q = new URLSearchParams({ host });
+  const res = await fetch(
+    `${sessionApiBase(sessionId)}/v1/sessions/${encodeURIComponent(sessionId)}/sites?${q.toString()}`,
+    { method: "DELETE" },
+  );
+  return res.json();
+}
+
 // -- MCP servers --------------------------------------------------------------
 export interface McpServer {
   name: string;

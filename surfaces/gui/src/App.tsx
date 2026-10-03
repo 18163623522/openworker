@@ -2560,6 +2560,9 @@ export function App() {
             scratchPrimary={tempWorkspace || !isProjectScoped(personaOf(agent))}
             openAccessKey={accessKey}
             onOpenIntegrations={() => openSettings("connectors")}
+            sandbox={sandboxInfo}
+            onSandbox={setSandboxInfo}
+            onOpenSandboxSettings={() => openSettings("sandbox")}
             board={board}
             onExpandBoard={() => openTeamView()}
             onOpenBoardItem={openTeamView}

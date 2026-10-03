@@ -143,8 +143,11 @@ says whether the sandbox has in fact blocked it. You choose **Allow for this ses
 **Always allow**, or **Deny**; the site opens for the running session without a restart.
 On OpenShell the coworker is not yet told which sites were blocked; it asks from the
 command's own error. With full access (no approvals) the coworker cannot ask;
-add the site in Settings ▸ Sandbox yourself. The header chip lists the session's sites, those
-from Settings and those allowed for this session only.
+add the site in Settings ▸ Sandbox yourself.
+
+The session's **Access** section lists its sites. Those you allowed for this session only
+are marked **Session only**; you can take one back there, or allow another for the session.
+Sites from Settings are changed in Settings ▸ Sandbox. A session site ends with the session.
 
 OpenShell enforces the list in the container.
 

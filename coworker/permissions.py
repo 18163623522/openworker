@@ -348,6 +348,8 @@ class PermissionEngine:
     grant_site: Optional[Callable[[str], Optional[list[str]]]] = None
     # Opens a site on the session's running sandbox, so commands reach it too (OPE-219).
     open_site: Optional[Callable[[str], None]] = None
+    # Takes a site back from the session's running sandbox.
+    close_site: Optional[Callable[[str], None]] = None
     # "host:port" entries a person allowed for this session only (either card, or the
     # session's own list in the app). The machine's list is `sandbox_sites`.
     session_sites: list[str] = field(default_factory=list)
@@ -699,6 +701,22 @@ class PermissionEngine:
                 self.session_allow_domains.add(host)
                 self._note_session_site(str(entry))
             self._open(str(entry))
+
+    def remove_session_site(self, entry: str) -> bool:
+        """The person took back a site they had allowed for this session. Sites on the
+        machine's list are not touched here; those are changed in Settings. Raises when the
+        running sandbox could not drop it, and then nothing is changed."""
+        if entry not in self.session_sites:
+            return False
+        if self.close_site is not None:
+            self.close_site(entry)
+        self.session_sites.remove(entry)
+        self.site_open_errors.pop(entry, None)
+        host = entry.rsplit(":", 1)[0]
+        if not any(other.rsplit(":", 1)[0] == host for other in self.session_sites):
+            self.session_allow_domains.discard(host)
+            self.session_allow_domains.discard(host[4:] if host.startswith("www.") else host)
+        return True
 
     def _note_session_site(self, host_or_entry: str) -> None:
         from .sandbox.network_profiles import clean_host

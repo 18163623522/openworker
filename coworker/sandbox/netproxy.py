@@ -57,6 +57,14 @@ class AllowListProxy:
             if host and port.isdigit():
                 self._extra.add((host.lower().rstrip("."), int(port)))
 
+    def remove_hosts(self, hosts: Sequence[str]) -> None:
+        """Stop letting these "host:port" entries out (the person took a site back from the
+        session). Connections already open are not cut."""
+        for item in hosts:
+            host, _, port = str(item).rpartition(":")
+            if host and port.isdigit():
+                self._extra.discard((host.lower().rstrip("."), int(port)))
+
     def blocked_since(self, since: float) -> list[tuple[float, str]]:
         """The connections refused at or after `since`, oldest first."""
         return [item for item in list(self.blocked) if item[0] >= since]

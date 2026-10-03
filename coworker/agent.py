@@ -756,6 +756,7 @@ def build_engine(
 
         engine.permissions.grant_site = _grant_site
         engine.permissions.open_site = _open_site
+        engine.permissions.close_site = lambda entry: sandbox_workspace.remove_hosts([entry])
         # The agent can ask for a site, except where nobody can answer (full access).
         from .permissions import Mode as _Mode
         from .tools.network import request_network_access_tool

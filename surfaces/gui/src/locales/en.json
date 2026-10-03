@@ -764,7 +764,23 @@
     "choose_location": "Choose location",
     "channel_add_error": "Couldn't add that channel.",
     "summary_folder_count_one": "{{count}} folder",
-    "summary_folder_count_other": "{{count}} folders"
+    "summary_folder_count_other": "{{count}} folders",
+    "sites": {
+      "title": "Sites",
+      "session_only": "Session only",
+      "settings_hint": "This can be removed from Settings ▸ Sandbox",
+      "add": "Allow a site for this session…",
+      "allow": "Allow",
+      "placeholder": "registry.npmjs.org",
+      "add_note": "For this session only. Commands and web tools reach it at once.",
+      "remove": "Remove from this session",
+      "remove_named": "Remove {{host}} from this session",
+      "none": "Commands and web tools reach no sites yet.",
+      "any_site": "Any site",
+      "any_site_note": "This machine's sandbox allows every site.",
+      "open_settings": "Open Settings ▸ Sandbox",
+      "failed": "That did not work. Try again."
+    }
   },
   "root": {
     "temporary_space": "Temporary folder",

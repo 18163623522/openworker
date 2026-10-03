@@ -752,7 +752,23 @@
     "cancel": "取消",
     "choose_location": "选择位置",
     "channel_add_error": "无法添加该频道。",
-    "summary_folder_count_other": "{{count}} 个文件夹"
+    "summary_folder_count_other": "{{count}} 个文件夹",
+    "sites": {
+      "title": "网站",
+      "session_only": "仅本次会话",
+      "settings_hint": "可在 设置 ▸ 沙盒 中移除",
+      "add": "为本次会话允许一个网站…",
+      "allow": "允许",
+      "placeholder": "registry.npmjs.org",
+      "add_note": "仅对本次会话生效。命令和网页工具立即可以访问。",
+      "remove": "从本次会话移除",
+      "remove_named": "从本次会话移除 {{host}}",
+      "none": "命令和网页工具目前不能访问任何网站。",
+      "any_site": "任何网站",
+      "any_site_note": "本机的沙盒允许访问所有网站。",
+      "open_settings": "打开 设置 ▸ 沙盒",
+      "failed": "操作没有成功，请重试。"
+    }
   },
   "root": {
     "temporary_space": "临时文件夹",

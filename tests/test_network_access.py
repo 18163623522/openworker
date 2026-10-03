@@ -228,3 +228,74 @@ def test_a_sandbox_that_cannot_report_blocks_gives_the_card_no_evidence(tmp_path
     seen.blocked = [(__import__("time").time() - 30, "registry.npmjs.org:443")]
     shown = payload(seen)
     assert shown["evidence"] is True and 29 <= shown["hosts"][0]["blocked_seconds_ago"] <= 35
+
+
+# -- the person's own list for one session (the Access section) ----------------------------
+def test_the_person_adds_and_takes_back_a_session_site(tmp_path, monkeypatch):
+    from coworker.server.manager import SessionManager
+
+    opened: list[str] = []
+    closed: list[str] = []
+    eng = engine(tmp_path, open_site=opened.append, close_site=closed.append)
+    holder = SimpleNamespace(permissions=eng, sandbox_workspace=None)
+    manager = SimpleNamespace(_engines={"s1": holder}, audit_autonomy_change=lambda *a: None)
+    for name in ("session_sites", "_session_site_engine", "allow_session_site", "remove_session_site", "_audit_session_site"):
+        setattr(manager, name, getattr(SessionManager, name).__get__(manager))
+
+    assert manager.allow_session_site("s1", "Registry.NPMjs.org")["ok"]
+    assert eng.session_sites == ["registry.npmjs.org:443"] and opened == ["registry.npmjs.org:443"]
+    assert manager.allow_session_site("s1", "github.com")["ok"] and eng.session_sites == ["registry.npmjs.org:443"]  # already on the machine's list
+    for bad in ("*.npmjs.org", "10.0.0.8", "two hosts.dev other.dev", ""):
+        assert not manager.allow_session_site("s1", bad)["ok"], bad
+    # Only a session site can be taken back here; the machine's list is changed in Settings.
+    refused = manager.remove_session_site("s1", "github.com")
+    assert not refused["ok"] and "Settings > Sandbox" in refused["error"]
+    assert manager.remove_session_site("s1", "registry.npmjs.org")["ok"]
+    assert eng.session_sites == [] and closed == ["registry.npmjs.org:443"]
+    assert ask(eng, ["registry.npmjs.org"]).needs_user
+    assert not eng.evaluate("web_fetch", {"url": "https://registry.npmjs.org/x"}, None).allowed
+    assert not manager.allow_session_site("nope", "a.dev")["ok"]  # no such session
+
+
+def test_a_site_the_sandbox_cannot_take_is_not_left_on_the_list(tmp_path):
+    from coworker.server.manager import SessionManager
+
+    def refuse(entry: str) -> None:
+        raise RuntimeError("the gateway did not answer")
+
+    eng = engine(tmp_path, open_site=refuse)
+    manager = SimpleNamespace(_engines={"s1": SimpleNamespace(permissions=eng, sandbox_workspace=None)}, audit_autonomy_change=lambda *a: None)
+    for name in ("session_sites", "_session_site_engine", "allow_session_site", "_audit_session_site"):
+        setattr(manager, name, getattr(SessionManager, name).__get__(manager))
+    result = manager.allow_session_site("s1", "registry.npmjs.org")
+    assert not result["ok"] and "the gateway did not answer" in result["error"]
+    assert eng.session_sites == [] and ask(eng, ["registry.npmjs.org"]).needs_user
+
+
+def test_a_running_sandbox_drops_a_site_taken_back(tmp_path, monkeypatch):
+    proxy = netproxy.AllowListProxy("allowlist", extra_hosts=["github.com:443"])
+    try:
+        proxy.add_hosts(["registry.npmjs.org:443"])
+        proxy.remove_hosts(["registry.npmjs.org:443"])
+        assert not proxy.allows("registry.npmjs.org", 443) and proxy.allows("github.com", 443)
+    finally:
+        proxy.close()
+    from coworker.sandbox.providers import openshell
+
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(openshell, "build_runner_zipapp", lambda: tmp_path / "sandbox" / "runner" / "runner-x.pyz")
+    project = tmp_path / "project"
+    project.mkdir()
+    seen: list = []
+    monkeypatch.setattr(openshell, "_cli", lambda *args, **kw: seen.append(args))
+    provider = openshell.OpenShellProvider(roots=[{"path": str(project), "writable": True}], extra_hosts=["github.com:443", "registry.npmjs.org:443"], registry="abc")
+    provider._create_tried = True
+    provider.remove_hosts(["registry.npmjs.org:443", "never.there:443"])
+    (call,) = seen
+    assert call[:2] == ("policy", "set") and provider.extra_hosts == ["github.com:443"]
+    import yaml
+    from pathlib import Path
+
+    written = yaml.safe_load(Path(call[call.index("--policy") + 1]).read_text())
+    hosts = {e["host"] for rule in written["network_policies"].values() for e in rule["endpoints"]}
+    assert "github.com" in hosts and "registry.npmjs.org" not in hosts

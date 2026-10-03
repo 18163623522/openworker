@@ -231,6 +231,15 @@ class SeatbeltProvider:
         if new and self._proxy is not None:
             self._proxy.add_hosts(new)
 
+    def remove_hosts(self, hosts: Sequence[str]) -> None:
+        """Take "host:port" entries back from the running sandbox. Hosts a shared login
+        needs stay: they came with the credential, not from the list."""
+        keep = {h for g in self.grants for h in g.hosts}
+        gone = [str(h) for h in hosts if str(h) in self.extra_hosts]
+        self.extra_hosts = [h for h in self.extra_hosts if h not in gone]
+        if self._proxy is not None:
+            self._proxy.remove_hosts([h for h in gone if h not in keep])
+
     reports_blocked = True  # its proxy records what it refuses
 
     def blocked_since(self, since: float) -> list[tuple[float, str]]:

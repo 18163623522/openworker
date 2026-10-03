@@ -214,6 +214,11 @@ class RunnerWorkspace(Workspace):
         notes = getattr(self.provider, "notes", None) or []
         return "\n".join(part for part in [text, *notes, self._network_context()] if part)
 
+    def remove_hosts(self, hosts: Sequence[str]) -> None:
+        """The person took a site back from this session: the sandbox stops letting it out."""
+        with self._start_lock:
+            self.provider.remove_hosts(hosts)
+
     def _asking(self) -> bool:
         try:
             return bool(self.can_ask_network())
