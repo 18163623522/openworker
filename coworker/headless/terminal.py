@@ -13,6 +13,9 @@ approvals with the person.
 
 The network card has no "always": a run reads this computer's allowed sites and never
 changes them.
+
+Folder requests and pinned tool installs are asked the same way; they go with the
+questions, so `--auto-answer` answers them by rule too.
 """
 
 from __future__ import annotations
@@ -100,6 +103,9 @@ class Terminal:
         # about to be asked. It carries what the request alone does not: the network
         # request's sites and whether the sandbox blocked them.
         self.card: dict[str, Any] = {}
+        # Adds a folder to the running session and returns its resolved path; raises with
+        # the reason when it cannot. Set by the run once the engine exists.
+        self.grant_folder: Optional[Callable[[Path, bool], Path]] = None
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -273,25 +279,55 @@ class Terminal:
     # -- folders and tool installs --------------------------------------------------------
 
     async def directory(self, args: dict[str, Any], _call_id: Optional[str] = None) -> dict[str, Any]:
-        """The engine's folder-request hook. A run's folders are fixed when it starts
-        (`--workspace`, `--add-dir`), so the person is told what was asked for and the
-        coworker is told to work with what it has."""
+        """The engine's folder-request hook: the coworker asks for another folder, to read
+        or to read and write. The person says yes, yes but read only, no, or types a
+        different folder. `grant_folder` (set by the run) adds it to the session."""
         async with self._lock:
-            path = str(args.get("path") or "").strip()
+            asked = str(args.get("path") or "").strip()
+            writable = bool(args.get("writable", False))
             reason = str(args.get("reason") or "").strip()
-            lines = ["", "The coworker asked for a folder" + (f": {_home_relative(path)}" if path else "") + "."]
+            access = "to read and write" if writable else "to read"
+            lines = ["", f"The coworker asks for a folder {access}" + (f": {_home_relative(asked)}" if asked else "")]
             if reason:
                 lines.append(f"  Reason: {_short(reason, 200)}")
-            lines.append("  A run's folders are set when it starts. To give this one, run again with --add-dir.")
+            if asked:
+                keys = "[y] yes   " + ("[r] yes, read only   " if writable else "") + "[n] no"
+                lines.append(f"  {keys}   or type another folder")
+            else:
+                lines.append("  Type the folder, or n for no")
             self._say(*lines)
-        return {
-            "granted": False,
-            "error": (
-                "This run's folders were set when it started and cannot be added to now. Work "
-                "inside the current workspace. If the task cannot continue without that folder, "
-                "stop and say which folder is needed, so the user can start the run again with it."
-            ),
-        }
+            while True:
+                typed = await self._prompt()
+                if typed is None:
+                    return {"granted": False, "reason": "the user declined the request"}
+                text = typed.strip()
+                choice = text.lower()
+                if not text:
+                    continue
+                if choice in ("n", "no"):
+                    return {"granted": False, "reason": "the user declined the request"}
+                path, grant_writable = asked, writable
+                if choice in ("y", "yes") and asked:
+                    pass
+                elif choice in ("r", "read", "read only") and asked and writable:
+                    grant_writable = False
+                elif choice in ("y", "yes", "r"):
+                    self._say("  Type the folder, or n for no.")
+                    continue
+                else:
+                    path = text
+                folder = Path(path).expanduser()
+                if not folder.is_dir():
+                    self._say(f"  {_home_relative(str(folder))} is not a folder. Type another, or n for no.")
+                    continue
+                if self.grant_folder is None:
+                    return {"granted": False, "error": "directory requests aren't available here"}
+                try:
+                    granted = self.grant_folder(folder, grant_writable)
+                except Exception as exc:  # noqa: BLE001 - say why, and let the person choose again
+                    self._say(f"  That folder cannot be given: {exc}. Type another, or n for no.")
+                    continue
+                return {"granted": True, "path": str(granted), "writable": grant_writable}
 
     async def tool(self, args: dict[str, Any], _call_id: Optional[str] = None) -> dict[str, Any]:
         """The engine's tool-install hook: only reached for a tool in the pinned catalog,

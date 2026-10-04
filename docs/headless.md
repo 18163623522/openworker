@@ -102,9 +102,10 @@ or `--approval-mode bypass-approvals`.
 
 `--auto-answer` does not touch approvals: at a terminal they are still asked.
 
-Two other requests go with the questions. A pinned tool install is asked at a terminal and
-installed by rule otherwise. A request for another folder is declined: a run's folders are
-set when it starts, with `--workspace` and `--add-dir`.
+Two other requests go with the questions. A request for another folder, to read or to
+write, is asked at a terminal: yes, yes but read only, no, or a different folder; with
+`--auto-answer` or no terminal it is declined by rule. A pinned tool install is asked at a
+terminal and installed by rule otherwise.
 
 ### Options
 

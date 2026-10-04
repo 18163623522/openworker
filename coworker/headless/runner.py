@@ -853,6 +853,22 @@ def _run(args: argparse.Namespace) -> int:
     if terminal is not None:
         engine.cards_reach_person = lambda: True
         engine.is_attended = lambda: True
+
+        def grant_folder(folder: Path, writable: bool) -> Path:
+            """The person gave the coworker another folder. The engine's list of folders is
+            shared with the file tools, the permission checks and the sandbox, so they all
+            see it from the next call."""
+            from ..basedir import ensure_under_base
+
+            resolved = ensure_under_base(folder, "folder")
+            for root in engine.roots:
+                if root.path == resolved:
+                    root.writable = bool(writable) or root.writable
+                    return resolved
+            engine.roots.append(RootDir(path=resolved, writable=bool(writable)))
+            return resolved
+
+        terminal.grant_folder = grant_folder
     if sites:
         if engine.permissions.sandbox_sites is None:
             print(

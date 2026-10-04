@@ -287,11 +287,46 @@ def test_grouped_questions_are_asked_in_turn_and_keyed_by_header() -> None:
     assert got == {"answers": {"Regions": "EU, US", "How often?": "weekly"}}
 
 
-def test_a_folder_request_tells_the_person_and_is_declined() -> None:
-    keys = _Keys()
-    got = asyncio.run(keys.terminal().directory({"path": "/data/exports", "reason": "the report reads last month's exports"}))
-    assert got["granted"] is False and "cannot be added to now" in got["error"]
-    assert "The coworker asked for a folder: /data/exports." in keys.printed and "--add-dir" in keys.printed
+def test_a_folder_request_is_asked_and_yes_gives_the_folder(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    given: list[tuple[Path, bool]] = []
+
+    def terminal(keys: _Keys) -> Terminal:
+        term = keys.terminal()
+        term.grant_folder = lambda folder, writable: given.append((folder, writable)) or folder.resolve()
+        return term
+
+    request = {"path": str(exports), "writable": True, "reason": "the report reads last month's exports"}
+    keys = _Keys("y")
+    got = asyncio.run(terminal(keys).directory(dict(request)))
+    assert got == {"granted": True, "path": str(exports.resolve()), "writable": True}
+    assert f"The coworker asks for a folder to read and write: {exports}" in keys.printed
+    assert "Reason: the report reads last month's exports" in keys.printed
+    assert "[y] yes   [r] yes, read only   [n] no   or type another folder" in keys.printed
+
+    # Read only, although it asked to write.
+    assert asyncio.run(terminal(_Keys("r")).directory(dict(request)))["writable"] is False
+    # A different folder, typed; one that does not exist is asked again.
+    other = tmp_path / "other"
+    other.mkdir()
+    keys = _Keys(str(tmp_path / "missing"), str(other))
+    assert asyncio.run(terminal(keys).directory(dict(request)))["path"] == str(other.resolve())
+    assert "is not a folder" in keys.printed
+    assert given == [(exports, True), (exports, False), (other, True)]
+
+    # No, and a closed terminal, both decline and give nothing.
+    for keys in (_Keys("n"), _Keys()):
+        assert asyncio.run(terminal(keys).directory(dict(request))) == {"granted": False, "reason": "the user declined the request"}
+    assert len(given) == 3
+
+    # A read request has no read-only choice; a request with no path asks for one.
+    keys = _Keys("n")
+    asyncio.run(terminal(keys).directory({"path": str(exports)}))
+    assert "to read:" in keys.printed and "[r]" not in keys.printed
+    keys = _Keys("y", str(exports))
+    assert asyncio.run(terminal(keys).directory({"reason": "needs the data"}))["granted"] is True
+    assert "Type the folder, or n for no" in keys.printed
 
 
 def test_a_tool_install_is_asked_and_yes_installs_the_pinned_build(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,4 +480,40 @@ def test_ctrl_c_at_a_prompt_ends_the_run_and_leaves_the_record(tmp_path: Path) -
     assert not (ws / "hello.txt").exists()
     (folder,) = _session_folders(machine, ws)
     assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["outcome"] == "interrupted"
+
+
+
+FOLDER_THEN_WRITE = [
+    {"text": "", "tool_calls": [{"name": "request_directory", "arguments": {"path": "EXPORTS", "writable": True, "reason": "to save the report there"}}]},
+    {"text": "", "tool_calls": [{"name": "write_file", "arguments": {"path": "EXPORTS/report.txt", "content": "done"}}]},
+    {"text": "Saved."},
+]
+
+
+def _folder_script(exports: Path) -> list[dict]:
+    return json.loads(json.dumps(FOLDER_THEN_WRITE).replace("EXPORTS", str(exports)))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
+def test_at_a_terminal_a_folder_request_is_asked_and_the_folder_can_then_be_written(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    code, shown, _out, _ws = _at_a_terminal(
+        tmp_path, _folder_script(exports), [("The coworker asks for a folder", "y")], "--approval-mode", "bypass-approvals",
+    )
+    assert code == 0, shown
+    assert "to save the report there" in shown
+    assert (exports / "report.txt").read_text(encoding="utf-8") == "done"
+
+
+def test_with_auto_answer_a_folder_request_is_declined_by_rule(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    proc, ws, machine = _run(
+        tmp_path, _folder_script(exports), "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals", "--auto-answer",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert not (exports / "report.txt").exists()
+    (folder,) = _session_folders(machine, ws)
+    assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["answers"]["directory_requests_declined"] == 1
 
