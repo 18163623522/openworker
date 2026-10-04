@@ -32,7 +32,7 @@ commands:
                 (the link comes from the app: Settings > Machines > Add a machine;
                  give the controller's address instead to approve a code there)
   up            serve again with the stored identity
-  run <task>    run one task with no human and exit (writes a record and a trajectory)
+  run           run one task to the end and exit (--prompt "..."; see run --help)
   machine       manage this machine
                   status    show enrollment and the sealing-key fingerprint (--json)
                   keys      manage provider keys stored on this machine

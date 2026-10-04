@@ -11,7 +11,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,8 +32,10 @@ def _env(extra: dict | None = None) -> dict:
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("OPENAI_API_KEY", None)
-    env.pop("COWORKER_STATE_DIR", None)
     env.pop("COWORKER_SCRATCH_BASE", None)
+    # "This computer's" state folder for a run that is not --isolated: an empty temporary
+    # one, never the developer's own settings, keys and sandbox.
+    env["COWORKER_STATE_DIR"] = tempfile.mkdtemp(prefix="ow-run-machine-")
     env.update(extra or {})
     return env
 
@@ -44,7 +49,10 @@ def _run(
     prompt: str = TASK,
     extra: list[str] | None = None,
     env: dict | None = None,
+    isolated: bool = True,
 ) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    """One run with a scripted model. `isolated` (the default here) is the sealed run a
+    benchmark harness makes: nothing of the computer is read, everything stays under --out."""
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
     out = tmp_path / "out"
@@ -54,9 +62,10 @@ def _run(
         sys.executable, "-m", "coworker.cli", "run",
         "--prompt", prompt,
         "--workspace", str(ws), "--model", model,
-        "--mode", mode, "--out", str(out),
+        "--approval-mode", mode, "--out", str(out),
         "--trajectory-atif", str(tmp_path / "logs" / "trajectory.json"),
         "--scripted", str(path), "--timeout-seconds", "120",
+        *(["--isolated"] if isolated else []),
         *(extra or []),
     ]
     proc = subprocess.run(cmd, env=_env(env), capture_output=True, text=True, timeout=300)
@@ -98,7 +107,7 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
     summary = _summary(out)
     assert summary["outcome"] == "completed"
     assert summary["args"]["model"] == "anthropic:claude-sonnet-5"  # provider/model converted
-    assert summary["args"]["attendance"] == "auto"
+    assert summary["args"]["auto_answer"] is True
     assert summary["tool_calls"] == 2 and summary["tool_calls_denied"] == 0
     assert summary["answers"] == {
         "cards_refused": 0,
@@ -117,7 +126,7 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
     traj = json.loads((tmp_path / "logs" / "trajectory.json").read_text(encoding="utf-8"))
     assert traj["schema_version"] == "ATIF-v1.7"
     assert traj["agent"]["name"] == "openworker" and traj["agent"]["version"].startswith("openworker")
-    assert traj["agent"]["extra"]["attendance"] == "auto"
+    assert traj["agent"]["extra"]["auto_answer"] is True
     assert [s["step_id"] for s in traj["steps"]] == list(range(1, len(traj["steps"]) + 1))
     agent_steps = [s for s in traj["steps"] if s["source"] == "agent"]
     assert agent_steps[0]["tool_calls"][0]["function_name"] == "write_file"
@@ -130,10 +139,10 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
             assert "tool_calls" not in s and "metrics" not in s and "model_name" not in s
 
 
-def test_interactive_refuses_the_card_nobody_can_answer_and_records_it(tmp_path: Path) -> None:
+def test_ask_refuses_the_card_nobody_can_answer_and_records_it(tmp_path: Path) -> None:
     # Also an unpriced model (cost must be null, never guessed) in the two-slash form,
     # which must split on the first slash only.
-    proc, ws, out = _run(tmp_path, "interactive", model="together/deepseek-ai/DeepSeek-V4-Pro")
+    proc, ws, out = _run(tmp_path, "ask", model="together/deepseek-ai/DeepSeek-V4-Pro")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not (ws / "hello.txt").exists()
     summary = _summary(out)
@@ -158,7 +167,7 @@ def test_dangerous_mode_warns_and_clears_the_downloaded_file_floor(tmp_path: Pat
     assert "Dangerously bypass approvals is on" in proc.stderr
     messages = _messages(out)
     assert any(m.get("role") == "notice" and m.get("kind") == "dangerous_mode" for m in messages)
-    assert _summary(out)["args"]["mode"] == "dangerously-bypass-approvals"
+    assert _summary(out)["args"]["approval_mode"] == "dangerously-bypass-approvals"
 
 
 def test_a_question_is_answered_by_the_engine_and_counted(tmp_path: Path) -> None:
@@ -198,7 +207,7 @@ def test_a_cut_off_reply_is_continued_and_repeated_cut_offs_end_as_truncated(tmp
     second = tmp_path / "again"
     second.mkdir()
     proc, _ws, out = _run(second, "bypass-approvals", [cut, cut, cut], prompt="Do something hard.")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode == 3, proc.stdout + proc.stderr  # stopped early; the record is written
     summary = _summary(out)
     assert summary["outcome"] == "truncated" and summary["continuations"] == 2
     assert _messages(out)[-1]["kind"] == "truncated"
@@ -270,7 +279,7 @@ def test_empty_reply_is_nudged_and_a_permanent_error_is_not_retried(tmp_path: Pa
         second, "bypass-approvals", [fail, {"text": "never reached"}],
         prompt="Do something hard.", env={"OPENWORKER_RUN_RETRY_DELAYS": "0,0"},
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr  # a model error is a recorded outcome
+    assert proc.returncode == 3, proc.stdout + proc.stderr  # a model error is a recorded outcome, not a finished task
     summary = _summary(out)
     assert summary["outcome"] == "model_error" and summary["provider_retries"] == 0
 
@@ -279,10 +288,10 @@ def test_empty_reply_is_nudged_and_a_permanent_error_is_not_retried(tmp_path: Pa
 
 
 def test_code_persona_runs_headless_and_is_recorded(tmp_path: Path) -> None:
-    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--persona", "code"])
+    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--coworker", "code"])
     assert proc.returncode == 0, proc.stdout + proc.stderr
     summary = _summary(out)
-    assert summary["outcome"] == "completed" and summary["args"]["persona"] == "code"
+    assert summary["outcome"] == "completed" and summary["args"]["coworker"] == "code"
     assert (ws / "hello.txt").read_text(encoding="utf-8") == "hello"
     system = next(m for m in _messages(out) if m["role"] == "system")["content"]
     assert "coding agent" in system
@@ -352,8 +361,96 @@ def test_run_help_and_the_top_level_help_mention_the_command() -> None:
         env=_env(), capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0 and "usage: openworker run" in proc.stdout
-    assert "--attendance" in proc.stdout and "--scripted" not in proc.stdout  # test-only flag stays hidden
+    assert "--auto-answer" in proc.stdout and "--isolated" in proc.stdout
+    assert "--approval-mode" in proc.stdout and "--coworker" in proc.stdout
+    assert "--scripted" not in proc.stdout  # test-only flag stays hidden
     top = subprocess.run(
         [sys.executable, "-m", "coworker.cli"], env=_env(), capture_output=True, text=True, timeout=120
     )
-    assert "run <task>" in top.stdout
+    assert "  run  " in top.stdout and "--prompt" in top.stdout
+
+
+@pytest.mark.parametrize(
+    "old",
+    [
+        ["--mode", "bypass-approvals"], ["--persona", "code"], ["--attendance", "auto"],
+        ["--approval-mode", "interactive"], ["--prompt-text", "x"],
+    ],
+)
+def test_the_earlier_flag_names_are_gone(tmp_path: Path, old: list[str]) -> None:
+    # `--mode` in particular must be refused, not read as a shortened `--model`.
+    proc, ws, out = _run(tmp_path, "ask", extra=old)
+    assert proc.returncode == 2 and "openworker run: error:" in proc.stderr
+    assert not (out / "summary.json").exists() and not (ws / "hello.txt").exists()
+
+
+def test_an_unknown_coworker_id_stops_the_run(tmp_path: Path) -> None:
+    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--coworker", "no-such-coworker"])
+    assert proc.returncode == 2
+    assert "no-such-coworker" in proc.stderr and "cowork" in proc.stderr
+    assert not (out / "summary.json").exists()
+
+
+def test_the_workspace_defaults_to_the_current_folder(tmp_path: Path) -> None:
+    here = tmp_path / "here"
+    here.mkdir()
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps(SCRIPT), encoding="utf-8")
+    out = tmp_path / "out"
+    cmd = [
+        sys.executable, "-m", "coworker.cli", "run", "--prompt", TASK,
+        "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals",
+        "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
+    ]
+    proc = subprocess.run(cmd, env=_env(None), cwd=here, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert _summary(out)["args"]["workspace"] == str(here.resolve())
+
+
+def _first_user_text(out: Path) -> str:
+    return next(m["content"] for m in _messages(out) if m["role"] == "user")
+
+
+def _run_piped(tmp_path: Path, stdin: str, extra: list[str] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps(SCRIPT), encoding="utf-8")
+    cmd = [
+        sys.executable, "-m", "coworker.cli", "run", "--workspace", str(ws),
+        "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals",
+        "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
+        *(extra or []),
+    ]
+    proc = subprocess.run(cmd, env=_env(None), input=stdin, capture_output=True, text=True, timeout=300)
+    return proc, out
+
+
+def test_the_task_can_be_piped_in_on_standard_input(tmp_path: Path) -> None:
+    task = "First line of the task.\nSecond line of the task.\n"
+    proc, out = _run_piped(tmp_path, task)
+    assert proc.returncode == 0, proc.stderr
+    assert _first_user_text(out) == task
+
+    proc, out = _run_piped(tmp_path, task, extra=["--prompt-file", "-"])
+    assert proc.returncode == 0, proc.stderr
+    assert _first_user_text(out) == task
+
+
+def test_an_empty_standard_input_stops_the_run(tmp_path: Path) -> None:
+    proc, out = _run_piped(tmp_path, "")
+    assert proc.returncode == 2
+    assert "--prompt" in proc.stderr
+    assert not (out / "summary.json").exists()
+
+
+def test_ask_is_the_default_and_the_engine_gets_its_own_name_for_it(tmp_path: Path) -> None:
+    from coworker.headless.runner import parse_args
+
+    base = ["--prompt", "x", "--model", "anthropic/claude-sonnet-5", "--out", str(tmp_path)]
+    assert parse_args(base).mode == "interactive"  # the default is ask
+    assert parse_args([*base, "--approval-mode", "ask"]).mode == "interactive"
+    assert parse_args([*base, "--approval-mode", "auto-approve"]).mode == "auto-approve"
+    with pytest.raises(SystemExit):
+        parse_args([*base, "--approval-mode", "plan"])

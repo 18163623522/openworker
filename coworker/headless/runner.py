@@ -1,15 +1,20 @@
-"""`openworker run`: run ONE task with no human present, and record it.
+"""`openworker run`: run ONE task to the end, and record it.
 
-    openworker run --prompt "..." --workspace /path/to/project --model anthropic/claude-sonnet-5 \
-        --mode bypass-approvals --out ./run-record --trajectory-atif ./run-record/trajectory.json
+    openworker run --prompt "..."                      # here, with this computer's settings
+    openworker run --isolated --prompt "..." --workspace /path/to/project \
+        --model anthropic/claude-sonnet-5 --approval-mode bypass-approvals --out ./run-record
 
-The model id is accepted in OpenWorker's `provider:model` form or the `provider/model`
-form other tools use. Nothing waits for a person: attendance is `auto`
-(coworker/unattended.py), so the engine answers questions with the least-destructive
-default, declines folder requests with guidance, installs pinned catalog tools itself,
-and refuses any approval card only a person could clear unless the mode grants it.
+Each run is its own process with its own engine. It reads this computer's settings (the
+default model, stored keys, connectors, the sandbox and its allowed sites) and changes none
+of them, beyond renewing a sign-in; `--isolated` reads nothing at all, for benchmark runs. The model id is accepted in
+OpenWorker's `provider:model` form or the `provider/model` form other tools use.
 
-Writes into --out:
+Approvals and questions are separate. An approval follows `--approval-mode`: asked in the terminal
+(headless/terminal.py), refused and recorded when there is none. A question is asked in the
+terminal, or answered by rule with `--auto-answer` or no terminal (coworker/unattended.py).
+Nothing hangs.
+
+Writes into --out (default: sessions/<workspace path>/<session id> in the state folder):
     events.jsonl        every engine event, with a timestamp
     messages.json       the final conversation (OpenWorker's own persisted shape)
     summary.json        outcome, counts, tokens, cost, wall-clock, arguments
@@ -20,11 +25,13 @@ Writes into --out:
     trajectory.json     the ATIF trajectory (also copied to --trajectory-atif when given)
 
 The trajectory and the exit code are the stable contract; the other files are internal
-and may change. Exit code 0 whenever a trajectory was written (completed, iteration cap,
-timeout, model error); 1 only when the run crashed before producing one.
+and may change. Exit code 0 when the task finished, 3 when the run stopped early with its
+record written (timeout, model error, iteration cap), 1 when it crashed before producing
+one, 2 for a command line that cannot be run.
 
-OpenWorker's state and scratch folders are pointed under --out before the engine is
-built, so a run never touches the machine's real conversations, keys or settings.
+With --isolated, OpenWorker's state and scratch folders are pointed under --out before
+the engine is built, so the run never touches the machine's real conversations, keys or
+settings. Without it the state folder is read, and the run writes only its own record.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -40,27 +48,28 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-MODES = [
-    "bypass-approvals",
-    "dangerously-bypass-approvals",
-    "auto-approve",
-    "interactive",
-    "custom",
-    "auto",  # legacy spelling of bypass-approvals
-]
-ATTENDANCE = ["auto"]  # `inbox` needs the server's Inbox; `attended` needs a screen
+# How tool calls are approved (--approval-mode). `ask` is the app's "Ask for approval";
+# the engine stores it as "interactive".
+APPROVAL_MODES = ["ask", "auto-approve", "bypass-approvals", "dangerously-bypass-approvals"]
 RETRY_DELAYS_ENV = "OPENWORKER_RUN_RETRY_DELAYS"
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="openworker run",
-        description="Run one task with no human present, and record it.",
+        description="Run one task to the end, and record it.",
+        # No shortened flags: `--mode` would otherwise be read as `--model`.
+        allow_abbrev=False,
     )
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--prompt", "--prompt-text", dest="prompt_text", help="the task text")
-    src.add_argument("--prompt-file", help="file containing the task text (UTF-8)")
-    p.add_argument("--workspace", required=True, help="folder the agent works in")
+    # With neither flag, the task is read from standard input when it is piped in.
+    src = p.add_mutually_exclusive_group()
+    src.add_argument("--prompt", help="the task text")
+    src.add_argument(
+        "--prompt-file", help="file containing the task text (UTF-8); - reads standard input"
+    )
+    p.add_argument(
+        "--workspace", default=".", help="folder the agent works in (default: the current folder)"
+    )
     p.add_argument(
         "--add-dir",
         dest="add_dir",
@@ -74,15 +83,38 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "which tool the model happened to pick.",
     )
     p.add_argument(
-        "--model", required=True, help="provider:model (OpenWorker) or provider/model"
+        "--model", default=None,
+        help="provider:model (OpenWorker) or provider/model (default: this computer's "
+        "setting; required with --isolated)",
     )
-    p.add_argument("--persona", default="cowork", help="OpenWorker persona id (default: cowork)")
-    p.add_argument("--mode", default="bypass-approvals", choices=MODES)
     p.add_argument(
-        "--attendance",
-        default="auto",
-        choices=ATTENDANCE,
-        help="who answers when the agent asks; `auto` = the engine, by fixed rule (default)",
+        "--coworker", default="cowork", metavar="ID",
+        help="the coworker that does the task, by its id (default: cowork)",
+    )
+    p.add_argument(
+        "--approval-mode", default="ask", choices=APPROVAL_MODES,
+        help="how tool calls are approved (default: ask). At a terminal an approval is "
+        "asked there; with no terminal it is refused and recorded.",
+    )
+    p.add_argument(
+        "--auto-answer", action="store_true",
+        help="nobody will answer the coworker's questions: it is told so and carries on. "
+        "Without this, a question is asked in the terminal. Implied when no terminal is "
+        "attached. Approvals are separate: see --approval-mode.",
+    )
+    p.add_argument(
+        "--allow-site", dest="allow_site", action="append", default=None, metavar="HOST[:PORT]",
+        help="a site this run's commands and web tools may reach, beside this computer's "
+        "allowed sites (repeatable). For this run only.",
+    )
+    p.add_argument(
+        "--allow-sites-file", default=None, metavar="FILE",
+        help="a file of sites to allow for this run, one HOST[:PORT] per line (# starts a comment)",
+    )
+    p.add_argument(
+        "--isolated", action="store_true",
+        help="read nothing from this computer (no settings, no stored keys, no sandbox) and "
+        "keep everything under --out. For benchmark and evaluation runs. Needs --out and --model.",
     )
     p.add_argument(
         "--max-iterations", type=int, default=None, help="default: OpenWorker config (150)"
@@ -126,7 +158,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=1800.0,
         help="the run's own limit; 0 disables it (use 0 when an outer runner enforces one)",
     )
-    p.add_argument("--out", required=True, help="folder for the run record")
+    p.add_argument(
+        "--out", default=None,
+        help="folder for the run record (default: sessions/<workspace path>/<session id> "
+        "in OpenWorker's state folder)",
+    )
     p.add_argument("--trajectory-atif", default=None, help="also write the ATIF trajectory here")
     p.add_argument("--agent-version", default=None, help="label for the trajectory's agent.version")
     p.add_argument(
@@ -137,7 +173,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "Together/Moonshot reasoning_effort). Default: nothing sent; the provider default is recorded",
     )
     p.add_argument("--scripted", default=None, help=argparse.SUPPRESS)  # tests: a fake model
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # The engine's name for the mode, which is also what the record states.
+    args.mode = "interactive" if args.approval_mode == "ask" else args.approval_mode
+    args.attendance = None  # set when the run knows who answers: "auto" or "attended"
+    return args
 
 
 # -- isolation ----------------------------------------------------------------------------
@@ -573,10 +613,23 @@ def _preview(value: Any, limit: int = 400) -> str:
 # -- the run ------------------------------------------------------------------------------
 
 
+class NoPrompt(Exception):
+    pass
+
+
 def _read_prompt(args: argparse.Namespace) -> str:
-    if args.prompt_text is not None:
-        return args.prompt_text
-    return Path(args.prompt_file).read_text(encoding="utf-8")
+    if args.prompt is not None:
+        return args.prompt
+    if args.prompt_file not in (None, "-"):
+        return Path(args.prompt_file).read_text(encoding="utf-8")
+    # Piped in: `cat task.md | openworker run`. A terminal is not read: the command would
+    # sit waiting for typing with nothing on screen saying so.
+    if args.prompt_file is None and sys.stdin.isatty():
+        raise NoPrompt("give the task with --prompt, --prompt-file, or pipe it in on standard input")
+    text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    if not text.strip():
+        raise NoPrompt("standard input was empty; give the task with --prompt or --prompt-file")
+    return text
 
 
 def _agent_version(explicit: Optional[str]) -> str:
@@ -609,13 +662,96 @@ def _extra_dirs(args: argparse.Namespace, workspace: Path) -> list:
     return found
 
 
+class UsageError(Exception):
+    """The command line cannot be run as given: said on standard error, exit code 2."""
+
+
+def workspace_folder_name(workspace: Path) -> str:
+    """The workspace's folder under sessions/: its full path with every character that is
+    not a letter or a digit turned into a dash (`/Users/me/src/app` gives
+    `-Users-me-src-app`), so one workspace's runs sit together and are found by path."""
+    name = re.sub(r"[^A-Za-z0-9]", "-", str(workspace))
+    if len(name) > 180:  # a file name's limit is 255 on the common filesystems
+        import hashlib
+
+        name = name[:160] + "-" + hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()[:12]
+    return name
+
+
+def session_folder(workspace: Path, run_id: str) -> Path:
+    from ..secrets import state_dir
+
+    return state_dir() / "sessions" / workspace_folder_name(workspace) / run_id
+
+
+def allowed_sites(args: argparse.Namespace) -> list[str]:
+    """`--allow-site` and `--allow-sites-file` as "host:port" entries. Exact host names,
+    as on the network-access card; anything else stops the run before it starts."""
+    from ..permissions import network_request_hosts
+
+    wanted = list(args.allow_site or [])
+    if args.allow_sites_file:
+        try:
+            text = Path(args.allow_sites_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            raise UsageError(f"cannot read --allow-sites-file: {exc}") from exc
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                wanted.append(line)
+    good, bad = network_request_hosts({"hosts": wanted})
+    if bad:
+        raise UsageError(
+            "not a site name: " + ", ".join(bad) + ". Give exact host names, with a port "
+            "only when it is not 443 (no wildcards, no addresses)."
+        )
+    return good
+
+
+# Exit codes. 0 only when the task finished; a run that stopped early still left its record.
+EXIT_FINISHED = 0
+EXIT_CRASHED = 1  # no usable record
+EXIT_USAGE = 2
+EXIT_STOPPED = 3  # timeout, model error, iteration cap: the record is written
+EXIT_INTERRUPTED = 130  # Ctrl-C, as a shell reports it; the record is written
+
+
 def run(args: argparse.Namespace) -> int:
-    out = Path(args.out).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    isolation = isolate_environment(out)
+    try:
+        return _run(args)
+    except UsageError as exc:
+        print(f"openworker run: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.isolated and not args.out:
+        raise UsageError("--isolated needs --out: an isolated run keeps everything in that folder")
+    if args.isolated and not args.model:
+        raise UsageError("--isolated needs --model: an isolated run reads no settings from this computer")
+    try:
+        prompt = _read_prompt(args)
+    except NoPrompt as exc:
+        raise UsageError(str(exc)) from exc
+    sites = allowed_sites(args)
+    workspace = Path(args.workspace).resolve()
+    run_id = uuid.uuid4().hex[:12]
+
+    # Where OpenWorker's state is read from, set BEFORE the engine is built. Isolated: a
+    # fresh folder under --out, so nothing of this computer is read or written. Otherwise
+    # this computer's own state folder, read for its settings, keys, sandbox and allowed
+    # sites; what the run writes goes to its own record folder.
+    if args.isolated:
+        out = Path(args.out).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        isolation = isolate_environment(out)
+    else:
+        out = Path(args.out).resolve() if args.out else session_folder(workspace, run_id)
+        os.environ["COWORKER_SCRATCH_BASE"] = str(out / "scratch")
+        isolation = {"COWORKER_SCRATCH_BASE": str(out / "scratch")}
     cleaned_keys = sanitize_key_env()
     if cleaned_keys:
-        print(f"openworker run: stripped stray whitespace from {', '.join(cleaned_keys)}")
+        print(f"openworker run: stripped stray whitespace from {', '.join(cleaned_keys)}", file=sys.stderr)
 
     # Build the engine only now, after the isolation variables are set.
     from ..agent import build_engine
@@ -628,18 +764,47 @@ def run(args: argparse.Namespace) -> int:
     from ..secrets import SecretStore, state_dir
     from ..unattended import DANGEROUS_MODE_WARNING
 
-    workspace = Path(args.workspace).resolve()
+    # An unknown id would otherwise run the default coworker without saying so.
+    from ..personas.registry import get_registry
+
+    known = get_registry().ids()
+    if args.coworker not in known:
+        raise UsageError(f"no coworker has the id {args.coworker!r}. Known ids: {', '.join(sorted(known))}")
+
+    out.mkdir(parents=True, exist_ok=True)
+    # Made now, not on first use: a sandbox is given the run's folders when it starts, and
+    # it cannot be given one that does not exist yet.
+    for name in ("scratch", "tool-output"):
+        (out / name).mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
     # `--add-dir DIR`: extra writable folders. An explicit list replaces the engine's
     # default single-workspace root, so the workspace goes first and stays the folder
     # that relative paths resolve against.
     extra_dirs = _extra_dirs(args, workspace)
     roots = [RootDir(path=workspace, writable=True), *extra_dirs] if extra_dirs else None
+    if not args.model:
+        from ..config import load_config
+
+        args.model = load_config(workspace).model
     model = normalize_model(args.model)
     mode = Mode(args.mode)
-    run_id = uuid.uuid4().hex[:12]
-    prompt = _read_prompt(args)
     answers = Answers()
+
+    # Who answers. Approvals and questions are separate: an approval is the person's at a
+    # terminal and refused without one; a question is the person's at a terminal unless
+    # --auto-answer says nobody will answer, and answered by rule without a terminal.
+    from .terminal import Terminal
+
+    terminal = Terminal.attached(cwd=workspace)
+    auto_answer = bool(args.auto_answer) or terminal is None
+    args.attendance = "auto" if auto_answer else "attended"
+    if terminal is None and mode is Mode.INTERACTIVE:
+        print(
+            "openworker run: no terminal is attached, so every approval is refused in mode "
+            "ask. For a run with nobody present use --approval-mode auto-approve or bypass-approvals.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     secrets = SecretStore(state_dir() / "secrets.json")
     if args.scripted:
@@ -656,7 +821,7 @@ def run(args: argparse.Namespace) -> int:
         answers.sink(row)
 
     engine = build_engine(
-        agent=get_agent(args.persona),
+        agent=get_agent(args.coworker),
         workspace=workspace,
         roots=roots,
         model=model,
@@ -673,9 +838,47 @@ def run(args: argparse.Namespace) -> int:
         secrets=secrets,
         # The reviewer only exists in auto-approve mode; elsewhere leave the config default.
         auto_approve=True if mode is Mode.AUTO_APPROVE else None,
+        approver=terminal.approve if terminal is not None else None,
+        question_asker=terminal.ask if terminal is not None and not auto_answer else None,
+        directory_requester=terminal.directory if terminal is not None and not auto_answer else None,
+        tool_requester=terminal.tool if terminal is not None and not auto_answer else None,
+        # Connectors: whatever is connected on this computer and the coworker may use,
+        # as in the app. Their sign-ins are renewed under the store's lock
+        # (secrets.SecretStore.exclusive), so a run and the app do not collide. An
+        # isolated run has none: its state folder is empty.
     )
-    # Nobody is present: the engine answers by rule (coworker/unattended.py).
+    # Questions: answered by rule when nobody will (coworker/unattended.py). Approvals:
+    # with a terminal they reach the person whatever --auto-answer says.
     engine.attendance = lambda: args.attendance
+    if terminal is not None:
+        engine.cards_reach_person = lambda: True
+        engine.is_attended = lambda: True
+
+        def grant_folder(folder: Path, writable: bool) -> Path:
+            """The person gave the coworker another folder. The engine's list of folders is
+            shared with the file tools, the permission checks and the sandbox, so they all
+            see it from the next call."""
+            from ..basedir import ensure_under_base
+
+            resolved = ensure_under_base(folder, "folder")
+            for root in engine.roots:
+                if root.path == resolved:
+                    root.writable = bool(writable) or root.writable
+                    return resolved
+            engine.roots.append(RootDir(path=resolved, writable=bool(writable)))
+            return resolved
+
+        terminal.grant_folder = grant_folder
+    if sites:
+        if engine.permissions.sandbox_sites is None:
+            print(
+                "openworker run: --allow-site has no effect here: this run's commands are "
+                "not held to a list of allowed sites.",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            engine.permissions.allow_network_hosts(sites, always=False)
     if mode is Mode.DANGEROUSLY_BYPASS_APPROVALS:
         print(f"openworker run: {DANGEROUS_MODE_WARNING}", file=sys.stderr, flush=True)
 
@@ -751,6 +954,10 @@ def run(args: argparse.Namespace) -> int:
                 events.append(rec)
                 events_fh.write(json.dumps(rec, default=str) + "\n")
                 last_type, last_data = ev.type, ev.data
+                if ev.type == EventType.PERMISSION_REQUIRED and terminal is not None:
+                    terminal.card = dict(ev.data)  # the approver is asked next
+                elif ev.type == EventType.TOOL_PROPOSED:
+                    _progress(ev.data)
                 if ev.type == EventType.ITERATION_END:
                     flush_provisional("in_progress")
             # A transient provider failure ended the turn: wait, then re-enter the same
@@ -837,6 +1044,12 @@ def run(args: argparse.Namespace) -> int:
             engine.request_interrupt()
         except Exception:  # noqa: BLE001
             pass
+    except KeyboardInterrupt:  # Ctrl-C: stop, and still leave the record
+        outcome = "interrupted"
+        try:
+            engine.request_interrupt()
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001 - recorded, then reported by exit code
         outcome = "crash"
         error_text = "".join(traceback.format_exception(exc))
@@ -845,6 +1058,13 @@ def run(args: argparse.Namespace) -> int:
         if executor is not None:
             try:
                 executor.close()
+            except Exception:  # noqa: BLE001
+                pass
+        # The run's sandbox ends with the run.
+        sandbox = getattr(engine, "sandbox_workspace", None)
+        if sandbox is not None:
+            try:
+                sandbox.close()
             except Exception:  # noqa: BLE001
                 pass
     wall = time.time() - started
@@ -883,13 +1103,55 @@ def run(args: argparse.Namespace) -> int:
         trajectory_extra_path=args.trajectory_atif,
     )
     tokens = summary["tokens"]
+    # Standard output is the coworker's answer and nothing else; the rest is standard error.
+    answer = _final_answer(engine)
+    if answer:
+        sys.stdout.write(answer if answer.endswith("\n") else answer + "\n")
+        sys.stdout.flush()
     print(
         f"openworker run: outcome={outcome} iterations={summary['iterations']} "
         f"tool_calls={summary['tool_calls']} refused={summary['answers']['cards_refused']} "
         f"tokens_in={tokens['input']} tokens_out={tokens['output']} "
-        f"cost={summary['cost_usd']} wall={wall:.0f}s out={out}"
+        f"cost={summary['cost_usd']} wall={wall:.0f}s out={out}",
+        file=sys.stderr,
+        flush=True,
     )
-    return 1 if outcome == "crash" else 0
+    if outcome == "crash":
+        return EXIT_CRASHED
+    if outcome == "interrupted":
+        return EXIT_INTERRUPTED
+    if outcome != "completed" and error_text:
+        # Why it stopped, in a line: the full text is in the record.
+        print(f"openworker run: {redact(error_text.strip().splitlines()[-1])[:600]}", file=sys.stderr, flush=True)
+    return EXIT_FINISHED if outcome == "completed" else EXIT_STOPPED
+
+
+def _progress(data: dict[str, Any]) -> None:
+    """One line per tool call on standard error, so a person watching sees the run move."""
+    name = str(data.get("name") or "")
+    args = data.get("arguments") if isinstance(data.get("arguments"), dict) else {}
+    detail = ""
+    for key in ("command", "path", "url", "query", "pattern"):
+        if isinstance(args.get(key), str) and args[key].strip():
+            detail = " ".join(args[key].split())
+            break
+    line = f"  {name}" + (f": {detail}" if detail else "")
+    print(line if len(line) <= 160 else line[:159] + "…", file=sys.stderr, flush=True)
+
+
+def _final_answer(engine: Any) -> str:
+    """The text of the coworker's last reply."""
+    for message in reversed(getattr(engine, "messages", None) or []):
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return ""
 
 
 def _model_settings(args: argparse.Namespace) -> Optional[dict[str, Any]]:
@@ -1031,9 +1293,11 @@ def _write_records(
         "args": {
             "model": model,
             "model_as_given": args.model,
-            "persona": args.persona,
-            "mode": args.mode,
-            "attendance": args.attendance,
+            "coworker": args.coworker,
+            "approval_mode": args.approval_mode,
+            # Questions were answered by rule (--auto-answer, or no terminal to ask on).
+            "auto_answer": args.attendance == "auto",
+            "isolated": bool(args.isolated),
             "max_iterations": args.max_iterations,
             "max_output_tokens": args.max_output_tokens,
             "reasoning_effort": args.reasoning_effort,
@@ -1089,9 +1353,10 @@ def _write_records(
         outcome=outcome,
         reasoning_effort=effort["label"],
         agent_extra={
-            "persona": args.persona,
-            "mode": args.mode,
-            "attendance": args.attendance,
+            "coworker": args.coworker,
+            "approval_mode": args.approval_mode,
+            # Questions were answered by rule (--auto-answer, or no terminal to ask on).
+            "auto_answer": args.attendance == "auto",
             "reasoning_effort": effort["label"],
             "reasoning_effort_detail": effort["detail"],
         },
