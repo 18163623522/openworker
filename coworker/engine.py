@@ -222,6 +222,10 @@ class TurnEngine:
         # the engine answers questions, folder requests and pinned installs itself by fixed
         # rule, and refuses any approval card only a person could clear — never a hang.
         self.attendance: Optional[Callable[[], str]] = None
+        # Approvals are separate from questions. A surface that answers questions by rule
+        # (attendance "auto") while a person still answers approval cards sets this: a
+        # terminal run with --auto-answer. Unset, attendance "auto" covers both.
+        self.cards_reach_person: Optional[Callable[[], bool]] = None
         self._dangerous_warned = False
         # Session facts (spec Part 0 / §2.4) — the known world frozen at session start, plus
         # the per-turn ingestion record. Set post-construction by the surface, same as
@@ -1225,6 +1229,17 @@ class TurnEngine:
         except Exception:  # noqa: BLE001 - a broken getter must read as attended
             return False
 
+    def _nobody_answers_cards(self) -> bool:
+        """No person can answer an approval card: attendance "auto", unless the surface
+        says cards still reach a person."""
+        if self.cards_reach_person is not None:
+            try:
+                if self.cards_reach_person():
+                    return False
+            except Exception:  # noqa: BLE001 - a broken getter must not open a card nobody sees
+                pass
+        return self._auto_answering()
+
     def _reviewer_active(self) -> bool:
         """The reviewer is consulted only when ALL of these hold. Any miss ⇒ today's
         behaviour (the card). Someone must be accountable for the asks it cannot clear:
@@ -1716,7 +1731,7 @@ class TurnEngine:
                 self._reviewer_denials = 0  # streak semantics: any non-deny resets
                 unsure_note = verdict.reason
 
-        if not allowed and decision.needs_user and self._auto_answering():
+        if not allowed and decision.needs_user and self._nobody_answers_cards():
             # Attendance "auto": nobody can answer a card, and the mode did not allow
             # the call — so the answer is no, recorded, never a hang. (The dangerous mode
             # never reaches here: it grants the floors before a card exists.)

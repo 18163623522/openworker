@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,8 +32,10 @@ def _env(extra: dict | None = None) -> dict:
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("OPENAI_API_KEY", None)
-    env.pop("COWORKER_STATE_DIR", None)
     env.pop("COWORKER_SCRATCH_BASE", None)
+    # "This computer's" state folder for a run that is not --isolated: an empty temporary
+    # one, never the developer's own settings, keys and sandbox.
+    env["COWORKER_STATE_DIR"] = tempfile.mkdtemp(prefix="ow-run-machine-")
     env.update(extra or {})
     return env
 
@@ -46,7 +49,10 @@ def _run(
     prompt: str = TASK,
     extra: list[str] | None = None,
     env: dict | None = None,
+    isolated: bool = True,
 ) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    """One run with a scripted model. `isolated` (the default here) is the sealed run a
+    benchmark harness makes: nothing of the computer is read, everything stays under --out."""
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
     out = tmp_path / "out"
@@ -59,6 +65,7 @@ def _run(
         "--mode", mode, "--out", str(out),
         "--trajectory-atif", str(tmp_path / "logs" / "trajectory.json"),
         "--scripted", str(path), "--timeout-seconds", "120",
+        *(["--isolated"] if isolated else []),
         *(extra or []),
     ]
     proc = subprocess.run(cmd, env=_env(env), capture_output=True, text=True, timeout=300)
@@ -200,7 +207,7 @@ def test_a_cut_off_reply_is_continued_and_repeated_cut_offs_end_as_truncated(tmp
     second = tmp_path / "again"
     second.mkdir()
     proc, _ws, out = _run(second, "bypass-approvals", [cut, cut, cut], prompt="Do something hard.")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode == 3, proc.stdout + proc.stderr  # stopped early; the record is written
     summary = _summary(out)
     assert summary["outcome"] == "truncated" and summary["continuations"] == 2
     assert _messages(out)[-1]["kind"] == "truncated"
@@ -272,7 +279,7 @@ def test_empty_reply_is_nudged_and_a_permanent_error_is_not_retried(tmp_path: Pa
         second, "bypass-approvals", [fail, {"text": "never reached"}],
         prompt="Do something hard.", env={"OPENWORKER_RUN_RETRY_DELAYS": "0,0"},
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr  # a model error is a recorded outcome
+    assert proc.returncode == 3, proc.stdout + proc.stderr  # a model error is a recorded outcome, not a finished task
     summary = _summary(out)
     assert summary["outcome"] == "model_error" and summary["provider_retries"] == 0
 
@@ -354,11 +361,12 @@ def test_run_help_and_the_top_level_help_mention_the_command() -> None:
         env=_env(), capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0 and "usage: openworker run" in proc.stdout
-    assert "--attendance" in proc.stdout and "--scripted" not in proc.stdout  # test-only flag stays hidden
+    assert "--auto-answer" in proc.stdout and "--isolated" in proc.stdout
+    assert "--attendance" not in proc.stdout and "--scripted" not in proc.stdout  # unlisted flags stay hidden
     top = subprocess.run(
         [sys.executable, "-m", "coworker.cli"], env=_env(), capture_output=True, text=True, timeout=120
     )
-    assert "run <task>" in top.stdout
+    assert "  run  " in top.stdout and "--prompt" in top.stdout
 
 
 def test_the_old_persona_flag_still_chooses_the_coworker(tmp_path: Path) -> None:

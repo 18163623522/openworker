@@ -5,7 +5,7 @@ OpenWorker has two headless modes. They answer different questions.
 | Command | What it does | Who drives it |
 |---|---|---|
 | `openworker up` (after `openworker join`) | Keeps this computer serving as a machine the desktop app controls, forever | The desktop app: tasks and chat arrive over its channel |
-| `openworker run` | Runs one task to the end and exits, leaving a record behind | A script, a CI job, an evaluation harness |
+| `openworker run` | Runs one task to the end and exits, leaving a record behind | You at a terminal, a script, a CI job, an evaluation harness |
 
 This page is about `openworker run` and the two switches that decide what happens when
 the agent would normally stop and ask.
@@ -53,39 +53,102 @@ In `auto`:
   verified installer, same version and checksum as the desktop card would use;
 - an approval card that would have needed a person is refused, never parked. Nothing hangs.
 
-`openworker run` always uses `auto`. The desktop app offers it as the third position of the
-Unattended toggle ("Answer for me while I'm away"); there it can only combine with modes
-that keep the checks, so the worst case is a refused card.
+The desktop app offers `auto` as the third position of the Unattended toggle ("Answer for
+me while I'm away"); there it can only combine with modes that keep the checks, so the
+worst case is a refused card.
 
 ## `openworker run`
 
 ```
-openworker run --prompt "Fix the failing test in tests/test_parser.py" \
-    --workspace ~/src/project --model anthropic/claude-sonnet-5 \
-    --mode bypass-approvals --out ./run-record
+cd ~/src/project
+openworker run --prompt "Fix the failing test in tests/test_parser.py"
 ```
 
-Options:
+The task comes from `--prompt`, from `--prompt-file`, or from standard input when it is
+piped in. The coworker's answer is printed on standard output; progress, prompts and the
+closing summary line go to standard error.
+
+### What a run reads from this computer
+
+A run uses this computer's OpenWorker settings: the default model, the stored provider
+keys, the sandbox and its allowed sites. It reads them and changes none of them.
+Connectors are not available in a run yet.
+
+Each run is its own process. Two runs started from two terminals do not share anything
+but those settings, and each is saved as its own session.
+
+### Approvals and questions
+
+These are separate, and each has its own switch.
+
+**Approvals** follow `--mode` (the table above). The default is `ask`.
+
+| | An approval card |
+|---|---|
+| At a terminal | asked in the terminal: yes once, yes for this session, or no |
+| No terminal (a pipe, a CI job) | refused and recorded; nothing hangs |
+
+With no terminal, mode `ask` refuses every approval, and the run says so when it starts.
+For a run with nobody present, use `--mode auto-approve` (the reviewer decides) or
+`--mode bypass-approvals`.
+
+**Questions** follow `--auto-answer`.
+
+| | A question from the coworker |
+|---|---|
+| At a terminal | asked in the terminal |
+| At a terminal with `--auto-answer` | answered by the fixed rule above, and recorded |
+| No terminal | answered by the fixed rule, and recorded |
+
+`--auto-answer` does not touch approvals: at a terminal they are still asked.
+
+Two other requests go with the questions. A pinned tool install is asked at a terminal and
+installed by rule otherwise. A request for another folder is declined: a run's folders are
+set when it starts, with `--workspace` and `--add-dir`.
+
+### Options
 
 | Flag | Meaning |
 |---|---|
-| `--prompt TEXT` / `--prompt-file PATH` | the task. With neither flag, the task is read from standard input when it is piped in (`cat task.md \| openworker run …`); `--prompt-file -` does the same |
+| `--prompt TEXT` / `--prompt-file PATH` | the task. With neither flag, the task is read from standard input when it is piped in (`cat task.md \| openworker run`); `--prompt-file -` does the same |
 | `--workspace DIR` | the folder the agent works in; the current folder when left out |
 | `--add-dir DIR` | an extra folder the agent may read and write, beside the workspace (repeatable), for a harness whose output contract lives outside the workspace — e.g. `--add-dir /output`. The file tools only write inside the session's folders, in every mode; the shell is not scoped, so without this a delivery would depend on which tool the model happened to pick. Recorded under `args.extra_dirs` in `summary.json`. |
-| `--model ID` | `provider:model` or `provider/model` (first slash splits) |
-| `--mode` | see above; default `bypass-approvals` |
-| `--attendance` | `auto` (the only value here) |
 | `--coworker ID` | the coworker that does the task, by its id: `cowork` (default) or `code`. An unknown id stops the run with exit code 2 |
+| `--model ID` | `provider:model` or `provider/model` (first slash splits). Default: this computer's setting |
+| `--mode` | `ask` (default), `auto-approve`, `bypass-approvals`, `dangerously-bypass-approvals` |
+| `--auto-answer` | nobody will answer questions; see above |
+| `--allow-site HOST[:PORT]` | a site this run's commands and web tools may reach, beside this computer's allowed sites (repeatable). For this run only; the computer's list is not changed. Exact host names, no wildcards |
+| `--allow-sites-file FILE` | the same, from a file: one `HOST[:PORT]` per line, `#` starts a comment |
+| `--out DIR` | where the record goes. Default: `sessions/<workspace path>/<session id>/` in OpenWorker's state folder, the workspace path written with dashes |
+| `--isolated` | read nothing from this computer; see below |
 | `--reasoning-effort` | `low` … `max`, sent to the provider; unset = provider default, recorded |
 | `--max-output-tokens`, `--max-iterations`, `--timeout-seconds` | ceilings; `--timeout-seconds 0` when an outer runner enforces its own |
 | `--tool-result-max-bytes` | bound each tool result (default 10,000; 0 = off); full text spilled under `out/tool-output/` |
 | `--provider-order` | OpenRouter only: pin the upstream host, no fallback |
-| `--out DIR`, `--trajectory-atif PATH` | where the record goes |
+| `--trajectory-atif PATH` | also write the trajectory here |
 
-The model key comes from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`TOGETHER_API_KEY`, `OPENROUTER_API_KEY`, …). OpenWorker's state and scratch folders are
-pointed under `--out` before the engine starts, so a run never touches the machine's own
-conversations, keys or settings.
+### Isolated runs, for benchmarks
+
+```
+openworker run --isolated --prompt-file task.md --workspace /work \
+    --model anthropic/claude-sonnet-5 --mode bypass-approvals --out ./run-record
+```
+
+`--isolated` reads nothing from the computer: no settings, no stored keys, no sandbox. The
+model key comes from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`TOGETHER_API_KEY`, `OPENROUTER_API_KEY`, …), and OpenWorker's state and scratch folders
+are placed under `--out`. Two runs of the same task on two computers then start from the
+same place. It needs `--out` and `--model`, and a harness should pass `--mode` too, so the
+record states it.
+
+### Exit code
+
+| Code | Meaning |
+|---|---|
+| 0 | the task finished |
+| 1 | the run crashed before it could write a record |
+| 2 | the command line could not be run as given |
+| 3 | the run stopped early (time limit, model error, iteration limit, cut-off reply); the record is written |
 
 ### The record
 
@@ -100,9 +163,7 @@ conversations, keys or settings.
 | `provider_errors.log` | full cause chains of failed model calls, credentials redacted |
 | `audit.db` | OpenWorker's audit log for the session |
 
-The trajectory and the exit code are the stable contract. Exit code 0 means a trajectory
-was written (completed, iteration cap, timeout, model error); 1 means the run crashed
-before producing one.
+The trajectory and the exit code are the stable contract.
 
 A transient provider failure or an empty reply does not end the run: the runner waits
 (30 s, 60 s, 120 s, 240 s, 300 s, 300 s) and re-enters the conversation with a nudge.
