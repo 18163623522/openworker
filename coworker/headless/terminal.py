@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -123,8 +124,28 @@ class Terminal:
     # -- plumbing -------------------------------------------------------------------------
 
     async def _prompt(self) -> Optional[str]:
+        """One typed line. Read on a daemon thread, not the loop's pool: a run that ends
+        while the prompt waits (Ctrl-C, the time limit) must not wait for Enter to exit."""
         self._write("> ")
-        return await asyncio.to_thread(self._read_line)
+        loop = asyncio.get_running_loop()
+        typed: asyncio.Future[Optional[str]] = loop.create_future()
+
+        def deliver(line: Optional[str]) -> None:
+            if not typed.done():
+                typed.set_result(line)
+
+        def read() -> None:
+            try:
+                line = self._read_line()
+            except Exception:  # noqa: BLE001 - a broken terminal reads as end of input
+                line = None
+            try:
+                loop.call_soon_threadsafe(deliver, line)
+            except RuntimeError:  # the run is over
+                pass
+
+        threading.Thread(target=read, name="openworker-run-prompt", daemon=True).start()
+        return await typed
 
     def _say(self, *lines: str) -> None:
         self._write("\n".join(lines) + "\n")

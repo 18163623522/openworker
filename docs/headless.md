@@ -149,6 +149,7 @@ record states it.
 | 1 | the run crashed before it could write a record |
 | 2 | the command line could not be run as given |
 | 3 | the run stopped early (time limit, model error, iteration limit, cut-off reply); the record is written |
+| 130 | stopped with Ctrl-C; the record is written |
 
 ### The record
 

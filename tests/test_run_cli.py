@@ -416,3 +416,33 @@ def test_auto_answer_at_a_terminal_answers_the_question_and_still_asks_the_appro
     (folder,) = _session_folders(tmp_path / "machine", ws)
     summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
     assert summary["answers"]["questions_answered"] == 1 and summary["answers"]["cards_refused"] == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
+def test_ctrl_c_at_a_prompt_ends_the_run_and_leaves_the_record(tmp_path: Path) -> None:
+    import pty
+    import signal
+
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    cmd, ws = _command(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5")
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(cmd, env=_env(machine), stdin=slave, stderr=slave, stdout=subprocess.PIPE)
+    os.close(slave)
+    try:
+        shown = ""
+        deadline = time.time() + 60
+        while "Approval needed" not in shown or not shown.rstrip().endswith(">"):
+            assert time.time() < deadline, shown
+            if select.select([master], [], [], 0.2)[0]:
+                shown += os.read(master, 4096).decode("utf-8", errors="replace")
+        proc.send_signal(signal.SIGINT)
+        assert proc.wait(timeout=30) == 130  # without anyone pressing Enter
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        os.close(master)
+    assert not (ws / "hello.txt").exists()
+    (folder,) = _session_folders(machine, ws)
+    assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["outcome"] == "interrupted"
+

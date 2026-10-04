@@ -722,7 +722,8 @@ def allowed_sites(args: argparse.Namespace) -> list[str]:
 EXIT_FINISHED = 0
 EXIT_CRASHED = 1  # no usable record
 EXIT_USAGE = 2
-EXIT_STOPPED = 3  # timeout, model error, iteration cap, interrupted: the record is written
+EXIT_STOPPED = 3  # timeout, model error, iteration cap: the record is written
+EXIT_INTERRUPTED = 130  # Ctrl-C, as a shell reports it; the record is written
 
 
 def run(args: argparse.Namespace) -> int:
@@ -1037,6 +1038,12 @@ def _run(args: argparse.Namespace) -> int:
             engine.request_interrupt()
         except Exception:  # noqa: BLE001
             pass
+    except KeyboardInterrupt:  # Ctrl-C: stop, and still leave the record
+        outcome = "interrupted"
+        try:
+            engine.request_interrupt()
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001 - recorded, then reported by exit code
         outcome = "crash"
         error_text = "".join(traceback.format_exception(exc))
@@ -1105,6 +1112,8 @@ def _run(args: argparse.Namespace) -> int:
     )
     if outcome == "crash":
         return EXIT_CRASHED
+    if outcome == "interrupted":
+        return EXIT_INTERRUPTED
     if outcome != "completed" and error_text:
         # Why it stopped, in a line: the full text is in the record.
         print(f"openworker run: {redact(error_text.strip().splitlines()[-1])[:600]}", file=sys.stderr, flush=True)
