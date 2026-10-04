@@ -156,7 +156,7 @@ record states it.
 | 1 | the run crashed before it could write a record |
 | 2 | the command line could not be run as given |
 | 3 | the run stopped early (time limit, model error, iteration limit, cut-off reply); the record is written |
-| 130 | stopped with Ctrl-C; the record is written |
+| 130 | stopped with Ctrl-C or a stop signal (what `timeout`, a CI job or `docker stop` sends); the record is written |
 
 ### The record
 
@@ -176,3 +176,8 @@ The trajectory and the exit code are the stable contract.
 A transient provider failure or an empty reply does not end the run: the runner waits
 (30 s, 60 s, 120 s, 240 s, 300 s, 300 s) and re-enters the conversation with a nudge.
 Permanent errors (bad key, unknown model, context overflow) are not retried.
+
+Each retry prints a line with the error and its cause, for example
+`provider error (APIConnectionError: Connection error. Cause: the proxy answered 403
+Forbidden); retry 1/6 in 30s`. A stop signal or Ctrl-C ends the run at once, also during
+the wait between retries, and the record is still written.

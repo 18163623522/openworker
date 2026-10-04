@@ -365,7 +365,12 @@ def scripted_provider(path: Path):
                 # A scripted provider failure: {"error": "Service unavailable",
                 # "error_type": "APIError"} raises an exception of that name, so the
                 # transient-error retry can be tested offline.
+                # "cause" / "cause_type" add the exception underneath, as a client library
+                # wraps a proxy or socket failure.
                 exc_cls = type(str(t.get("error_type") or "APIError"), (Exception,), {})
+                if t.get("cause"):
+                    cause_cls = type(str(t.get("cause_type") or "OSError"), (Exception,), {})
+                    raise exc_cls(str(t["error"])) from cause_cls(str(t["cause"]))
                 raise exc_cls(str(t["error"]))
             calls = [
                 ToolCall(
@@ -484,6 +489,25 @@ def sanitize_key_env() -> list[str]:
     return cleaned
 
 
+def root_cause_text(exc: BaseException) -> str:
+    """The exception at the bottom of a failed model call's chain, in a few words: what a
+    person needs to see beside "Connection error." Empty when there is nothing underneath."""
+    cause = exc.__cause__ or exc.__context__
+    last: Optional[BaseException] = None
+    depth = 0
+    while cause is not None and depth < 8:
+        last = cause
+        cause = cause.__cause__ or cause.__context__
+        depth += 1
+    if last is None:
+        return ""
+    name = type(last).__name__
+    detail = " ".join(str(last).split())[:200]
+    if name == "ProxyError":
+        return f"the proxy answered {detail}" if detail else "the proxy refused the connection"
+    return f"{name}: {detail}" if detail else name
+
+
 def recording_provider(inner, log_path: Path):
     """Wrap a ProviderClient so every model call leaves one line in model_calls.jsonl
     (stop reason, usage, ceiling, effort, serving host) and every exception is written to
@@ -495,8 +519,14 @@ def recording_provider(inner, log_path: Path):
     class Recording(ProviderClient):
         def __init__(self) -> None:
             self.inner = inner
+            # The root cause of the last failed call, for the line the person sees.
+            self.last_cause = ""
 
         def _record(self, exc: BaseException, method: str) -> None:
+            try:
+                self.last_cause = redact(root_cause_text(exc))
+            except Exception:  # noqa: BLE001
+                self.last_cause = ""
             try:
                 lines = [f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {method} ==="]
                 lines.append("".join(traceback.format_exception(exc)))
@@ -928,11 +958,37 @@ def _run(args: argparse.Namespace) -> int:
 
     import signal
 
+    # A stop signal (what `timeout`, a CI job or `docker stop` sends) ends the run: the
+    # engine is interrupted, and a wait between retries is cut short. Without the second
+    # part a run waiting out a provider error ignored the signal until a hard kill.
+    stop: dict[str, Any] = {"asked": False, "loop": None, "event": None}
+
     def _on_term(signum, frame):  # noqa: ARG001
+        stop["asked"] = True
         try:
             engine.request_interrupt()
+            loop, event = stop["loop"], stop["event"]
+            if loop is not None and event is not None:
+                loop.call_soon_threadsafe(event.set)
         finally:
             flush_provisional("killed")
+
+    async def wait_or_stop(seconds: float) -> bool:
+        """Wait before a retry. True when a stop signal arrived instead."""
+        if stop["asked"]:
+            return True
+        try:
+            await asyncio.wait_for(stop["event"].wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    def error_with_cause(data: dict[str, Any]) -> str:
+        """`Connection error.` says nothing; the cause underneath does (a proxy's 403, a
+        refused socket). Shown on the retry line so nobody has to open the record."""
+        text = f"{data.get('error_type')}: {str(data.get('error'))[:120]}"
+        cause = str(getattr(provider, "last_cause", "") or "")
+        return f"{text} Cause: {cause}" if cause and cause not in text else text
 
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:
@@ -942,6 +998,7 @@ def _run(args: argparse.Namespace) -> int:
                 pass
 
     async def consume() -> None:
+        stop["loop"], stop["event"] = asyncio.get_running_loop(), asyncio.Event()
         delays = provider_retry_delays()
         retries = 0
         message: Any = prompt
@@ -978,20 +1035,21 @@ def _run(args: argparse.Namespace) -> int:
                         "delay_seconds": delay,
                         "error": last_data.get("error"),
                         "error_type": last_data.get("error_type"),
+                        "cause": str(getattr(provider, "last_cause", "") or ""),
                     },
                 }
                 events.append(rec)
                 events_fh.write(json.dumps(rec, default=str) + "\n")
                 events_fh.flush()
                 print(
-                    f"openworker run: provider error ({last_data.get('error_type')}: "
-                    f"{str(last_data.get('error'))[:120]}); retry {retries}/{len(delays)} "
-                    f"in {delay}s",
+                    f"openworker run: provider error ({error_with_cause(last_data)}); "
+                    f"retry {retries}/{len(delays)} in {delay}s",
                     file=sys.stderr,
                     flush=True,
                 )
                 flush_provisional("in_progress")
-                await asyncio.sleep(delay)
+                if await wait_or_stop(delay):
+                    break
                 message = PROVIDER_RETRY_NUDGE
                 continue
             # An empty reply ended the turn as "completed": same wait-and-nudge, same budget.
@@ -1023,7 +1081,8 @@ def _run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 flush_provisional("in_progress")
-                await asyncio.sleep(delay)
+                if await wait_or_stop(delay):
+                    break
                 message = EMPTY_REPLY_NUDGE
                 continue
             break
@@ -1073,6 +1132,8 @@ def _run(args: argparse.Namespace) -> int:
     except Exception:  # noqa: BLE001
         pass
 
+    if stop["asked"] and outcome in ("unknown", "timeout"):
+        outcome = "interrupted"  # a stop signal ended it, whatever the last event was
     # Outcome from the events when the loop ended on its own.
     if outcome == "unknown":
         outcome = "ended_without_turn_end"
@@ -1122,7 +1183,11 @@ def _run(args: argparse.Namespace) -> int:
         return EXIT_INTERRUPTED
     if outcome != "completed" and error_text:
         # Why it stopped, in a line: the full text is in the record.
-        print(f"openworker run: {redact(error_text.strip().splitlines()[-1])[:600]}", file=sys.stderr, flush=True)
+        why = redact(error_text.strip().splitlines()[-1])[:600]
+        cause = str(getattr(provider, "last_cause", "") or "")
+        if outcome == "model_error" and cause and cause not in why:
+            why = f"{why} Cause: {cause}"
+        print(f"openworker run: {why}", file=sys.stderr, flush=True)
     return EXIT_FINISHED if outcome == "completed" else EXIT_STOPPED
 
 
