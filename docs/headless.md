@@ -70,12 +70,12 @@ Options:
 | Flag | Meaning |
 |---|---|
 | `--prompt TEXT` / `--prompt-file PATH` | the task |
-| `--workspace DIR` | the folder the agent works in |
+| `--workspace DIR` | the folder the agent works in; the current folder when left out |
 | `--add-dir DIR` | an extra folder the agent may read and write, beside the workspace (repeatable), for a harness whose output contract lives outside the workspace — e.g. `--add-dir /output`. The file tools only write inside the session's folders, in every mode; the shell is not scoped, so without this a delivery would depend on which tool the model happened to pick. Recorded under `args.extra_dirs` in `summary.json`. |
 | `--model ID` | `provider:model` or `provider/model` (first slash splits) |
 | `--mode` | see above; default `bypass-approvals` |
 | `--attendance` | `auto` (the only value here) |
-| `--persona` | `cowork` (default) or `code` |
+| `--coworker ID` | the coworker that does the task, by its id: `cowork` (default) or `code`. An unknown id stops the run with exit code 2 |
 | `--reasoning-effort` | `low` … `max`, sent to the provider; unset = provider default, recorded |
 | `--max-output-tokens`, `--max-iterations`, `--timeout-seconds` | ceilings; `--timeout-seconds 0` when an outer runner enforces its own |
 | `--tool-result-max-bytes` | bound each tool result (default 10,000; 0 = off); full text spilled under `out/tool-output/` |

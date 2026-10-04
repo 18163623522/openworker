@@ -279,7 +279,7 @@ def test_empty_reply_is_nudged_and_a_permanent_error_is_not_retried(tmp_path: Pa
 
 
 def test_code_persona_runs_headless_and_is_recorded(tmp_path: Path) -> None:
-    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--persona", "code"])
+    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--coworker", "code"])
     assert proc.returncode == 0, proc.stdout + proc.stderr
     summary = _summary(out)
     assert summary["outcome"] == "completed" and summary["args"]["persona"] == "code"
@@ -357,3 +357,32 @@ def test_run_help_and_the_top_level_help_mention_the_command() -> None:
         [sys.executable, "-m", "coworker.cli"], env=_env(), capture_output=True, text=True, timeout=120
     )
     assert "run <task>" in top.stdout
+
+
+def test_the_old_persona_flag_still_chooses_the_coworker(tmp_path: Path) -> None:
+    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--persona", "code"])
+    assert proc.returncode == 0, proc.stderr
+    assert _summary(out)["args"]["persona"] == "code"
+
+
+def test_an_unknown_coworker_id_stops_the_run(tmp_path: Path) -> None:
+    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--coworker", "no-such-coworker"])
+    assert proc.returncode == 2
+    assert "no-such-coworker" in proc.stderr and "cowork" in proc.stderr
+    assert not (out / "summary.json").exists()
+
+
+def test_the_workspace_defaults_to_the_current_folder(tmp_path: Path) -> None:
+    here = tmp_path / "here"
+    here.mkdir()
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps(SCRIPT), encoding="utf-8")
+    out = tmp_path / "out"
+    cmd = [
+        sys.executable, "-m", "coworker.cli", "run", "--prompt", TASK,
+        "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals",
+        "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
+    ]
+    proc = subprocess.run(cmd, env=_env(None), cwd=here, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert _summary(out)["args"]["workspace"] == str(here.resolve())

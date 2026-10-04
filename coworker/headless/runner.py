@@ -60,7 +60,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--prompt", "--prompt-text", dest="prompt_text", help="the task text")
     src.add_argument("--prompt-file", help="file containing the task text (UTF-8)")
-    p.add_argument("--workspace", required=True, help="folder the agent works in")
+    p.add_argument(
+        "--workspace", default=".", help="folder the agent works in (default: the current folder)"
+    )
     p.add_argument(
         "--add-dir",
         dest="add_dir",
@@ -76,7 +78,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--model", required=True, help="provider:model (OpenWorker) or provider/model"
     )
-    p.add_argument("--persona", default="cowork", help="OpenWorker persona id (default: cowork)")
+    p.add_argument(
+        "--coworker", dest="persona", default="cowork", metavar="ID",
+        help="the coworker that does the task, by its id (default: cowork)",
+    )
+    # The flag's first name; kept so an existing harness command still works.
+    p.add_argument("--persona", dest="persona", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     p.add_argument("--mode", default="bypass-approvals", choices=MODES)
     p.add_argument(
         "--attendance",
@@ -627,6 +634,17 @@ def run(args: argparse.Namespace) -> int:
     from ..roots import RootDir
     from ..secrets import SecretStore, state_dir
     from ..unattended import DANGEROUS_MODE_WARNING
+
+    # An unknown id would otherwise run the default coworker without saying so.
+    from ..personas.registry import get_registry
+
+    known = get_registry().ids()
+    if args.persona not in known:
+        print(
+            f"openworker run: no coworker has the id {args.persona!r}. Known ids: {', '.join(sorted(known))}",
+            file=sys.stderr,
+        )
+        return 2
 
     workspace = Path(args.workspace).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
