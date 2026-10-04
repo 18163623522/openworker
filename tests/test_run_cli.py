@@ -103,6 +103,24 @@ def test_this_computers_settings_are_read_and_not_changed(tmp_path: Path) -> Non
     assert sorted(p.name for p in machine.iterdir() if p.is_dir()) == ["sessions"]
 
 
+def test_a_run_has_the_connectors_this_computer_has_connected(tmp_path: Path) -> None:
+    """The write is refused here (mode ask, nobody to ask), which is the proof the
+    connector's tool was there to be called; nothing leaves the computer."""
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    (machine / "secrets.json").write_text(json.dumps({"github:default": {"token": "ghp_test", "enabled": True}}), encoding="utf-8")
+    script = [
+        {"text": "", "tool_calls": [{"name": "github_create_issue", "arguments": {"owner": "acme", "repo": "app", "title": "A title", "body": "A body"}}]},
+        {"text": "It was refused."},
+    ]
+    proc, ws, _ = _run(tmp_path, script, "--model", "anthropic/claude-sonnet-5", machine=machine)
+    assert proc.returncode == 0, proc.stderr
+    (folder,) = _session_folders(machine, ws)
+    answers = json.loads((folder / "answers.json").read_text(encoding="utf-8"))
+    assert [row["tool"] for row in answers["rows"]] == ["github_create_issue"]
+    assert json.loads((machine / "secrets.json").read_text(encoding="utf-8")) == {"github:default": {"token": "ghp_test", "enabled": True}}
+
+
 def test_two_runs_in_one_workspace_are_two_sessions(tmp_path: Path) -> None:
     for _ in range(2):
         proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals")
@@ -120,7 +138,7 @@ def test_the_default_mode_asks_and_with_no_terminal_the_card_is_refused(tmp_path
     assert "no terminal is attached" in proc.stderr and "--approval-mode auto-approve" in proc.stderr
     (folder,) = _session_folders(machine, ws)
     summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
-    assert summary["args"]["mode"] == "interactive" and summary["args"]["attendance"] == "auto"
+    assert summary["args"]["approval_mode"] == "ask" and summary["args"]["auto_answer"] is True
     assert summary["answers"]["cards_refused"] == 1
 
 
@@ -437,7 +455,7 @@ def test_at_a_terminal_a_question_is_asked_there(tmp_path: Path) -> None:
     (folder,) = _session_folders(machine, ws)
     messages = json.loads((folder / "messages.json").read_text(encoding="utf-8"))
     assert any(m.get("role") == "tool" and "blue" in str(m.get("content")) for m in messages)
-    assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["args"]["attendance"] == "attended"
+    assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["args"]["auto_answer"] is False
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")

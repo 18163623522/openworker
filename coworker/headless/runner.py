@@ -5,8 +5,8 @@
         --model anthropic/claude-sonnet-5 --approval-mode bypass-approvals --out ./run-record
 
 Each run is its own process with its own engine. It reads this computer's settings (the
-default model, stored keys, the sandbox and its allowed sites) and changes none of them;
-`--isolated` reads nothing at all, for benchmark runs. The model id is accepted in
+default model, stored keys, connectors, the sandbox and its allowed sites) and changes none
+of them, beyond renewing a sign-in; `--isolated` reads nothing at all, for benchmark runs. The model id is accepted in
 OpenWorker's `provider:model` form or the `provider/model` form other tools use.
 
 Approvals and questions are separate. An approval follows `--approval-mode`: asked in the terminal
@@ -842,10 +842,10 @@ def _run(args: argparse.Namespace) -> int:
         question_asker=terminal.ask if terminal is not None and not auto_answer else None,
         directory_requester=terminal.directory if terminal is not None and not auto_answer else None,
         tool_requester=terminal.tool if terminal is not None and not auto_answer else None,
-        # A run reads this computer's settings and changes none of them. A connector
-        # refreshes its stored sign-in as it works, so connectors stay out of a run for
-        # now. (An isolated run has none to begin with.)
-        connector_filter=None if args.isolated else set(),
+        # Connectors: whatever is connected on this computer and the coworker may use,
+        # as in the app. Their sign-ins are renewed under the store's lock
+        # (secrets.SecretStore.exclusive), so a run and the app do not collide. An
+        # isolated run has none: its state folder is empty.
     )
     # Questions: answered by rule when nobody will (coworker/unattended.py). Approvals:
     # with a terminal they reach the person whatever --auto-answer says.
@@ -1293,9 +1293,10 @@ def _write_records(
         "args": {
             "model": model,
             "model_as_given": args.model,
-            "persona": args.coworker,
-            "mode": args.mode,
-            "attendance": args.attendance,
+            "coworker": args.coworker,
+            "approval_mode": args.approval_mode,
+            # Questions were answered by rule (--auto-answer, or no terminal to ask on).
+            "auto_answer": args.attendance == "auto",
             "isolated": bool(args.isolated),
             "max_iterations": args.max_iterations,
             "max_output_tokens": args.max_output_tokens,
@@ -1352,9 +1353,10 @@ def _write_records(
         outcome=outcome,
         reasoning_effort=effort["label"],
         agent_extra={
-            "persona": args.coworker,
-            "mode": args.mode,
-            "attendance": args.attendance,
+            "coworker": args.coworker,
+            "approval_mode": args.approval_mode,
+            # Questions were answered by rule (--auto-answer, or no terminal to ask on).
+            "auto_answer": args.attendance == "auto",
             "reasoning_effort": effort["label"],
             "reasoning_effort_detail": effort["detail"],
         },

@@ -71,11 +71,17 @@ closing summary line go to standard error.
 ### What a run reads from this computer
 
 A run uses this computer's OpenWorker settings: the default model, the stored provider
-keys, the sandbox and its allowed sites. It reads them and changes none of them.
-Connectors are not available in a run yet.
+keys, the connectors you have connected, the sandbox and its allowed sites. It reads them
+and changes none of them. The one thing it may write is a renewed sign-in, as the app does
+when a sign-in expires.
+
+A connector's actions go through the approval mode like any other tool call.
 
 Each run is its own process. Two runs started from two terminals do not share anything
 but those settings, and each is saved as its own session.
+
+The app and any number of runs can work at the same time. When a sign-in needs renewing,
+one of them renews it and the others use the result.
 
 ### Approvals and questions
 

@@ -107,7 +107,7 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
     summary = _summary(out)
     assert summary["outcome"] == "completed"
     assert summary["args"]["model"] == "anthropic:claude-sonnet-5"  # provider/model converted
-    assert summary["args"]["attendance"] == "auto"
+    assert summary["args"]["auto_answer"] is True
     assert summary["tool_calls"] == 2 and summary["tool_calls_denied"] == 0
     assert summary["answers"] == {
         "cards_refused": 0,
@@ -126,7 +126,7 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
     traj = json.loads((tmp_path / "logs" / "trajectory.json").read_text(encoding="utf-8"))
     assert traj["schema_version"] == "ATIF-v1.7"
     assert traj["agent"]["name"] == "openworker" and traj["agent"]["version"].startswith("openworker")
-    assert traj["agent"]["extra"]["attendance"] == "auto"
+    assert traj["agent"]["extra"]["auto_answer"] is True
     assert [s["step_id"] for s in traj["steps"]] == list(range(1, len(traj["steps"]) + 1))
     agent_steps = [s for s in traj["steps"] if s["source"] == "agent"]
     assert agent_steps[0]["tool_calls"][0]["function_name"] == "write_file"
@@ -167,7 +167,7 @@ def test_dangerous_mode_warns_and_clears_the_downloaded_file_floor(tmp_path: Pat
     assert "Dangerously bypass approvals is on" in proc.stderr
     messages = _messages(out)
     assert any(m.get("role") == "notice" and m.get("kind") == "dangerous_mode" for m in messages)
-    assert _summary(out)["args"]["mode"] == "dangerously-bypass-approvals"
+    assert _summary(out)["args"]["approval_mode"] == "dangerously-bypass-approvals"
 
 
 def test_a_question_is_answered_by_the_engine_and_counted(tmp_path: Path) -> None:
@@ -291,7 +291,7 @@ def test_code_persona_runs_headless_and_is_recorded(tmp_path: Path) -> None:
     proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--coworker", "code"])
     assert proc.returncode == 0, proc.stdout + proc.stderr
     summary = _summary(out)
-    assert summary["outcome"] == "completed" and summary["args"]["persona"] == "code"
+    assert summary["outcome"] == "completed" and summary["args"]["coworker"] == "code"
     assert (ws / "hello.txt").read_text(encoding="utf-8") == "hello"
     system = next(m for m in _messages(out) if m["role"] == "system")["content"]
     assert "coding agent" in system
@@ -441,7 +441,7 @@ def test_an_empty_standard_input_stops_the_run(tmp_path: Path) -> None:
     assert not (out / "summary.json").exists()
 
 
-def test_ask_is_recorded_under_the_engines_name_for_it(tmp_path: Path) -> None:
+def test_ask_is_the_default_and_the_engine_gets_its_own_name_for_it(tmp_path: Path) -> None:
     from coworker.headless.runner import parse_args
 
     base = ["--prompt", "x", "--model", "anthropic/claude-sonnet-5", "--out", str(tmp_path)]
