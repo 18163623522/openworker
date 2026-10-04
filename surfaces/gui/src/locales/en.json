@@ -639,7 +639,8 @@
       "search_provider_dest": "your search provider",
       "mcp_server_fallback": "the MCP server",
       "mcp_local": "runs a local program on this computer",
-      "mcp_unknown": "acts through an MCP server"
+      "mcp_unknown": "acts through an MCP server",
+      "network_access": "opens the sandbox to a site"
     },
     "btn": {
       "allow_every_time": "Allow every time",
@@ -660,7 +661,12 @@
       "always_trust": "Always allow this tool",
       "always_trust_title": "Allow {{name}} without asking, permanently — survives restarts; revoke any time on the server's page in Connectors",
       "this_run": "Allow for this request",
-      "this_run_title": "Covers {{name}} until the agent finishes answering your current message. Later calls in this answer run without showing you their arguments first — you'll see them in the transcript afterward. Nothing survives past this answer."
+      "this_run_title": "Covers {{name}} until the agent finishes answering your current message. Later calls in this answer run without showing you their arguments first — you'll see them in the transcript afterward. Nothing survives past this answer.",
+      "always_site": "Always allow {{host}}",
+      "always_site_title": "Adds {{host}} to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine",
+      "network_session": "Allow for this session",
+      "network_always_title": "Adds the site to the allowed sites in Settings ▸ Sandbox, for commands and web tools, on this machine",
+      "network_always_many": "Always allow these sites"
     },
     "preview_less": "show less",
     "preview_all_lines": "show all {{n}} lines",
@@ -681,7 +687,14 @@
     "save_skill_footer": "Approving adds it to your skills on this computer — usable in every conversation from then on.",
     "search_note": "Queries go to your configured search provider.",
     "search_note_current": "Queries go to your configured search provider (currently: {{provider}}).",
-    "reviewer_unsure": "reviewer wasn’t sure: {{note}}"
+    "reviewer_unsure": "reviewer wasn’t sure: {{note}}",
+    "site_wall_note": "{{host}} is not on your allowed sites.",
+    "network": {
+      "not_seen": "No command has tried this site yet.",
+      "blocked_now": "The sandbox blocked this site a moment ago.",
+      "blocked_minutes_one": "The sandbox blocked this site {{count}} minute ago.",
+      "blocked_minutes_other": "The sandbox blocked this site {{count}} minutes ago."
+    }
   },
   "search": {
     "placeholder": "Search chats",
@@ -751,7 +764,23 @@
     "choose_location": "Choose location",
     "channel_add_error": "Couldn't add that channel.",
     "summary_folder_count_one": "{{count}} folder",
-    "summary_folder_count_other": "{{count}} folders"
+    "summary_folder_count_other": "{{count}} folders",
+    "sites": {
+      "title": "Sites",
+      "session_only": "Session only",
+      "settings_hint": "This can be removed from Settings ▸ Sandbox",
+      "add": "Allow a site for this session…",
+      "allow": "Allow",
+      "placeholder": "registry.npmjs.org",
+      "add_note": "For this session only. Commands and web tools reach it at once.",
+      "remove": "Remove from this session",
+      "remove_named": "Remove {{host}} from this session",
+      "none": "Commands and web tools reach no sites yet.",
+      "any_site": "Any site",
+      "any_site_note": "This machine's sandbox allows every site.",
+      "open_settings": "Open Settings ▸ Sandbox",
+      "failed": "That did not work. Try again."
+    }
   },
   "root": {
     "temporary_space": "Temporary folder",
@@ -2639,5 +2668,27 @@
     "open_worker_pane": "View {{name}} beside the lead",
     "full_session": "Open full session",
     "chat_off": "Team chat is off for this team"
+  },
+  "sandboxchip": {
+    "provider_openshell": "OpenShell",
+    "provider_seatbelt": "macOS sandbox",
+    "provider_windows": "Windows sandbox",
+    "sites_one": "{{count}} site",
+    "sites_other": "{{count}} sites",
+    "any_site": "any site",
+    "not_sandboxed": "Not sandboxed",
+    "title": "This session is sandboxed",
+    "sub": "{{provider}}. Commands and file tools run inside it. It was set when the session started.",
+    "folders": "Folders",
+    "read_write": "read and write",
+    "read_only": "read only",
+    "sites_label": "Sites",
+    "no_sites": "None. Add sites in Settings ▸ Sandbox.",
+    "any_site_long": "Any site",
+    "logins": "Shared logins",
+    "not_title": "This session is not sandboxed",
+    "not_sub": "It was opened before the sandbox was switched on. Its commands run on this computer without the sandbox. Start a new session to use the sandbox.",
+    "open_settings": "Open Settings ▸ Sandbox",
+    "session_sites_label": "Sites allowed for this session only"
   }
 }

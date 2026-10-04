@@ -130,6 +130,10 @@ def _grants_of(engine) -> dict[str, Any]:
     return out
 
 
+# Tools whose approval can change the session's allowed sites (the chip refreshes after one).
+_SITE_TOOLS = {"request_network_access", "web_fetch", "web_search", "browser_open_url"}
+
+
 def _grant_offered(outcome, request) -> bool:
     """Whether a persistent grant is legitimately offered for this tool — the server-side
     mirror of what the approval card actually renders (`ApprovalCard.tsx`).
@@ -145,6 +149,7 @@ def _grant_offered(outcome, request) -> bool:
     - ALWAYS_DOMAIN only means anything for a tool carrying a url.
     """
     from ..engine import ApprovalOutcome
+    from ..permissions import NETWORK_ACCESS_TOOL
     from ..risk import RiskClass, classify
 
     name = getattr(request, "tool_name", "")
@@ -152,10 +157,18 @@ def _grant_offered(outcome, request) -> bool:
     args = getattr(request, "arguments", None) or {}
     risk = classify(name, metadata)
 
+    if name == NETWORK_ACCESS_TOOL:
+        # OPE-219: the network-access card offers this session (sent as the domain grant)
+        # and "Always allow"; nothing tool-wide, so each new site gets its own card.
+        return outcome in (ApprovalOutcome.ALWAYS_DOMAIN, ApprovalOutcome.ALWAYS_SITE)
     if outcome is ApprovalOutcome.ALWAYS_COMMAND:
         return risk is RiskClass.EXEC
     if outcome is ApprovalOutcome.ALWAYS_DOMAIN:
         return risk is RiskClass.EGRESS and bool(args.get("url"))
+    if outcome is ApprovalOutcome.ALWAYS_SITE:
+        # OPE-219: only the allowed-sites card offers it, and only egress tools raise it.
+        # (The engine applies it only when the wall named a site for this call.)
+        return risk is RiskClass.EGRESS
     if outcome is ApprovalOutcome.ALWAYS_TRUST:
         # OPE-136 §4: durable per-tool trust is the MCP family's sanctioned lever —
         # the coarsest grant knowledge allows there, and offered nowhere else
@@ -5617,6 +5630,15 @@ class SessionManager:
             message = {**message, "data": {**data, **self.team_card_extras(session_id, data.get("members") or [])}}
         if message.get("type") == "mode_notice" and engine:
             message = {**message, "data": {**data, "mode": engine.permissions.mode.value}}
+        if message.get("type") == "tool_finished" and engine and data.get("name") in _SITE_TOOLS:
+            # OPE-218/219: a card on one of these may have allowed a site; the header chip
+            # shows the session's list as it stands now.
+            from ..sandbox.settings import session_sandbox
+
+            try:
+                message = {**message, "data": {**data, "sandbox": session_sandbox(engine)}}
+            except Exception:  # noqa: BLE001 - the chip must not break a tool result
+                pass
         if message.get("type") == "permission_required" and data.get("name") == "decide_worker_call":
             worker_call = self.worker_call_for(data.get("arguments") or {}, lead_session=session_id)
             if worker_call:
@@ -5942,6 +5964,7 @@ class SessionManager:
             ApprovalOutcome.ALWAYS_TOOL,
             ApprovalOutcome.ALWAYS_COMMAND,
             ApprovalOutcome.ALWAYS_DOMAIN,
+            ApprovalOutcome.ALWAYS_SITE,
             # ALWAYS_TRUST was unlisted (a raw resolve could mint an inert-but-real
             # trust rule for a non-MCP tool — evaluate ignores those, but the store
             # shouldn't carry them); THIS_RUN validates like every grant.
@@ -7443,6 +7466,76 @@ class SessionManager:
         self.session_store.touch_workspace(str(resolved))
         self._promotion_rebuild.add(session_id)
         return {"ok": True, "path": str(resolved), "roots": self.get_roots(session_id)}
+
+    # -- the session's allowed sites (OPE-219): the person's own list for one session ------
+    def session_sites(self, session_id: str) -> dict[str, Any]:
+        """The session's sandbox as its header chip and Access section show it: the sites
+        from Settings, and those allowed for this session only."""
+        from ..sandbox.settings import session_sandbox
+
+        engine = self._engines.get(session_id)
+        if engine is None:
+            return {"state": "off"}
+        try:
+            return session_sandbox(engine)
+        except Exception:  # noqa: BLE001 - a list must not break the pane
+            return {"state": "off"}
+
+    def _session_site_engine(self, session_id: str, host: str):
+        """(engine, "host:port") for a change to the session's own sites, or an error text.
+        Exact host names only, as on the agent's card: wildcards stay in Settings."""
+        from ..permissions import network_request_hosts
+
+        engine = self._engines.get(session_id)
+        if engine is None or getattr(engine.permissions, "sandbox_sites", None) is None:
+            return None, "", "This session has no allowed-sites list."
+        good, bad = network_request_hosts({"hosts": [host]})
+        if bad or len(good) != 1:
+            return None, "", "Give an exact host name, such as registry.npmjs.org (add a port only when it is not 443)."
+        return engine, good[0], ""
+
+    def allow_session_site(self, session_id: str, host: str) -> dict[str, Any]:
+        """The person allows a site for this session, from the Access section. Commands and
+        web tools reach it at once; nothing is stored, and it ends with the session."""
+        engine, entry, error = self._session_site_engine(session_id, host)
+        if engine is None:
+            return {"ok": False, "error": error}
+        permissions = engine.permissions
+        if permissions._entry_allowed(entry):
+            return {"ok": True, "sandbox": self.session_sites(session_id)}
+        permissions.allow_network_hosts([entry], always=False)
+        failed = permissions.site_open_errors.get(entry)
+        if failed:
+            # The sandbox did not take it: do not leave a site listed that commands lack.
+            permissions.site_open_errors.pop(entry, None)
+            if entry in permissions.session_sites:
+                permissions.session_sites.remove(entry)
+            permissions.session_allow_domains.discard(entry.rsplit(":", 1)[0])
+            return {"ok": False, "error": f"The sandbox could not take {entry}: {failed}", "sandbox": self.session_sites(session_id)}
+        self._audit_session_site(session_id, "allowed", entry)
+        return {"ok": True, "sandbox": self.session_sites(session_id)}
+
+    def remove_session_site(self, session_id: str, host: str) -> dict[str, Any]:
+        """The person takes back a site allowed for this session. Sites from Settings are
+        not removed here."""
+        engine, entry, error = self._session_site_engine(session_id, host)
+        if engine is None:
+            return {"ok": False, "error": error}
+        try:
+            removed = engine.permissions.remove_session_site(entry)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"The sandbox could not drop {entry}: {exc}", "sandbox": self.session_sites(session_id)}
+        if not removed:
+            return {"ok": False, "error": f"{entry} is not a site allowed for this session. Sites from Settings are changed in Settings > Sandbox.", "sandbox": self.session_sites(session_id)}
+        self._audit_session_site(session_id, "removed", entry)
+        return {"ok": True, "sandbox": self.session_sites(session_id)}
+
+    def _audit_session_site(self, session_id: str, what: str, entry: str) -> None:
+        try:
+            # Allowing a site widens what the session reaches ("raised"); taking it back narrows it.
+            self.audit_autonomy_change(session_id, "session_site", *(("", entry) if what == "allowed" else (entry, "")))
+        except Exception:  # noqa: BLE001 - the audit line must not fail the change
+            pass
 
     def add_root(
         self, session_id: str, path: str, writable: bool = False

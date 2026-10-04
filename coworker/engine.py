@@ -72,6 +72,9 @@ class ApprovalOutcome(str, Enum):
     ALWAYS_TOOL = "always_tool"
     ALWAYS_COMMAND = "always_command"
     ALWAYS_DOMAIN = "always_domain"
+    # OPE-219: the allowed-sites card's durable choice. The site joins the machine's
+    # sandbox list (Settings > Sandbox), for commands and web tools alike.
+    ALWAYS_SITE = "always_site"
     # Session-wide grant for classifier-approved read-only shell commands (readonly.py).
     READONLY_SESSION = "readonly_session"
     # OPE-136 durable trust: persist a per-tool "don't ask" rule for an MCP tool —
@@ -1698,6 +1701,17 @@ class TurnEngine:
                         else {}
                     ),
                     "category": getattr(metadata, "category", ""),
+                    # OPE-219: the host the sandbox's allowed-sites wall stopped. The card
+                    # says so and offers to add the site to the machine's list.
+                    **({"site_wall": decision.site} if decision.site else {}),
+                    # The agent asked for sites its commands cannot reach: the card names
+                    # them, gives the agent's reason, and says whether the sandbox has in
+                    # fact blocked each one (the person's check on the request).
+                    **(
+                        {"network_request": self._network_request_payload(tool_call, decision)}
+                        if decision.network_hosts
+                        else {}
+                    ),
                     # The exact target a standing rule could pin, or None when the call
                     # isn't eligible (no declared target arg / exec risk). Surfaces use it
                     # to offer "Allow every time" on automation-run approval cards only.
@@ -1794,7 +1808,15 @@ class TurnEngine:
                     reason=reason,
                 )
             else:
-                if outcome is ApprovalOutcome.ALWAYS_TOOL:
+                if decision.network_hosts:
+                    # Any approval of a network request opens the sites for this session;
+                    # "Always allow" also stores them. Never a tool-wide grant: each ask
+                    # for a new site gets its own card.
+                    self.permissions.allow_network_hosts(
+                        decision.network_hosts,
+                        always=outcome is ApprovalOutcome.ALWAYS_SITE,
+                    )
+                elif outcome is ApprovalOutcome.ALWAYS_TOOL:
                     self.permissions.allow_tool_for_session(tool_call.name)
                 elif outcome is ApprovalOutcome.ALWAYS_COMMAND:
                     self.permissions.allow_command_for_session(
@@ -1804,6 +1826,16 @@ class TurnEngine:
                     self.permissions.allow_domain_for_session(
                         str(tool_call.arguments.get("url", ""))
                     )
+                elif outcome is ApprovalOutcome.ALWAYS_SITE and decision.site:
+                    self.permissions.allow_site_always(decision.site)
+                # A session grant given on the allowed-sites card must also open the
+                # wall for that site, or the next call would raise the same card
+                # (web_search has no url: its site is the search provider's host).
+                if decision.site and outcome in (
+                    ApprovalOutcome.ALWAYS_TOOL,
+                    ApprovalOutcome.ALWAYS_DOMAIN,
+                ):
+                    self.permissions.allow_site_for_session(decision.site)
                 elif outcome is ApprovalOutcome.READONLY_SESSION:
                     self.permissions.allow_readonly_for_session()
                 elif outcome is ApprovalOutcome.ALWAYS_TRUST:
@@ -2352,6 +2384,28 @@ class TurnEngine:
                 "result_preview": _preview(result),
             },
         )
+
+    def _network_request_payload(self, tool_call: ToolCall, decision: Any) -> dict[str, Any]:
+        """What the network-access card shows: each site, and how long ago the session's
+        sandbox last blocked it (None when no command has tried it). `evidence` is false
+        where the sandbox cannot say what it blocked; the card then claims nothing."""
+        last: dict[str, float] = {}
+        workspace = getattr(self, "sandbox_workspace", None)
+        evidence = bool(getattr(workspace, "reports_blocked", False))
+        try:
+            for when, entry in (workspace.blocked_since(0.0) if evidence else []):
+                last[entry] = max(when, last.get(entry, 0.0))
+        except Exception:  # noqa: BLE001 - evidence is a help, never a reason to fail the card
+            last, evidence = {}, False
+        now = time.time()
+        return {
+            "reason": str((tool_call.arguments or {}).get("reason", ""))[:500],
+            "evidence": evidence,
+            "hosts": [
+                {"host": entry, "blocked_seconds_ago": (max(0, int(now - last[entry])) if entry in last else None)}
+                for entry in decision.network_hosts
+            ],
+        }
 
     async def _handle_directory_request(
         self, tool_call: ToolCall
