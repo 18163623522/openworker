@@ -63,7 +63,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     # With neither flag, the task is read from standard input when it is piped in.
     src = p.add_mutually_exclusive_group()
-    src.add_argument("--prompt", "--prompt-text", dest="prompt_text", help="the task text")
+    src.add_argument("--prompt", help="the task text")
     src.add_argument(
         "--prompt-file", help="file containing the task text (UTF-8); - reads standard input"
     )
@@ -618,8 +618,8 @@ class NoPrompt(Exception):
 
 
 def _read_prompt(args: argparse.Namespace) -> str:
-    if args.prompt_text is not None:
-        return args.prompt_text
+    if args.prompt is not None:
+        return args.prompt
     if args.prompt_file not in (None, "-"):
         return Path(args.prompt_file).read_text(encoding="utf-8")
     # Piped in: `cat task.md | openworker run`. A terminal is not read: the command would

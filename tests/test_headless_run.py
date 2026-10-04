@@ -371,7 +371,11 @@ def test_run_help_and_the_top_level_help_mention_the_command() -> None:
 
 
 @pytest.mark.parametrize(
-    "old", [["--mode", "bypass-approvals"], ["--persona", "code"], ["--attendance", "auto"], ["--approval-mode", "interactive"]]
+    "old",
+    [
+        ["--mode", "bypass-approvals"], ["--persona", "code"], ["--attendance", "auto"],
+        ["--approval-mode", "interactive"], ["--prompt-text", "x"],
+    ],
 )
 def test_the_earlier_flag_names_are_gone(tmp_path: Path, old: list[str]) -> None:
     # `--mode` in particular must be refused, not read as a shortened `--model`.
