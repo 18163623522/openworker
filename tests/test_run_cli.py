@@ -535,3 +535,83 @@ def test_with_auto_answer_a_folder_request_is_declined_by_rule(tmp_path: Path) -
     (folder,) = _session_folders(machine, ws)
     assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["answers"]["directory_requests_declined"] == 1
 
+
+# -- a failing model call ---------------------------------------------------------------
+
+
+def test_the_root_cause_is_the_bottom_of_the_chain() -> None:
+    from coworker.headless.runner import root_cause_text
+
+    ProxyError = type("ProxyError", (Exception,), {})
+    try:
+        try:
+            try:
+                raise ProxyError("403 Forbidden")
+            except Exception as low:
+                raise RuntimeError("httpx failed") from low
+        except Exception as mid:
+            raise ConnectionError("Connection error.") from mid
+    except Exception as top:
+        assert root_cause_text(top) == "the proxy answered 403 Forbidden"
+
+    try:
+        try:
+            raise OSError("[Errno 111] Connection refused")
+        except Exception as low:
+            raise ConnectionError("Connection error.") from low
+    except Exception as top:
+        assert root_cause_text(top) == "OSError: [Errno 111] Connection refused"
+
+    assert root_cause_text(ValueError("nothing underneath")) == ""
+
+
+REFUSED_BY_A_PROXY = {"error": "Connection error.", "error_type": "APIConnectionError", "cause": "403 Forbidden", "cause_type": "ProxyError"}
+
+
+def test_the_retry_line_says_why_the_model_call_failed(tmp_path: Path) -> None:
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    cmd, ws = _command(tmp_path, [REFUSED_BY_A_PROXY, {"text": "Recovered."}], "--model", "anthropic/claude-sonnet-5")
+    env = {**_env(machine), "OPENWORKER_RUN_RETRY_DELAYS": "0"}
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert "provider error (APIConnectionError: Connection error. Cause: the proxy answered 403 Forbidden); retry 1/1 in 0s" in proc.stderr
+    (folder,) = _session_folders(machine, ws)
+    events = [json.loads(line) for line in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    (retry,) = [e for e in events if e["type"] == "provider_retry"]
+    assert retry["data"]["cause"] == "the proxy answered 403 Forbidden"
+
+    # When the retries run out, the closing line says why as well.
+    second = tmp_path / "second"
+    second.mkdir()
+    cmd, _ws = _command(second, [REFUSED_BY_A_PROXY, REFUSED_BY_A_PROXY], "--model", "anthropic/claude-sonnet-5")
+    proc = subprocess.run(cmd, env={**_env(machine), "OPENWORKER_RUN_RETRY_DELAYS": "0"}, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 3
+    assert proc.stderr.rstrip().splitlines()[-1].endswith("Cause: the proxy answered 403 Forbidden")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sends a stop signal")
+def test_a_stop_signal_ends_the_run_during_the_wait_between_retries(tmp_path: Path) -> None:
+    import signal
+
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    cmd, ws = _command(tmp_path, [REFUSED_BY_A_PROXY, {"text": "never reached"}], "--model", "anthropic/claude-sonnet-5")
+    env = {**_env(machine), "OPENWORKER_RUN_RETRY_DELAYS": "600"}
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        shown = ""
+        deadline = time.time() + 60
+        while "retry 1/1 in 600s" not in shown:
+            assert time.time() < deadline, shown
+            if select.select([proc.stderr], [], [], 0.2)[0]:
+                shown += os.read(proc.stderr.fileno(), 4096).decode("utf-8", errors="replace")
+        time.sleep(0.5)  # it is now waiting out the 600 seconds
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 130  # it stopped; it did not wait
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    (folder,) = _session_folders(machine, ws)
+    assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["outcome"] == "interrupted"
+

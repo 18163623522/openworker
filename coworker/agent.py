@@ -48,6 +48,7 @@ from .tools.toolreq import request_tool_tool
 from .tools.subagent import explorer_tools
 from .web import make_web_fetch_tool, make_web_search_tool
 from .workspace_trust import WorkspaceTrustStore
+from .sandbox import inside as _openshell
 from .sandbox.selection import select as select_sandbox
 from .sandbox.workspace import open_workspace
 from .tools.todo import TodoList
@@ -205,6 +206,10 @@ def _skill_dirs(workspace: Optional[Path]) -> list[Path]:
     dirs = [state_dir() / "skills"]
     if workspace is not None:
         dirs.append(workspace / ".coworker" / "skills")
+    # Inside an OpenShell sandbox its own skills join the menu (sandbox/inside.py). The
+    # folder may be missing, or filled in later, when the user turns proposals on.
+    if _openshell.inside_openshell():
+        dirs.append(_openshell.SKILLS_DIR)
     return dirs
 
 
@@ -310,6 +315,13 @@ def build_engine(
     # it (2026-09-14: the first trial spilled under the run's log folder and read_file
     # answered "path escapes the session's directories"). The workspace itself is never
     # written to, so a repository or task tree stays clean.
+    # Inside an OpenShell sandbox the agent may read OpenShell's skills folder: the policy
+    # skill there points to a longer file beside it.
+    if _openshell.inside_openshell() and root_list and not any(
+        _is_within(_openshell.SKILLS_DIR, r.path) for r in root_list
+    ):
+        root_list.append(RootDir(path=_openshell.SKILLS_DIR, writable=False, label="openshell-skills"))
+
     if tool_result_spill_dir is not None:
         spill_dir: Optional[Path] = Path(tool_result_spill_dir).expanduser().resolve()
     else:
@@ -657,6 +669,11 @@ def build_engine(
             text = sandbox_ctx()
             if text:
                 parts.append(text)
+        # OpenWorker itself inside an OpenShell sandbox: what a blocked request looks like
+        # and what to do. Read each turn, since the policy skill can appear mid-session.
+        openshell_ctx = _openshell.context()
+        if openshell_ctx:
+            parts.append(openshell_ctx)
         # Live skill menu (SKILLS-SPEC §4.1): recomputed every turn like the roots list, so
         # a skill installed/enabled/disabled mid-session applies from the NEXT MESSAGE —
         # no new session, no lost context.

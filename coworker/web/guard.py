@@ -77,6 +77,15 @@ def _vet(url: str) -> tuple[Optional[str], Optional[str]]:
         reason = _blocked_reason(literal)
         return (f"refusing to fetch {host}: {reason}" if reason else None), None
 
+    # Inside an OpenShell sandbox no name resolves and nothing connects directly: every
+    # request goes to OpenShell's proxy, which looks the name up itself and holds it to the
+    # sandbox's policy. So the name is not vetted or pinned here; the client hands it to
+    # the proxy. (A literal address was still judged above.)
+    from ..sandbox.inside import inside_openshell, proxied
+
+    if inside_openshell() and proxied(parts.scheme):
+        return None, None
+
     try:
         infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80),
                                    proto=socket.IPPROTO_TCP)
