@@ -2,14 +2,14 @@
 
     openworker run --prompt "..."                      # here, with this computer's settings
     openworker run --isolated --prompt "..." --workspace /path/to/project \
-        --model anthropic/claude-sonnet-5 --mode bypass-approvals --out ./run-record
+        --model anthropic/claude-sonnet-5 --approval-mode bypass-approvals --out ./run-record
 
 Each run is its own process with its own engine. It reads this computer's settings (the
 default model, stored keys, the sandbox and its allowed sites) and changes none of them;
 `--isolated` reads nothing at all, for benchmark runs. The model id is accepted in
 OpenWorker's `provider:model` form or the `provider/model` form other tools use.
 
-Approvals and questions are separate. An approval follows `--mode`: asked in the terminal
+Approvals and questions are separate. An approval follows `--approval-mode`: asked in the terminal
 (headless/terminal.py), refused and recorded when there is none. A question is asked in the
 terminal, or answered by rule with `--auto-answer` or no terminal (coworker/unattended.py).
 Nothing hangs.
@@ -48,28 +48,18 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-# How tool calls are approved. `ask` is the app's "Ask for approval"; the engine stores
-# it as "interactive".
-MODES = ["ask", "auto-approve", "bypass-approvals", "dangerously-bypass-approvals"]
-# Accepted but unlisted: the stored name of `ask`, and older spellings a harness may pass.
-_MODE_STORED = {"ask": "interactive", "interactive": "interactive", "custom": "custom", "auto": "auto"}
-
-
-def _mode_arg(value: str) -> str:
-    name = value.strip().lower()
-    if name in MODES or name in _MODE_STORED:
-        return _MODE_STORED.get(name, name)
-    raise argparse.ArgumentTypeError(f"unknown mode {value!r} (choose from {', '.join(MODES)})")
-
-
-ATTENDANCE = ["auto"]  # `inbox` needs the server's Inbox; `attended` needs a screen
+# How tool calls are approved (--approval-mode). `ask` is the app's "Ask for approval";
+# the engine stores it as "interactive".
+APPROVAL_MODES = ["ask", "auto-approve", "bypass-approvals", "dangerously-bypass-approvals"]
 RETRY_DELAYS_ENV = "OPENWORKER_RUN_RETRY_DELAYS"
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="openworker run",
-        description="Run one task with no human present, and record it.",
+        description="Run one task to the end, and record it.",
+        # No shortened flags: `--mode` would otherwise be read as `--model`.
+        allow_abbrev=False,
     )
     # With neither flag, the task is read from standard input when it is piped in.
     src = p.add_mutually_exclusive_group()
@@ -98,24 +88,20 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "setting; required with --isolated)",
     )
     p.add_argument(
-        "--coworker", dest="persona", default="cowork", metavar="ID",
+        "--coworker", default="cowork", metavar="ID",
         help="the coworker that does the task, by its id (default: cowork)",
     )
-    # The flag's first name; kept so an existing harness command still works.
-    p.add_argument("--persona", dest="persona", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     p.add_argument(
-        "--mode", default="interactive", type=_mode_arg, metavar="MODE",
-        help="how tool calls are approved: " + ", ".join(MODES) + " (default: ask). At a "
-        "terminal an approval is asked there; with no terminal it is refused and recorded.",
+        "--approval-mode", default="ask", choices=APPROVAL_MODES,
+        help="how tool calls are approved (default: ask). At a terminal an approval is "
+        "asked there; with no terminal it is refused and recorded.",
     )
     p.add_argument(
         "--auto-answer", action="store_true",
         help="nobody will answer the coworker's questions: it is told so and carries on. "
         "Without this, a question is asked in the terminal. Implied when no terminal is "
-        "attached. Approvals are separate: see --mode.",
+        "attached. Approvals are separate: see --approval-mode.",
     )
-    # The flag --auto-answer replaced; `--attendance auto` still means it.
-    p.add_argument("--attendance", default=None, choices=ATTENDANCE, help=argparse.SUPPRESS)
     p.add_argument(
         "--allow-site", dest="allow_site", action="append", default=None, metavar="HOST[:PORT]",
         help="a site this run's commands and web tools may reach, beside this computer's "
@@ -187,7 +173,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "Together/Moonshot reasoning_effort). Default: nothing sent; the provider default is recorded",
     )
     p.add_argument("--scripted", default=None, help=argparse.SUPPRESS)  # tests: a fake model
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # The engine's name for the mode, which is also what the record states.
+    args.mode = "interactive" if args.approval_mode == "ask" else args.approval_mode
+    args.attendance = None  # set when the run knows who answers: "auto" or "attended"
+    return args
 
 
 # -- isolation ----------------------------------------------------------------------------
@@ -778,8 +768,8 @@ def _run(args: argparse.Namespace) -> int:
     from ..personas.registry import get_registry
 
     known = get_registry().ids()
-    if args.persona not in known:
-        raise UsageError(f"no coworker has the id {args.persona!r}. Known ids: {', '.join(sorted(known))}")
+    if args.coworker not in known:
+        raise UsageError(f"no coworker has the id {args.coworker!r}. Known ids: {', '.join(sorted(known))}")
 
     out.mkdir(parents=True, exist_ok=True)
     # Made now, not on first use: a sandbox is given the run's folders when it starts, and
@@ -806,12 +796,12 @@ def _run(args: argparse.Namespace) -> int:
     from .terminal import Terminal
 
     terminal = Terminal.attached(cwd=workspace)
-    auto_answer = bool(args.auto_answer) or args.attendance == "auto" or terminal is None
+    auto_answer = bool(args.auto_answer) or terminal is None
     args.attendance = "auto" if auto_answer else "attended"
     if terminal is None and mode is Mode.INTERACTIVE:
         print(
             "openworker run: no terminal is attached, so every approval is refused in mode "
-            "ask. For a run with nobody present use --mode auto-approve or --mode bypass-approvals.",
+            "ask. For a run with nobody present use --approval-mode auto-approve or bypass-approvals.",
             file=sys.stderr,
             flush=True,
         )
@@ -831,7 +821,7 @@ def _run(args: argparse.Namespace) -> int:
         answers.sink(row)
 
     engine = build_engine(
-        agent=get_agent(args.persona),
+        agent=get_agent(args.coworker),
         workspace=workspace,
         roots=roots,
         model=model,
@@ -1287,7 +1277,7 @@ def _write_records(
         "args": {
             "model": model,
             "model_as_given": args.model,
-            "persona": args.persona,
+            "persona": args.coworker,
             "mode": args.mode,
             "attendance": args.attendance,
             "isolated": bool(args.isolated),
@@ -1346,7 +1336,7 @@ def _write_records(
         outcome=outcome,
         reasoning_effort=effort["label"],
         agent_extra={
-            "persona": args.persona,
+            "persona": args.coworker,
             "mode": args.mode,
             "attendance": args.attendance,
             "reasoning_effort": effort["label"],

@@ -66,7 +66,7 @@ def _session_folders(machine: Path, ws: Path) -> list[Path]:
 
 
 def test_a_run_is_saved_under_the_state_folder_by_workspace_path(tmp_path: Path) -> None:
-    proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals")
+    proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals")
     assert proc.returncode == 0, proc.stderr
     assert (ws / "hello.txt").read_text(encoding="utf-8") == "hello"
     (folder,) = _session_folders(machine, ws)
@@ -94,7 +94,7 @@ def test_this_computers_settings_are_read_and_not_changed(tmp_path: Path) -> Non
     (machine / "config.toml").write_text('model = "anthropic:claude-sonnet-5"\n', encoding="utf-8")
     before = {p.name: p.read_bytes() for p in machine.iterdir() if p.is_file()}
 
-    proc, ws, _ = _run(tmp_path, WRITE_THEN_DONE, "--mode", "bypass-approvals", machine=machine)  # no --model
+    proc, ws, _ = _run(tmp_path, WRITE_THEN_DONE, "--approval-mode", "bypass-approvals", machine=machine)  # no --model
     assert proc.returncode == 0, proc.stderr
     (folder,) = _session_folders(machine, ws)
     assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["args"]["model"] == "anthropic:claude-sonnet-5"
@@ -105,7 +105,7 @@ def test_this_computers_settings_are_read_and_not_changed(tmp_path: Path) -> Non
 
 def test_two_runs_in_one_workspace_are_two_sessions(tmp_path: Path) -> None:
     for _ in range(2):
-        proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals")
+        proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals")
         assert proc.returncode == 0, proc.stderr
     assert len(_session_folders(machine, ws)) == 2
 
@@ -117,7 +117,7 @@ def test_the_default_mode_asks_and_with_no_terminal_the_card_is_refused(tmp_path
     proc, ws, machine = _run(tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5")
     assert proc.returncode == 0, proc.stderr  # the model's turn finished; the write was refused
     assert not (ws / "hello.txt").exists()
-    assert "no terminal is attached" in proc.stderr and "--mode auto-approve" in proc.stderr
+    assert "no terminal is attached" in proc.stderr and "--approval-mode auto-approve" in proc.stderr
     (folder,) = _session_folders(machine, ws)
     summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
     assert summary["args"]["mode"] == "interactive" and summary["args"]["attendance"] == "auto"
@@ -129,7 +129,7 @@ def test_with_no_terminal_a_question_is_answered_by_rule(tmp_path: Path) -> None
         {"text": "", "tool_calls": [{"name": "ask_user", "arguments": {"question": "Which colour?", "options": ["red", "blue"]}}]},
         {"text": "Going with the safe one."},
     ]
-    proc, ws, machine = _run(tmp_path, script, "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals")
+    proc, ws, machine = _run(tmp_path, script, "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals")
     assert proc.returncode == 0, proc.stderr
     (folder,) = _session_folders(machine, ws)
     assert json.loads((folder / "summary.json").read_text(encoding="utf-8"))["answers"]["questions_answered"] == 1
@@ -137,7 +137,7 @@ def test_with_no_terminal_a_question_is_answered_by_rule(tmp_path: Path) -> None
 
 def test_a_run_that_stops_early_exits_3_and_says_why(tmp_path: Path) -> None:
     fail = {"error": "Invalid API key provided", "error_type": "AuthenticationError"}
-    proc, ws, machine = _run(tmp_path, [fail], "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals")
+    proc, ws, machine = _run(tmp_path, [fail], "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals")
     assert proc.returncode == 3
     assert "outcome=model_error" in proc.stderr and "Invalid API key provided" in proc.stderr
     assert proc.stdout == ""  # no answer was given
@@ -178,7 +178,7 @@ def test_allowed_sites_come_from_the_flag_and_the_file(tmp_path: Path) -> None:
 
 def test_allow_site_says_so_when_no_list_holds_the_run(tmp_path: Path) -> None:
     proc, _ws, _machine = _run(
-        tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals", "--allow-site", "example.com",
+        tmp_path, WRITE_THEN_DONE, "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals", "--allow-site", "example.com",
     )
     assert proc.returncode == 0, proc.stderr
     assert "--allow-site has no effect here" in proc.stderr
@@ -394,7 +394,7 @@ QUESTION_THEN_WRITE = [
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
 def test_at_a_terminal_a_question_is_asked_there(tmp_path: Path) -> None:
     code, shown, _out, ws = _at_a_terminal(
-        tmp_path, QUESTION_THEN_WRITE, [("Which colour?", "2")], "--mode", "bypass-approvals",
+        tmp_path, QUESTION_THEN_WRITE, [("Which colour?", "2")], "--approval-mode", "bypass-approvals",
     )
     assert code == 0, shown
     assert "The coworker asks:" in shown and "2. blue" in shown

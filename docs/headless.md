@@ -81,7 +81,7 @@ but those settings, and each is saved as its own session.
 
 These are separate, and each has its own switch.
 
-**Approvals** follow `--mode` (the table above). The default is `ask`.
+**Approvals** follow `--approval-mode` (the table above). The default is `ask`.
 
 | | An approval card |
 |---|---|
@@ -89,8 +89,8 @@ These are separate, and each has its own switch.
 | No terminal (a pipe, a CI job) | refused and recorded; nothing hangs |
 
 With no terminal, mode `ask` refuses every approval, and the run says so when it starts.
-For a run with nobody present, use `--mode auto-approve` (the reviewer decides) or
-`--mode bypass-approvals`.
+For a run with nobody present, use `--approval-mode auto-approve` (the reviewer decides)
+or `--approval-mode bypass-approvals`.
 
 **Questions** follow `--auto-answer`.
 
@@ -115,7 +115,7 @@ set when it starts, with `--workspace` and `--add-dir`.
 | `--add-dir DIR` | an extra folder the agent may read and write, beside the workspace (repeatable), for a harness whose output contract lives outside the workspace — e.g. `--add-dir /output`. The file tools only write inside the session's folders, in every mode; the shell is not scoped, so without this a delivery would depend on which tool the model happened to pick. Recorded under `args.extra_dirs` in `summary.json`. |
 | `--coworker ID` | the coworker that does the task, by its id: `cowork` (default) or `code`. An unknown id stops the run with exit code 2 |
 | `--model ID` | `provider:model` or `provider/model` (first slash splits). Default: this computer's setting |
-| `--mode` | `ask` (default), `auto-approve`, `bypass-approvals`, `dangerously-bypass-approvals` |
+| `--approval-mode` | `ask` (default), `auto-approve`, `bypass-approvals`, `dangerously-bypass-approvals` |
 | `--auto-answer` | nobody will answer questions; see above |
 | `--allow-site HOST[:PORT]` | a site this run's commands and web tools may reach, beside this computer's allowed sites (repeatable). For this run only; the computer's list is not changed. Exact host names, no wildcards |
 | `--allow-sites-file FILE` | the same, from a file: one `HOST[:PORT]` per line, `#` starts a comment |
@@ -131,14 +131,14 @@ set when it starts, with `--workspace` and `--add-dir`.
 
 ```
 openworker run --isolated --prompt-file task.md --workspace /work \
-    --model anthropic/claude-sonnet-5 --mode bypass-approvals --out ./run-record
+    --model anthropic/claude-sonnet-5 --approval-mode bypass-approvals --out ./run-record
 ```
 
 `--isolated` reads nothing from the computer: no settings, no stored keys, no sandbox. The
 model key comes from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
 `TOGETHER_API_KEY`, `OPENROUTER_API_KEY`, …), and OpenWorker's state and scratch folders
 are placed under `--out`. Two runs of the same task on two computers then start from the
-same place. It needs `--out` and `--model`, and a harness should pass `--mode` too, so the
+same place. It needs `--out` and `--model`, and a harness should pass `--approval-mode` too, so the
 record states it.
 
 ### Exit code

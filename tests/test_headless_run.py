@@ -62,7 +62,7 @@ def _run(
         sys.executable, "-m", "coworker.cli", "run",
         "--prompt", prompt,
         "--workspace", str(ws), "--model", model,
-        "--mode", mode, "--out", str(out),
+        "--approval-mode", mode, "--out", str(out),
         "--trajectory-atif", str(tmp_path / "logs" / "trajectory.json"),
         "--scripted", str(path), "--timeout-seconds", "120",
         *(["--isolated"] if isolated else []),
@@ -362,17 +362,22 @@ def test_run_help_and_the_top_level_help_mention_the_command() -> None:
     )
     assert proc.returncode == 0 and "usage: openworker run" in proc.stdout
     assert "--auto-answer" in proc.stdout and "--isolated" in proc.stdout
-    assert "--attendance" not in proc.stdout and "--scripted" not in proc.stdout  # unlisted flags stay hidden
+    assert "--approval-mode" in proc.stdout and "--coworker" in proc.stdout
+    assert "--scripted" not in proc.stdout  # test-only flag stays hidden
     top = subprocess.run(
         [sys.executable, "-m", "coworker.cli"], env=_env(), capture_output=True, text=True, timeout=120
     )
     assert "  run  " in top.stdout and "--prompt" in top.stdout
 
 
-def test_the_old_persona_flag_still_chooses_the_coworker(tmp_path: Path) -> None:
-    proc, ws, out = _run(tmp_path, "bypass-approvals", extra=["--persona", "code"])
-    assert proc.returncode == 0, proc.stderr
-    assert _summary(out)["args"]["persona"] == "code"
+@pytest.mark.parametrize(
+    "old", [["--mode", "bypass-approvals"], ["--persona", "code"], ["--attendance", "auto"], ["--approval-mode", "interactive"]]
+)
+def test_the_earlier_flag_names_are_gone(tmp_path: Path, old: list[str]) -> None:
+    # `--mode` in particular must be refused, not read as a shortened `--model`.
+    proc, ws, out = _run(tmp_path, "ask", extra=old)
+    assert proc.returncode == 2 and "openworker run: error:" in proc.stderr
+    assert not (out / "summary.json").exists() and not (ws / "hello.txt").exists()
 
 
 def test_an_unknown_coworker_id_stops_the_run(tmp_path: Path) -> None:
@@ -390,7 +395,7 @@ def test_the_workspace_defaults_to_the_current_folder(tmp_path: Path) -> None:
     out = tmp_path / "out"
     cmd = [
         sys.executable, "-m", "coworker.cli", "run", "--prompt", TASK,
-        "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals",
+        "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals",
         "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
     ]
     proc = subprocess.run(cmd, env=_env(None), cwd=here, capture_output=True, text=True, timeout=300)
@@ -410,7 +415,7 @@ def _run_piped(tmp_path: Path, stdin: str, extra: list[str] | None = None) -> tu
     script.write_text(json.dumps(SCRIPT), encoding="utf-8")
     cmd = [
         sys.executable, "-m", "coworker.cli", "run", "--workspace", str(ws),
-        "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals",
+        "--model", "anthropic/claude-sonnet-5", "--approval-mode", "bypass-approvals",
         "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
         *(extra or []),
     ]
@@ -436,13 +441,12 @@ def test_an_empty_standard_input_stops_the_run(tmp_path: Path) -> None:
     assert not (out / "summary.json").exists()
 
 
-def test_the_stored_mode_name_is_still_accepted_and_an_unknown_one_is_not(tmp_path: Path) -> None:
+def test_ask_is_recorded_under_the_engines_name_for_it(tmp_path: Path) -> None:
     from coworker.headless.runner import parse_args
 
     base = ["--prompt", "x", "--model", "anthropic/claude-sonnet-5", "--out", str(tmp_path)]
-    assert parse_args([*base, "--mode", "ask"]).mode == "interactive"
-    assert parse_args([*base, "--mode", "interactive"]).mode == "interactive"
-    assert parse_args([*base, "--mode", "auto-approve"]).mode == "auto-approve"
+    assert parse_args(base).mode == "interactive"  # the default is ask
+    assert parse_args([*base, "--approval-mode", "ask"]).mode == "interactive"
+    assert parse_args([*base, "--approval-mode", "auto-approve"]).mode == "auto-approve"
     with pytest.raises(SystemExit):
-        parse_args([*base, "--mode", "plan"])
-
+        parse_args([*base, "--approval-mode", "plan"])
