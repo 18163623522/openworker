@@ -23,7 +23,7 @@ in the Inbox, or supplied by the engine. That is the *attendance* setting.
 
 | Mode | Routine tool calls | The safety checks (run a downloaded file, write outside the workspace, edit git hooks / CI / settings files, grant authority that outlives the session) |
 |---|---|---|
-| `interactive` | asks | asks |
+| `ask` | asks | asks |
 | `auto-approve` | the reviewer decides; anything it is unsure about asks | asks |
 | `bypass-approvals` | runs | asks |
 | `dangerously-bypass-approvals` | runs | runs, each one recorded as "cleared by mode" |

@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SCRIPT = [
@@ -130,10 +132,10 @@ def test_bypass_writes_the_file_and_leaves_a_full_record(tmp_path: Path) -> None
             assert "tool_calls" not in s and "metrics" not in s and "model_name" not in s
 
 
-def test_interactive_refuses_the_card_nobody_can_answer_and_records_it(tmp_path: Path) -> None:
+def test_ask_refuses_the_card_nobody_can_answer_and_records_it(tmp_path: Path) -> None:
     # Also an unpriced model (cost must be null, never guessed) in the two-slash form,
     # which must split on the first slash only.
-    proc, ws, out = _run(tmp_path, "interactive", model="together/deepseek-ai/DeepSeek-V4-Pro")
+    proc, ws, out = _run(tmp_path, "ask", model="together/deepseek-ai/DeepSeek-V4-Pro")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not (ws / "hello.txt").exists()
     summary = _summary(out)
@@ -424,4 +426,15 @@ def test_an_empty_standard_input_stops_the_run(tmp_path: Path) -> None:
     assert proc.returncode == 2
     assert "--prompt" in proc.stderr
     assert not (out / "summary.json").exists()
+
+
+def test_the_stored_mode_name_is_still_accepted_and_an_unknown_one_is_not(tmp_path: Path) -> None:
+    from coworker.headless.runner import parse_args
+
+    base = ["--prompt", "x", "--model", "anthropic/claude-sonnet-5", "--out", str(tmp_path)]
+    assert parse_args([*base, "--mode", "ask"]).mode == "interactive"
+    assert parse_args([*base, "--mode", "interactive"]).mode == "interactive"
+    assert parse_args([*base, "--mode", "auto-approve"]).mode == "auto-approve"
+    with pytest.raises(SystemExit):
+        parse_args([*base, "--mode", "plan"])
 

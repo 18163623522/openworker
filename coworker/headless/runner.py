@@ -40,14 +40,20 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-MODES = [
-    "bypass-approvals",
-    "dangerously-bypass-approvals",
-    "auto-approve",
-    "interactive",
-    "custom",
-    "auto",  # legacy spelling of bypass-approvals
-]
+# How tool calls are approved. `ask` is the app's "Ask for approval"; the engine stores
+# it as "interactive".
+MODES = ["ask", "auto-approve", "bypass-approvals", "dangerously-bypass-approvals"]
+# Accepted but unlisted: the stored name of `ask`, and older spellings a harness may pass.
+_MODE_STORED = {"ask": "interactive", "interactive": "interactive", "custom": "custom", "auto": "auto"}
+
+
+def _mode_arg(value: str) -> str:
+    name = value.strip().lower()
+    if name in MODES or name in _MODE_STORED:
+        return _MODE_STORED.get(name, name)
+    raise argparse.ArgumentTypeError(f"unknown mode {value!r} (choose from {', '.join(MODES)})")
+
+
 ATTENDANCE = ["auto"]  # `inbox` needs the server's Inbox; `attended` needs a screen
 RETRY_DELAYS_ENV = "OPENWORKER_RUN_RETRY_DELAYS"
 
@@ -87,7 +93,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     # The flag's first name; kept so an existing harness command still works.
     p.add_argument("--persona", dest="persona", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-    p.add_argument("--mode", default="bypass-approvals", choices=MODES)
+    p.add_argument(
+        "--mode", default="bypass-approvals", type=_mode_arg, metavar="MODE",
+        help="how tool calls are approved: " + ", ".join(MODES) + " (default: bypass-approvals)",
+    )
     p.add_argument(
         "--attendance",
         default="auto",
