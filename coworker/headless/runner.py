@@ -57,9 +57,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         prog="openworker run",
         description="Run one task with no human present, and record it.",
     )
-    src = p.add_mutually_exclusive_group(required=True)
+    # With neither flag, the task is read from standard input when it is piped in.
+    src = p.add_mutually_exclusive_group()
     src.add_argument("--prompt", "--prompt-text", dest="prompt_text", help="the task text")
-    src.add_argument("--prompt-file", help="file containing the task text (UTF-8)")
+    src.add_argument(
+        "--prompt-file", help="file containing the task text (UTF-8); - reads standard input"
+    )
     p.add_argument(
         "--workspace", default=".", help="folder the agent works in (default: the current folder)"
     )
@@ -580,10 +583,23 @@ def _preview(value: Any, limit: int = 400) -> str:
 # -- the run ------------------------------------------------------------------------------
 
 
+class NoPrompt(Exception):
+    pass
+
+
 def _read_prompt(args: argparse.Namespace) -> str:
     if args.prompt_text is not None:
         return args.prompt_text
-    return Path(args.prompt_file).read_text(encoding="utf-8")
+    if args.prompt_file not in (None, "-"):
+        return Path(args.prompt_file).read_text(encoding="utf-8")
+    # Piped in: `cat task.md | openworker run`. A terminal is not read: the command would
+    # sit waiting for typing with nothing on screen saying so.
+    if args.prompt_file is None and sys.stdin.isatty():
+        raise NoPrompt("give the task with --prompt, --prompt-file, or pipe it in on standard input")
+    text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    if not text.strip():
+        raise NoPrompt("standard input was empty; give the task with --prompt or --prompt-file")
+    return text
 
 
 def _agent_version(explicit: Optional[str]) -> str:
@@ -656,7 +672,11 @@ def run(args: argparse.Namespace) -> int:
     model = normalize_model(args.model)
     mode = Mode(args.mode)
     run_id = uuid.uuid4().hex[:12]
-    prompt = _read_prompt(args)
+    try:
+        prompt = _read_prompt(args)
+    except NoPrompt as exc:
+        print(f"openworker run: {exc}", file=sys.stderr)
+        return 2
     answers = Answers()
 
     secrets = SecretStore(state_dir() / "secrets.json")

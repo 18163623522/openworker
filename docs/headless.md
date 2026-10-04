@@ -69,7 +69,7 @@ Options:
 
 | Flag | Meaning |
 |---|---|
-| `--prompt TEXT` / `--prompt-file PATH` | the task |
+| `--prompt TEXT` / `--prompt-file PATH` | the task. With neither flag, the task is read from standard input when it is piped in (`cat task.md \| openworker run …`); `--prompt-file -` does the same |
 | `--workspace DIR` | the folder the agent works in; the current folder when left out |
 | `--add-dir DIR` | an extra folder the agent may read and write, beside the workspace (repeatable), for a harness whose output contract lives outside the workspace — e.g. `--add-dir /output`. The file tools only write inside the session's folders, in every mode; the shell is not scoped, so without this a delivery would depend on which tool the model happened to pick. Recorded under `args.extra_dirs` in `summary.json`. |
 | `--model ID` | `provider:model` or `provider/model` (first slash splits) |

@@ -386,3 +386,42 @@ def test_the_workspace_defaults_to_the_current_folder(tmp_path: Path) -> None:
     proc = subprocess.run(cmd, env=_env(None), cwd=here, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr
     assert _summary(out)["args"]["workspace"] == str(here.resolve())
+
+
+def _first_user_text(out: Path) -> str:
+    return next(m["content"] for m in _messages(out) if m["role"] == "user")
+
+
+def _run_piped(tmp_path: Path, stdin: str, extra: list[str] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps(SCRIPT), encoding="utf-8")
+    cmd = [
+        sys.executable, "-m", "coworker.cli", "run", "--workspace", str(ws),
+        "--model", "anthropic/claude-sonnet-5", "--mode", "bypass-approvals",
+        "--out", str(out), "--scripted", str(script), "--timeout-seconds", "120",
+        *(extra or []),
+    ]
+    proc = subprocess.run(cmd, env=_env(None), input=stdin, capture_output=True, text=True, timeout=300)
+    return proc, out
+
+
+def test_the_task_can_be_piped_in_on_standard_input(tmp_path: Path) -> None:
+    task = "First line of the task.\nSecond line of the task.\n"
+    proc, out = _run_piped(tmp_path, task)
+    assert proc.returncode == 0, proc.stderr
+    assert _first_user_text(out) == task
+
+    proc, out = _run_piped(tmp_path, task, extra=["--prompt-file", "-"])
+    assert proc.returncode == 0, proc.stderr
+    assert _first_user_text(out) == task
+
+
+def test_an_empty_standard_input_stops_the_run(tmp_path: Path) -> None:
+    proc, out = _run_piped(tmp_path, "")
+    assert proc.returncode == 2
+    assert "--prompt" in proc.stderr
+    assert not (out / "summary.json").exists()
+
