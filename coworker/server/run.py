@@ -163,7 +163,10 @@ def main(argv=None) -> None:
     maybe_run_runner(list(sys.argv[1:] if argv is None else argv))  # `sandbox-runner ...`
     _ensure_ca_bundle()
     cfg = load_config()  # global config supplies defaults
-    parser = argparse.ArgumentParser(prog="openworker-server")
+    # The desktop app's bundled sidecar is a program named openworker-server (packaging/
+    # cli_entry.py); from a checkout the server is run as a module.
+    prog = "openworker-server" if os.path.basename(sys.argv[0]).startswith("openworker-server") else "python -m coworker.server.run"
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--cwd", default=None, help="optional seed/default workspace")
     parser.add_argument("--model", default=cfg.model)
     parser.add_argument(
