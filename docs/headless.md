@@ -174,10 +174,12 @@ record states it.
 The trajectory and the exit code are the stable contract.
 
 A transient provider failure or an empty reply does not end the run: the runner waits
-(30 s, 60 s, 120 s, 240 s, 300 s, 300 s) and re-enters the conversation with a nudge.
+and re-enters the conversation with a nudge. The waits grow: 2 s, 5 s, 10 s, 30 s, 60 s,
+120 s, 240 s, 300 s, 300 s. The first ones are short because the usual failure is one
+dropped connection, which the next request gets past.
 Permanent errors (bad key, unknown model, context overflow) are not retried.
 
 Each retry prints a line with the error and its cause, for example
 `provider error (APIConnectionError: Connection error. Cause: the proxy answered 403
-Forbidden); retry 1/6 in 30s`. A stop signal or Ctrl-C ends the run at once, also during
+Forbidden); retry 1/9 in 2s`. A stop signal or Ctrl-C ends the run at once, also during
 the wait between retries, and the record is still written.

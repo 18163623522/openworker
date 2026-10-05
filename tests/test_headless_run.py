@@ -243,6 +243,18 @@ def test_without_the_flags_the_provider_defaults_are_described(tmp_path: Path) -
 # -- transient provider errors ------------------------------------------------------------
 
 
+def test_the_first_waits_are_short_and_the_waits_grow(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Seen inside OpenShell 0.1.2: one reply cut off mid-stream cost a 30 s wait, when the
+    # next request would have worked at once.
+    from coworker.headless import runner
+
+    monkeypatch.delenv(runner.RETRY_DELAYS_ENV, raising=False)
+    delays = runner.provider_retry_delays()
+    assert delays[:4] == (2, 5, 10, 30)
+    assert list(delays) == sorted(delays)
+    assert 15 * 60 <= sum(delays) <= 20 * 60  # an outage of minutes is still waited out
+
+
 def test_transient_provider_error_is_waited_out_and_the_run_completes(tmp_path: Path) -> None:
     fail = {"error": "Service unavailable", "error_type": "APIError"}
     write = {"text": "ok", "tool_calls": [{"name": "write_file", "arguments": {"path": "hello.txt", "content": "hello"}}]}

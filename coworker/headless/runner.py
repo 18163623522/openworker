@@ -218,9 +218,14 @@ def normalize_model(model: str) -> str:
 # The provider clients retry a failed request a couple of times within seconds. A provider
 # outage lasting minutes outlives that, and the engine then ends the run with an ERROR
 # event; in an unattended run that is a lost run. So the runner waits with backoff and
-# re-enters the conversation with a nudge, up to ~17 minutes in total. Permanent errors
+# re-enters the conversation with a nudge, up to ~18 minutes in total. Permanent errors
 # (bad key, unknown model, context overflow) are not retried.
-PROVIDER_RETRY_DELAYS: tuple[int, ...] = (30, 60, 120, 240, 300, 300)
+#
+# The first waits are short: the commonest failure is one reply cut off mid-stream, which
+# the clients do not retry and which the very next request survives. Seen on OpenShell
+# 0.1.2, which closes every open connection when a sandbox's settings change (10 s after
+# each start, and on each policy update).
+PROVIDER_RETRY_DELAYS: tuple[int, ...] = (2, 5, 10, 30, 60, 120, 240, 300, 300)
 PROVIDER_RETRY_NUDGE = (
     "The previous model request failed with a temporary provider error and has been "
     "retried. Continue the task from where you left off."
