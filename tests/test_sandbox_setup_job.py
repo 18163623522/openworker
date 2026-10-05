@@ -257,7 +257,9 @@ def test_the_folder_step_restarts_the_gateway_and_the_check_reads_the_config_in_
     assert setup_cmd.apply_bind_mounts() is None
     assert ["brew", "services", "restart", "nvidia/openshell/openshell"] in ran
     ours = tmp_path / "openshell" / "gateway.toml"
-    assert "enable_bind_mounts = true" in ours.read_text()
+    written = ours.read_text()
+    assert "version = 2" in written and "allow_driver_config = true" in written and "enable_bind_mounts = true" in written
+    assert "[openshell.drivers.docker.resource_admission]\nenabled = false" in written
     # Restarted: no --config, so `gateway.env` names the file, and the check is satisfied.
     listing["out"] = "/opt/homebrew/opt/openshell/bin/openshell-gateway\n"
     assert setup_cmd.gateway_config_in_use() == ours and setup_cmd._allows_bind_mounts(ours)
@@ -304,3 +306,29 @@ def test_on_a_mac_the_docker_kernel_is_asked_for_landlock(monkeypatch):
     row = {s.key: s for s in setup_cmd.steps()}["docker_landlock"]
     assert keys[:2] == ["docker", "docker_landlock"] and not row.ok and not row.fixable
     assert row.hint.startswith("Update Docker Desktop") and row.docs == setup_cmd.DOCKER_DESKTOP_URL
+
+
+def test_folder_sharing_needs_all_three_gateway_settings(tmp_path):
+    """OpenShell 0.1: driver config on, bind mounts on, resource admission off."""
+    config = tmp_path / "gateway.toml"
+    config.write_text(setup_cmd._BIND_MOUNTS)
+    assert setup_cmd._allows_bind_mounts(config)
+    for missing in ("allow_driver_config = true\n", "enable_bind_mounts = true\n", "enabled = false\n"):
+        config.write_text(setup_cmd._BIND_MOUNTS.replace(missing, ""))
+        assert not setup_cmd._allows_bind_mounts(config), missing
+    # The file our setup wrote for OpenShell 0.0.x is not enough, and is not valid for 0.1.
+    config.write_text("[openshell.drivers.docker]\nenable_bind_mounts = true\n")
+    assert not setup_cmd._allows_bind_mounts(config)
+    config.write_text("not toml [")
+    assert not setup_cmd._allows_bind_mounts(config)
+
+
+def test_a_gateway_config_with_other_settings_is_not_rewritten(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    theirs = tmp_path / "openshell" / "gateway.toml"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_text("[openshell]\nversion = 2\n\n[openshell.gateway]\ncompute_driver = \"docker\"\n")
+    said = setup_cmd.apply_bind_mounts()
+    assert said and "by hand" in said and "allow_driver_config = true" in said
+    assert "compute_driver" in theirs.read_text() and "enable_bind_mounts" not in theirs.read_text()
+
