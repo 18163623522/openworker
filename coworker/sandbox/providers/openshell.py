@@ -105,7 +105,25 @@ def preflight() -> dict[str, Any]:
             f"{IMAGE_MISSING_PREFIX} (about 5 GB, one time). Run `openworker machine sandbox setup`, "
             f"or `{image_tool() or 'docker'} pull {sandbox_image()}`, then start the session again."
         )
+    problem = host_network_problem()
+    if problem:
+        raise OpenShellUnavailable(problem)
     return {"version": version}
+
+
+def _host_network_problem() -> Optional[str]:
+    """On a Mac: what to do when Docker Desktop's host networking is off, else None.
+    OpenShell 0.1 cannot start a sandbox without it, and says only "failed to connect"."""
+    if sys.platform != "darwin":
+        return None
+    from ..setup_cmd import DOCKER_HOST_NETWORK_FIX, docker_host_network
+
+    return f"{DOCKER_HOST_NETWORK_FIX}." if docker_host_network() is False else None
+
+
+# What `preflight` calls. A name of its own so tests can stand in for it: the real one
+# starts a container.
+host_network_problem = _host_network_problem
 
 
 def active_driver() -> str:

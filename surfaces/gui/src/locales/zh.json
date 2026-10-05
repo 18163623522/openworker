@@ -2460,6 +2460,10 @@
       "sites_total": "已允许 {{count}} 个",
       "os_docker_update": "请更新 Docker Desktop，然后重新检查。",
       "os_docker_update_why": "此版本的 Linux 内核没有 Landlock，而 OpenShell 需要它。",
+      "os_docker_hostnet": "请在 Docker Desktop 中开启主机网络，然后重新检查。",
+      "os_docker_hostnet_where": "设置 ▸ 资源 ▸ 网络 ▸ 启用主机网络，然后点击“应用并重启”。",
+      "os_docker_hostnet_why": "OpenShell 的沙盒通过它连接网关。",
+      "docker_hostnet_link": "Docker 指南",
       "applies_note": "对此后新开始的会话生效。已打开的会话保持原样继续运行。"
     }
   },

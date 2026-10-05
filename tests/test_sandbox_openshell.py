@@ -592,3 +592,27 @@ def test_only_the_runner_is_mounted_into_a_sandbox(tmp_path, monkeypatch):
     assert not str(registry.path).startswith(str(runner.parent) + os.sep)
     sources = [m["source"] for m in policy.mounts(ROOTS, str(runner.parent))["docker"]["mounts"]]
     assert str(runner.parent) in sources and str(tmp_path / "sandbox") not in sources
+
+
+def test_on_a_mac_a_session_is_refused_early_when_docker_desktops_host_networking_is_off(monkeypatch):
+    from coworker.sandbox import setup_cmd
+
+    monkeypatch.setattr(openshell.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: False)
+    assert "Enable host networking" in openshell._host_network_problem()
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: True)
+    assert openshell._host_network_problem() is None
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: None)  # cannot tell: not a refusal
+    assert openshell._host_network_problem() is None
+    monkeypatch.setattr(openshell.sys, "platform", "linux")
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: False)
+    assert openshell._host_network_problem() is None  # Docker Engine on Linux always has it
+
+    # preflight refuses with it, after the version, gateway and image checks pass.
+    monkeypatch.setattr(openshell.shutil, "which", lambda name: "/usr/bin/openshell")
+    present = {"--version": _OK_VERSION, "status": _CONNECTED, "gateway": _DOCKER_GATEWAY, "image": ("[{...}]", 0)}
+    monkeypatch.setattr(openshell.subprocess, "run", _fake_cli(present))
+    monkeypatch.setattr(openshell, "host_network_problem", lambda: "Turn on host networking in Docker Desktop.")
+    with pytest.raises(openshell.OpenShellUnavailable, match="host networking"):
+        openshell.preflight()
+

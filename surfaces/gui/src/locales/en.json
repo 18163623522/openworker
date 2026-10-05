@@ -2500,6 +2500,10 @@
       "sites_total": "{{count}} allowed",
       "os_docker_update": "Update Docker Desktop, then check again.",
       "os_docker_update_why": "This version's Linux kernel has no Landlock, which OpenShell needs.",
+      "os_docker_hostnet": "Turn on host networking in Docker Desktop, then check again.",
+      "os_docker_hostnet_where": "Settings ▸ Resources ▸ Network ▸ Enable host networking, then Apply & restart.",
+      "os_docker_hostnet_why": "OpenShell's sandboxes reach its gateway that way.",
+      "docker_hostnet_link": "Docker's guide",
       "applies_note": "Applies to sessions you start from now on. Open sessions keep running as they are."
     }
   },

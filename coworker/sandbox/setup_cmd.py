@@ -27,6 +27,7 @@ import getpass
 import os
 import shutil
 import socket
+import time
 import subprocess
 import sys
 import threading
@@ -194,6 +195,9 @@ def docker_landlock() -> Optional[bool]:
         return None
 
 
+_host_network_ok_at = 0.0
+
+
 def docker_host_network() -> Optional[bool]:
     """On a Mac: whether a container on Docker's host network reaches the gateway on this
     Mac's loopback address, tried from a throwaway container of the base image. None when
@@ -210,8 +214,15 @@ def docker_host_network() -> Optional[bool]:
     image = openshell.sandbox_image()
     if _run(["docker", "image", "inspect", image], 30).returncode != 0:
         return None
+    # A yes is kept for a while: this is asked before every session, the answer needs a
+    # container, and the setting does not turn itself off. A no is asked again each time,
+    # so ticking the box is seen at once.
+    global _host_network_ok_at
+    if _host_network_ok_at and time.monotonic() - _host_network_ok_at < 600:
+        return True
     probe = f"import socket; socket.create_connection(('127.0.0.1', {port}), 4).close()"
     done = _run(["docker", "run", "--rm", "--network", "host", "--entrypoint", openshell_policy.PYTHON, image, "-c", probe], 90)
+    _host_network_ok_at = time.monotonic() if done.returncode == 0 else 0.0
     return done.returncode == 0
 
 
