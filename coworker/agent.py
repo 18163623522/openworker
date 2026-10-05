@@ -671,7 +671,10 @@ def build_engine(
                 parts.append(text)
         # OpenWorker itself inside an OpenShell sandbox: what a blocked request looks like
         # and what to do. Read each turn, since the policy skill can appear mid-session.
-        openshell_ctx = _openshell.context()
+        eng = _engine_box[0] if _engine_box else None
+        openshell_ctx = _openshell.context(
+            nobody_answers=eng is not None and eng._auto_answering()
+        )
         if openshell_ctx:
             parts.append(openshell_ctx)
         # Live skill menu (SKILLS-SPEC §4.1): recomputed every turn like the roots list, so
@@ -686,7 +689,6 @@ def build_engine(
         # steering the model even after the skill is turned off/deleted — history can't be
         # un-read. So a loaded-but-no-longer-available skill gets an explicit stop note,
         # recomputed fresh each turn (re-enable → the note disappears; never persisted).
-        eng = _engine_box[0] if _engine_box else None
         if eng is not None:
             available = set(skill_loader.names()) if allowed is None else set(allowed)
             for name in sorted(_loaded_skill_names(eng.messages) - available):

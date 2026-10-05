@@ -88,6 +88,23 @@ def test_inside_the_agent_is_told_what_a_blocked_request_looks_like(in_openshell
     assert "openshell-policy-advisor" not in text
 
 
+def test_with_a_person_there_the_agent_asks_and_waits_for_the_site(in_openshell: Path, tmp_path: Path) -> None:
+    # Seen live: told only to report the block, the agent ended the run with the command
+    # as its answer, and the sandbox was gone before anyone could run it.
+    text = _engine(tmp_path).context_provider()
+    assert "ask the user with `ask_user` and wait" in text
+    assert "they have allowed it, or leave it blocked" in text
+    assert "`openshell sandbox list`" in text  # the sandbox's name is not known inside
+
+
+def test_with_auto_answer_the_agent_reports_the_block_and_does_not_ask(in_openshell: Path, tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    engine.attendance = lambda: "auto"
+    text = engine.context_provider()
+    assert "nobody is there to allow it" in text and "ask_user" not in text.split("OpenShell sandbox", 1)[1].split("\n\n", 1)[0]
+    assert "openshell policy update SANDBOX_NAME --add-endpoint HOST:PORT --binary '/**' --wait" in text
+
+
 def test_with_proposals_on_the_agent_is_pointed_at_openshells_skill(in_openshell: Path, tmp_path: Path) -> None:
     _turn_on_proposals(in_openshell)
     engine = _engine(tmp_path)

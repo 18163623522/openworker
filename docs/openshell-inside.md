@@ -118,9 +118,15 @@ name one, such as `/usr/bin/curl`, to keep it to that program. Do not leave `--b
 OpenShell then adds a rule that lets no program through. The change reaches the running
 sandbox in a few seconds, with no restart.
 
-The sandbox has to be running to be changed. A run started with `--no-keep` (step 3) is
-gone when it ends, so for work that needs sites use a sandbox that stays up (step 4),
-allow the sites, and run the task again.
+When a task needs a blocked site and you are at the terminal, the coworker asks you and
+waits. The question names the site and gives this command. Run it in another terminal,
+with the sandbox's name from `openshell sandbox list`, then answer that you allowed it and
+the coworker tries again. Answer "leave it blocked" and it finishes without the site.
+
+With `--auto-answer`, or with no terminal, nobody is there to ask. The coworker finishes
+what it can and its answer says which site was blocked. A run started with `--no-keep`
+(step 3) is gone when it ends, so allow the site on a sandbox that stays up (step 4) and
+run the task again.
 
 OpenShell can also draft these rules from the requests it blocked, for you to approve. That
 is its policy advisor; see OpenShell's

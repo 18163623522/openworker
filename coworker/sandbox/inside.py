@@ -25,6 +25,16 @@ SKILLS_DIR = Path("/etc/openshell/skills")
 POLICY_SKILL = "openshell-policy-advisor"
 _POLICY_SKILL_FILE = Path("policy-advisor") / "SKILL.md"
 
+# How a person allows a site from outside. Seen on OpenShell 0.1.2: without `--binary` the
+# rule names no program and lets nothing through. The sandbox's name is not known inside.
+_ALLOW_COMMAND = (
+    "they can allow it from outside the sandbox, while it is still running, with "
+    "`openshell policy update SANDBOX_NAME --add-endpoint HOST:PORT --binary '/**' --wait`. "
+    "Give the command with the real host and port. Say that SANDBOX_NAME is the sandbox's "
+    "name, which `openshell sandbox list` shows, and that `--binary` is required: without "
+    "it the rule lets no program through."
+)
+
 
 def inside_openshell() -> bool:
     return os.environ.get("OPENSHELL_SANDBOX", "").strip() == "1"
@@ -37,8 +47,12 @@ def policy_skill_present() -> bool:
         return False
 
 
-def context() -> str:
-    """The lines the agent reads each turn. Empty outside OpenShell."""
+def context(nobody_answers: bool = False) -> str:
+    """The lines the agent reads each turn. Empty outside OpenShell.
+
+    `nobody_answers` is the run's auto-answer: with a person there the agent asks and
+    waits while they change the policy; with nobody there it reports the block and goes on.
+    """
     if not inside_openshell():
         return ""
     lines = [
@@ -56,13 +70,21 @@ def context() -> str:
             "it: it explains how to ask for the access, which a person outside the sandbox "
             "approves."
         )
+    elif nobody_answers:
+        lines.append(
+            "If the task needs a blocked request, nobody is there to allow it during this "
+            "run. Finish what you can without it, and in your answer tell the user which "
+            f"host and port were blocked and that {_ALLOW_COMMAND}"
+        )
     else:
         lines.append(
-            "If the task needs a blocked request, tell the user which host and port were "
-            "blocked. They can allow it from outside the sandbox, while it is still running, "
-            "with `openshell policy update SANDBOX_NAME --add-endpoint HOST:PORT --binary '/**' "
-            "--wait`. Give the command with the real host and port, and say that it needs the "
-            "sandbox's name and that `--binary` is required: without it the rule lets no "
-            "program through."
+            "If the task needs a blocked request, ask the user with `ask_user` and wait for "
+            "the answer. Do not end your turn with only a report of the block. In the "
+            f"question, name the host and port that were blocked and say that {_ALLOW_COMMAND} "
+            "Offer two choices: they have allowed it, or leave it blocked. If they allowed "
+            "it, make the request again. If they leave it blocked, do not ask again for that "
+            "host: finish what you can without it, or stop if the task cannot go on, and say "
+            "what was left out. If asking is not available, put the same information in your "
+            "answer."
         )
     return " ".join(lines)
