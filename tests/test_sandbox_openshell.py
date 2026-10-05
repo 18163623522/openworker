@@ -49,8 +49,9 @@ def test_network_profiles():
     ticked = policy.render(ROOTS, profile="allowlist", extra_hosts=["github.com:443", "registry.acme.dev:443"])["network_policies"]
     assert {"host": "registry.acme.dev", "port": 443} in ticked["credentials"]["endpoints"]
     assert all(entry["binaries"] for entry in ticked.values())  # OpenShell requires the field
-    opened = policy.render(ROOTS, profile="open")["network_policies"]
-    assert [e["host"] for e in opened["open"]["endpoints"]] == ["*"]  # any host; unproved against a gateway
+    # "Allow everything" has no OpenShell policy: 0.1 refuses any-host wildcards. Said plainly.
+    with pytest.raises(ValueError, match="cannot allow every site"):
+        policy.render(ROOTS, profile="open")
     with pytest.raises(ValueError):
         policy.render(ROOTS, profile="wide-open")
 
