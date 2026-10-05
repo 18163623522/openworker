@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openworker"
-version = "0.3.1"
+version = "0.3.2"
 description = "OpenWorker — an open-source AI coworker you govern. The headless runtime and CLI."
 readme = "README.md"
 license = { text = "MIT" }
