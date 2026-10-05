@@ -45,7 +45,7 @@ from . import openshell_wire as wire
 
 log = logging.getLogger(__name__)
 
-PINNED_VERSION = "0.0.116"  # ruling 24: one pinned release until NVIDIA ships GA
+PINNED_VERSION = "0.1.2"  # one pinned release (ruling 24). 0.0.x and 0.1.x cannot talk to each other
 DEFAULT_IMAGE = "ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e"
 LABEL = "openworker"
 _SOCKET = f"{policy.RUNTIME_DIR}/owr/r.sock"
@@ -401,7 +401,7 @@ class OpenShellProvider:
         if not self.sandbox_id:
             raise RuntimeError("the sandbox has not been created")
         command = [policy.PYTHON, "-S", f"{policy.RUNNER_MOUNT}/{self._runner.name}", "attach", "--socket", _SOCKET]
-        return GrpcExecTransport(self.sandbox_id, command)
+        return GrpcExecTransport(self.sandbox_name, command)
 
     def verify(self, client: Any) -> None:
         """After connecting: every folder must really be reachable inside (spike finding F:
@@ -505,7 +505,7 @@ def list_our_sandboxes(registry: str) -> list[dict[str, Any]]:
 class GrpcExecTransport:
     """The runner's pipe: OpenShell's `ExecSandboxInteractive` stream, no terminal."""
 
-    def __init__(self, sandbox_id: str, command: list[str]) -> None:
+    def __init__(self, sandbox: str, command: list[str]) -> None:
         try:
             import grpc
         except ImportError as exc:  # an optional extra, needed for this provider only
@@ -524,7 +524,9 @@ class GrpcExecTransport:
         self._buffer = b""
         self._closed = False
         call = self._channel.stream_stream(wire.METHOD, request_serializer=lambda b: b, response_deserializer=lambda b: b)
-        self._call = call(self._requests(wire.encode_start(sandbox_id, command)))
+        # The same workspace the CLI calls above used (its `--workspace`, from the environment).
+        workspace = os.environ.get("OPENSHELL_WORKSPACE", "").strip() or wire.DEFAULT_WORKSPACE
+        self._call = call(self._requests(wire.encode_start(sandbox, command, workspace)))
         threading.Thread(target=self._pump, daemon=True).start()
 
     def _requests(self, start: bytes):

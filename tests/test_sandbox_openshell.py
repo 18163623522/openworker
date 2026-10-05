@@ -63,8 +63,15 @@ def test_folders_are_mounted_at_the_same_absolute_path():
 
 
 def test_stream_messages_match_the_protobuf_wire_format():
-    # ExecSandboxInput{start: ExecSandboxRequest{sandbox_id:"abc", command:["bash","-c"]}}
-    assert wire.encode_start("abc", ["bash", "-c"]).hex() == "0a0f0a0361626312046261736812022d63"
+    # ExecSandboxInput{start: ExecSandboxRequest{sandbox:"abc", command:["bash","-c"],
+    #   no_login_shell: true, workspace_scope: {workspace: "default"}}}  (OpenShell 0.1.2)
+    start = wire.encode_start("abc", ["bash", "-c"])
+    assert start.hex() == "0a1c" + "0a03616263" + "120462617368" + "12022d63" + "5001" + "62090a0764656661756c74"
+    (number, _kind, request), = list(wire._fields(start))
+    fields = [(n, v) for n, _k, v in wire._fields(request)]
+    assert number == 1 and fields[0] == (1, b"abc") and (10, 1) in fields
+    assert [(n, v) for n, _k, v in wire._fields(dict(fields)[12])] == [(1, b"default")]
+    assert b"team-a" in wire.encode_start("abc", ["true"], "team-a")
     assert wire.encode_stdin(b"hi\n").hex() == "1203" + b"hi\n".hex()
     assert wire.decode_event(bytes.fromhex("0a070a0568656c6c6f")) == ("stdout", b"hello", None)
     assert wire.decode_event(bytes.fromhex("12050a03657272")) == ("stderr", b"err", None)
