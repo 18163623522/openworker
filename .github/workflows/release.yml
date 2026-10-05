@@ -1,5 +1,6 @@
 # Desktop release builds — macOS (.dmg, arm64 + Intel) and Windows (.msi + NSIS .exe) — and
-# the Linux `openworker` program (.tar.gz, x86_64 + aarch64; packaging/build_linux.sh).
+# the `openworker` command-line program for Linux (.tar.gz, x86_64 + aarch64;
+# packaging/build_linux.sh) and for macOS (.tar.gz, arm64 + x86_64; packaging/build_macos_cli.sh).
 #
 # CI calls the SAME scripts developers run locally (packaging/build_dmg.sh and
 # build_windows.ps1); this file only provisions the toolchain (Node, Rust, a Python venv at
@@ -117,6 +118,9 @@ jobs:
           fi
           unset APPLE_API_KEY_CONTENT
           bash packaging/build_dmg.sh
+          # The command-line program for the Mac, from the same venv and identity: signed
+          # and notarized when the secrets are present.
+          bash packaging/build_macos_cli.sh
 
       - name: Build .msi + NSIS .exe (Windows)
         if: runner.os == 'Windows'
@@ -147,6 +151,11 @@ jobs:
               cp "$BUNDLE"/macos/OpenWorker.app.tar.gz out/OpenWorker-${{ matrix.slug }}.app.tar.gz
               cp "$BUNDLE"/macos/OpenWorker.app.tar.gz.sig out/OpenWorker-${{ matrix.slug }}.app.tar.gz.sig
             fi
+            # The command-line program, named by uname -m (arm64, x86_64) as install.sh asks.
+            ARCH=$(uname -m)
+            cp packaging/dist/openworker-*-macos-"$ARCH".tar.gz* out/
+            cp packaging/dist/openworker-*-macos-"$ARCH".tar.gz out/openworker-macos-"$ARCH".tar.gz
+            (cd out && shasum -a 256 openworker-macos-"$ARCH".tar.gz > openworker-macos-"$ARCH".tar.gz.sha256)
           fi
           ls -la out
 
