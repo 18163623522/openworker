@@ -7,8 +7,8 @@ and three things follow from that, all here:
 - the agent is told what a blocked request looks like and what to do about it;
 - OpenShell's own skills folder is readable, so the agent can follow OpenShell's policy
   skill as OpenShell prescribes (it exists only when the user turned proposals on);
-- the web tools leave the name lookup to OpenShell's proxy (web/guard.py): inside the
-  sandbox no name resolves and nothing connects directly.
+- the web tools leave names to OpenShell's network layer (web/guard.py): what a name
+  resolves to inside the sandbox is not its real address.
 
 Sites are added from outside the sandbox with OpenShell's own commands. OpenWorker does not
 grant them, so `request_network_access` and the allowed-sites card are not part of this.
@@ -37,24 +37,18 @@ def policy_skill_present() -> bool:
         return False
 
 
-def proxied(scheme: str) -> bool:
-    """Whether a request of this scheme leaves through a proxy named in the environment
-    (the way OpenShell routes everything). The HTTP client reads the same variables."""
-    names = ("HTTPS_PROXY", "https_proxy") if scheme == "https" else ("HTTP_PROXY", "http_proxy")
-    return any(os.environ.get(name, "").strip() for name in (*names, "ALL_PROXY", "all_proxy"))
-
-
 def context() -> str:
     """The lines the agent reads each turn. Empty outside OpenShell."""
     if not inside_openshell():
         return ""
     lines = [
         "This session runs inside an OpenShell sandbox. Every network request, from your "
-        "commands and your web tools alike, goes through its proxy, which allows only what "
-        "its policy lists. A request the policy does not allow fails with a 403 from the "
-        "proxy (for example `CONNECT tunnel failed, response 403`) or says `policy_denied`. "
-        "That means the sandbox blocked it. Do not retry it unchanged, and do not look for "
-        "another route to the same place."
+        "commands and your web tools alike, is held to its policy, which allows only what "
+        "it lists. A request the policy does not allow fails in one of these ways: the "
+        "connection is refused at once (`curl: (7) Failed to connect ... Couldn't connect "
+        "to server`), a proxy answers 403 (`CONNECT tunnel failed, response 403`), or the "
+        "reply says `policy_denied`. That means the sandbox blocked it. Do not retry it "
+        "unchanged, and do not look for another route to the same place."
     ]
     if policy_skill_present():
         lines.append(
