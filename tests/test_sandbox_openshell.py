@@ -563,6 +563,19 @@ def test_a_mac_whose_docker_kernel_lacks_landlock_is_told_to_update_docker_deskt
     with pytest.raises(RuntimeError, match="ContainerExited"):
         provider._create()
 
+    # OpenShell 0.1 on a Mac: the sandbox could not reach the gateway because Docker
+    # Desktop's host networking is off.
+    def unreachable(*args, **kwargs):
+        raise RuntimeError("`openshell sandbox create --name` failed: Startup configuration fetch failed after 5 attempts: failed to connect to OpenShell server")
+
+    monkeypatch.setattr(os_mod, "_cli", unreachable)
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: False)
+    with pytest.raises(os_mod.OpenShellUnavailable, match="Enable host networking"):
+        provider._create()
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: True)
+    with pytest.raises(RuntimeError, match="failed to connect to OpenShell server"):
+        provider._create()
+
 
 def test_only_the_runner_is_mounted_into_a_sandbox(tmp_path, monkeypatch):
     # The registry (every session's ids, coworkers and folders) sat beside the runner in

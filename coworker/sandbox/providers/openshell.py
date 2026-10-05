@@ -370,6 +370,13 @@ class OpenShellProvider:
 
                 if docker_landlock() is False:
                     raise OpenShellUnavailable(f"{DOCKER_LANDLOCK_FIX}. Then start the session again.") from exc
+            if "failed to connect to OpenShell server" in str(exc) and sys.platform == "darwin":
+                # The sandbox's helper could not reach the gateway: on a Mac that is Docker
+                # Desktop's host networking being off, which can be asked.
+                from ..setup_cmd import DOCKER_HOST_NETWORK_FIX, docker_host_network
+
+                if docker_host_network() is False:
+                    raise OpenShellUnavailable(f"{DOCKER_HOST_NETWORK_FIX}. Then start the session again.") from exc
             raise
         self._wait_ready()
         self._denials = DenialLog(self.sandbox_name)  # what it refuses, for the agent and the card

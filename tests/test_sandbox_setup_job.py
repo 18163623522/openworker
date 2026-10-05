@@ -332,3 +332,57 @@ def test_a_gateway_config_with_other_settings_is_not_rewritten(tmp_path, monkeyp
     assert said and "by hand" in said and "allow_driver_config = true" in said
     assert "compute_driver" in theirs.read_text() and "enable_bind_mounts" not in theirs.read_text()
 
+
+def test_a_mac_is_asked_whether_docker_desktops_host_networking_is_on(monkeypatch):
+    """OpenShell 0.1 reaches its gateway from a host-network container; Docker Desktop
+    has that off until it is ticked."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    ran: list[list[str]] = []
+    answers = {"image": 0, "probe": 1}
+
+    def fake_run(argv, timeout=600):
+        ran.append(list(argv))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(returncode=answers["image"], stdout="", stderr="")
+        if argv[:2] == ["docker", "run"]:
+            assert argv[argv.index("--network") + 1] == "host"
+            return SimpleNamespace(returncode=answers["probe"], stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    class Listening:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(setup_cmd, "_run", fake_run)
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr(setup_cmd.openshell, "_gateway", lambda: ("localhost:17670", Path("/nowhere")))
+    monkeypatch.setattr(setup_cmd.socket, "create_connection", lambda *_a, **_k: Listening())
+    assert setup_cmd.docker_host_network() is False  # the container could not reach it
+    answers["probe"] = 0
+    assert setup_cmd.docker_host_network() is True
+    answers["image"] = 1  # no base image yet: cannot ask
+    assert setup_cmd.docker_host_network() is None
+
+    def refused(*_a, **_k):
+        raise OSError("connection refused")
+
+    answers["image"] = 0
+    monkeypatch.setattr(setup_cmd.socket, "create_connection", refused)
+    assert setup_cmd.docker_host_network() is None  # no gateway to reach: that is another row
+    monkeypatch.setattr(setup_cmd.sys, "platform", "linux")
+    assert setup_cmd.docker_host_network() is None  # Docker Engine on Linux has host networking
+
+    # In the checklist: its own row, with where the setting is.
+    monkeypatch.setattr(setup_cmd.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_cmd, "docker_landlock", lambda: True)
+    monkeypatch.setattr(setup_cmd, "docker_host_network", lambda: False)
+    monkeypatch.setattr(setup_cmd, "openshell_problem", lambda fresh=False: "OpenShell is not installed")
+    row = {s.key: s for s in setup_cmd.steps()}["docker_host_network"]
+    assert not row.ok and not row.fixable and "Enable host networking" in row.hint and row.docs == setup_cmd.DOCKER_HOST_NETWORK_URL
+

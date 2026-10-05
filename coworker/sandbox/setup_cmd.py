@@ -26,6 +26,7 @@ import ctypes
 import getpass
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -51,6 +52,15 @@ DOCKER_DESKTOP_URL = "https://docs.docker.com/desktop/setup/install/mac-install/
 # What a Mac user is told when Docker Desktop's Linux kernel lacks Landlock (engine 28.0.4,
 # kernel 6.10.14-linuxkit, seen 2026-09-28; engine 29.8.1, kernel 7.0.14, has it).
 DOCKER_LANDLOCK_FIX = "Update Docker Desktop: this version's Linux kernel has no Landlock, which OpenShell needs"
+# OpenShell 0.1 starts each sandbox with a helper on Docker's host network, which reaches
+# the gateway on this Mac's own loopback address. Docker Desktop only lets a container do
+# that when this setting is on, and it is off until someone ticks it (seen 2026-10-04,
+# Docker Desktop 4.93: every sandbox failed with "failed to connect to OpenShell server").
+DOCKER_HOST_NETWORK_FIX = (
+    'Turn on host networking in Docker Desktop: Settings > Resources > Network > "Enable host networking", '
+    "then Apply & restart. OpenShell's sandboxes reach its gateway that way"
+)
+DOCKER_HOST_NETWORK_URL = "https://docs.docker.com/engine/network/drivers/host/#docker-desktop"
 # The gateway settings that let a sandbox be given the session's folders (OpenShell 0.1:
 # config schema 2; driver config and bind mounts are both off until switched on, and a
 # bind mount is refused while resource admission is on). All three, or `sandbox create`
@@ -78,6 +88,7 @@ ROWS = {
     "grpcio": "the `grpcio` package is installed",
     "landlock": "the kernel supports Landlock (OpenShell requires it)",
     "docker_landlock": "Docker Desktop's Linux kernel supports Landlock (OpenShell requires it)",
+    "docker_host_network": "Docker Desktop's host networking is on (OpenShell's sandboxes reach the gateway that way)",
     "config": "this machine is set to use OpenShell",
     "disk": f"enough free disk space for the base image (about {IMAGE_FREE_GB} GB)",
     "image": IMAGE_ROW,
@@ -183,6 +194,27 @@ def docker_landlock() -> Optional[bool]:
         return None
 
 
+def docker_host_network() -> Optional[bool]:
+    """On a Mac: whether a container on Docker's host network reaches the gateway on this
+    Mac's loopback address, tried from a throwaway container of the base image. None when
+    it cannot be told: not a Mac, Docker not answering, the base image not downloaded yet,
+    or no gateway listening to be reached."""
+    if sys.platform != "darwin" or not shutil.which("docker"):
+        return None
+    try:
+        port = int(openshell._gateway()[0].rsplit(":", 1)[1])
+        with socket.create_connection(("127.0.0.1", port), timeout=3):
+            pass
+    except (OSError, ValueError, IndexError, KeyError):
+        return None
+    image = openshell.sandbox_image()
+    if _run(["docker", "image", "inspect", image], 30).returncode != 0:
+        return None
+    probe = f"import socket; socket.create_connection(('127.0.0.1', {port}), 4).close()"
+    done = _run(["docker", "run", "--rm", "--network", "host", "--entrypoint", openshell_policy.PYTHON, image, "-c", probe], 90)
+    return done.returncode == 0
+
+
 def image_store_free_gb() -> Optional[float]:
     """Free space where the driver keeps images, in GB, or None when it cannot be told."""
     try:
@@ -208,6 +240,9 @@ def steps() -> list[Step]:
         kernel = docker_landlock()
         if kernel is not None:
             out.append(Step("docker_landlock", ROWS["docker_landlock"], kernel, "" if kernel else DOCKER_LANDLOCK_FIX, docs="" if kernel else DOCKER_DESKTOP_URL))
+        reaches = docker_host_network()
+        if reaches is not None:
+            out.append(Step("docker_host_network", ROWS["docker_host_network"], reaches, "" if reaches else DOCKER_HOST_NETWORK_FIX, docs="" if reaches else DOCKER_HOST_NETWORK_URL))
     exe = shutil.which("openshell")
     version = (_run([exe, "--version"], 15).stdout.split() or [""])[-1] if exe else ""
     openshell_ok = version == PINNED_VERSION
