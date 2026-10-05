@@ -21,10 +21,14 @@ Tested with OpenShell 0.1.2 on a Mac with Docker Desktop.
 The image holds the OpenWorker CLI and common developer tools: Python, Node, git, curl,
 ripgrep, `gh`, `uv`, `make` and a C compiler.
 
-Build it from a checkout of this repository:
+It is published as `ghcr.io/andrewyng/openworker:latest`, for Intel and ARM. There is
+nothing to download first: OpenShell pulls it the first time you use it.
+
+To build your own from a checkout of this repository, and use `openworker:local` in place
+of the name below:
 
 ```bash
-docker build -f packaging/openshell/Dockerfile -t openworker-openshell:local .
+docker build -f packaging/openshell/Dockerfile -t openworker:local .
 ```
 
 ## 2. Give OpenShell your model key
@@ -50,7 +54,7 @@ You do this once. The provider stays on your gateway.
 One command starts a sandbox, runs the task and removes the sandbox:
 
 ```bash
-openshell sandbox create --from openworker-openshell:local \
+openshell sandbox create --from ghcr.io/andrewyng/openworker:latest \
     --provider openworker-openai --no-keep \
     -- openworker run --approval-mode bypass-approvals --prompt "Say hello"
 ```
@@ -68,7 +72,7 @@ A sandbox has its own files. Bring a project in, run the task, and take the resu
 
 ```bash
 # A sandbox that stays up
-openshell sandbox create --name work --from openworker-openshell:local \
+openshell sandbox create --name work --from ghcr.io/andrewyng/openworker:latest \
     --provider openworker-openai --detach -- sleep infinity
 
 # Copy the project in. It lands at /sandbox/my-project

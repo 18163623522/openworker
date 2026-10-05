@@ -5,7 +5,7 @@
 #       --type openworker-openai --from-existing
 #
 # Client binary:     OpenWorker's own Python, as installed in
-#                    ghcr.io/andrewyng/openworker-openshell (packaging/openshell/Dockerfile).
+#                    ghcr.io/andrewyng/openworker (packaging/openshell/Dockerfile).
 #                    Commands OpenWorker starts count as OpenWorker too.
 # Credential scope:  OPENAI_API_KEY, sent as a bearer token to api.openai.com and
 #                    nowhere else. Inside the sandbox the variable holds a placeholder.

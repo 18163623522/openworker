@@ -1,14 +1,15 @@
 # OpenWorker's CLI in an image for OpenShell (https://github.com/NVIDIA/OpenShell):
 #
-#   openshell sandbox create --from ghcr.io/andrewyng/openworker-openshell:latest \
+#   openshell sandbox create --from ghcr.io/andrewyng/openworker:latest \
 #       --provider <your model provider> -- openworker run --prompt "..."
 #
 # What OpenShell asks of an image: a standard Linux base, a non-root USER, and iproute2
 # (nftables lets it also log direct connections). The rest is the CLI and the tools an
 # agent's commands usually reach for. See docs/openshell-inside.md.
 #
-# Build from the repository root, so the CLI in the image is this checkout:
-#   docker build -f packaging/openshell/Dockerfile -t openworker-openshell:local .
+# Published by .github/workflows/image.yml. To build your own, from the repository root, so
+# the CLI in the image is this checkout:
+#   docker build -f packaging/openshell/Dockerfile -t openworker:local .
 
 FROM node:22-bookworm-slim AS node
 
