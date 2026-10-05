@@ -82,7 +82,9 @@ def test_inside_the_agent_is_told_what_a_blocked_request_looks_like(in_openshell
     assert "CONNECT tunnel failed, response 403" in text and "policy_denied" in text
     assert "Couldn't connect to server" in text  # how OpenShell 0.1 refuses
     # Proposals are off, so there is no skill to load: the person changes the policy.
-    assert "openshell policy update --add-endpoint HOST:PORT" in text
+    # The whole command: seen on OpenShell 0.1.2, a rule added without --binary lets no
+    # program through, so the short form sent people in a circle.
+    assert "openshell policy update SANDBOX_NAME --add-endpoint HOST:PORT --binary '/**' --wait" in text
     assert "openshell-policy-advisor" not in text
 
 

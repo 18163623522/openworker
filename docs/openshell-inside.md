@@ -114,8 +114,13 @@ openshell policy update work --add-endpoint pypi.org:443 --binary '/**' --wait
 ```
 
 `--binary` says which programs may use the site. `'/**'` means any program in the sandbox;
-name one, such as `/usr/bin/curl`, to keep it to that program. The change reaches the
-running sandbox in a few seconds, with no restart.
+name one, such as `/usr/bin/curl`, to keep it to that program. Do not leave `--binary` out:
+OpenShell then adds a rule that lets no program through. The change reaches the running
+sandbox in a few seconds, with no restart.
+
+The sandbox has to be running to be changed. A run started with `--no-keep` (step 3) is
+gone when it ends, so for work that needs sites use a sandbox that stays up (step 4),
+allow the sites, and run the task again.
 
 OpenShell can also draft these rules from the requests it blocked, for you to approve. That
 is its policy advisor; see OpenShell's

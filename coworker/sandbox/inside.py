@@ -59,7 +59,10 @@ def context() -> str:
     else:
         lines.append(
             "If the task needs a blocked request, tell the user which host and port were "
-            "blocked. They can allow it from outside the sandbox with "
-            "`openshell policy update --add-endpoint HOST:PORT`."
+            "blocked. They can allow it from outside the sandbox, while it is still running, "
+            "with `openshell policy update SANDBOX_NAME --add-endpoint HOST:PORT --binary '/**' "
+            "--wait`. Give the command with the real host and port, and say that it needs the "
+            "sandbox's name and that `--binary` is required: without it the rule lets no "
+            "program through."
         )
     return " ".join(lines)
