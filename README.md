@@ -100,8 +100,8 @@ cd openworker
 bash packaging/setup_dev_env.sh
 
 # 2. Start the local agent server
-.venv/bin/openworker-server --cwd ~/some/project --port 8765
-#    (Windows: .venv\Scripts\openworker-server.exe)
+.venv/bin/python -m coworker.server.run --cwd ~/some/project --port 8765
+#    (Windows: .venv\Scripts\python -m coworker.server.run ...)
 
 # 3. In a second terminal, start the UI
 cd surfaces/gui

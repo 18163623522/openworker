@@ -909,7 +909,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         if actor is None:
             return JSONResponse(
                 {"error": "board token required (Authorization: Bearer …) — mint"
-                          " one with `ocw board token` on the serving machine"},
+                          " one with `python -m coworker.teams.cli board token` on the serving machine"},
                 status_code=401,
             )
         try:
