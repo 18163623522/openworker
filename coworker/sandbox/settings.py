@@ -79,7 +79,9 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         "providers": providers,
         "windows_setup": _windows_setup_info(),
         "network_profile": _profile_for_display(cfg.sandbox_network_profile),
-        "network_profiles": [{"name": name} for name in network_profiles.PROFILES],
+        # The choices the page offers. OpenShell cannot allow every site (its policy has
+        # to name each one), so with OpenShell there is only the allow list.
+        "network_profiles": [{"name": name} for name in network_profiles.PROFILES if _offered(name, cfg.sandbox_provider or effective)],
         "network_sites": [{"group": group, "hosts": [f"{h}:443" for h in hosts]} for group, hosts in network_profiles.SITES.items()],
         "network_hosts": network_profiles.clean_hosts(cfg.sandbox_network_hosts),
         "credentials": _for_display(credentials.listed(cfg.sandbox_credentials)),
@@ -87,6 +89,16 @@ def snapshot(cfg: Optional[app_config.Config] = None) -> dict[str, Any]:
         "toolchains": toolchains.for_display(cfg.sandbox_toolchains),
         "config_path": str(app_config.global_config_path()),
     }
+
+
+def _offered(profile: str, provider: str) -> bool:
+    return not (provider == OPENSHELL and network_profiles.is_open(profile))
+
+
+OPENSHELL_NEEDS_SITES = (
+    "OpenShell cannot allow every site: its policy has to name each site. "
+    'Choose "Only the sites you allow" and tick the sites the work needs.'
+)
 
 
 def _profile_for_display(configured: Optional[str]) -> str:
@@ -211,12 +223,19 @@ def update(body: dict[str, Any]) -> dict[str, Any]:
 
         if provider == OPENSHELL:
             openshell_problem(fresh=True)
+            # "Allow everything" does not exist with OpenShell: a machine that had it moves
+            # to the allow list, or its sessions would not start.
+            stored = (app_config.load_config().sandbox_network_profile or "").strip().lower()
+            if stored and network_profiles.is_open(_profile_for_display(stored)) and "network_profile" not in body:
+                app_config.set_global_value("sandbox_network_profile", network_profiles.ALLOWLIST)
     if "network_profile" in body:
         profile = str(body.get("network_profile") or "").strip().lower()
         try:
             profile = network_profiles.check(profile)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        if not _offered(profile, app_config.load_config().sandbox_provider or ""):
+            return {"ok": False, "error": OPENSHELL_NEEDS_SITES}
         app_config.set_global_value("sandbox_network_profile", profile)
     if "network_hosts" in body:
         items = body.get("network_hosts")

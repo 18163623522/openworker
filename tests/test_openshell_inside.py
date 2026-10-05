@@ -80,6 +80,7 @@ def test_inside_the_agent_is_told_what_a_blocked_request_looks_like(in_openshell
     text = _engine(tmp_path).context_provider()
     assert "runs inside an OpenShell sandbox" in text
     assert "CONNECT tunnel failed, response 403" in text and "policy_denied" in text
+    assert "Couldn't connect to server" in text  # how OpenShell 0.1 refuses
     # Proposals are off, so there is no skill to load: the person changes the policy.
     assert "openshell policy update --add-endpoint HOST:PORT" in text
     assert "openshell-policy-advisor" not in text
@@ -141,17 +142,17 @@ def test_inside_a_literal_internal_address_is_still_refused(in_openshell, monkey
         assert reason and "refusing to fetch" in reason and pin is None
 
 
-def test_inside_without_a_proxy_for_the_scheme_the_name_is_still_vetted(in_openshell, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only HTTPS_PROXY is set: a plain http request would connect directly, so it is checked.
-    looked_up: list[str] = []
-
-    def lookup(host, *_a, **_k):
-        looked_up.append(host)
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
-
-    monkeypatch.setattr(socket, "getaddrinfo", lookup)
-    reason, _pin = guard._vet("http://rebind.example.org/")
-    assert looked_up == ["rebind.example.org"] and reason and "refusing to fetch" in reason
+def test_inside_openshell_0_1_a_name_is_not_judged_by_its_placeholder_address(in_openshell, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OpenShell 0.1 sets no proxy variables and answers every name with an address in
+    # 198.18.0.0/15, which the guard refuses as private. Seen on 0.1.2: example.org -> 198.18.0.2.
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.18.0.2", 443))])
+    assert guard._vet("https://example.org/page") == (None, None)
+    assert guard._vet("http://example.org/page") == (None, None)
+    # The same answer outside a sandbox is refused, as before.
+    monkeypatch.delenv("OPENSHELL_SANDBOX")
+    reason, _pin = guard._vet("https://example.org/page")
+    assert reason and "198.18.0.2" in reason
 
 
 def test_outside_a_name_is_looked_up_and_pinned_as_before(outside, monkeypatch: pytest.MonkeyPatch) -> None:
