@@ -1,4 +1,5 @@
-# Desktop release builds — macOS (.dmg, arm64 + Intel) and Windows (.msi + NSIS .exe).
+# Desktop release builds — macOS (.dmg, arm64 + Intel) and Windows (.msi + NSIS .exe) — and
+# the Linux `openworker` program (.tar.gz, x86_64 + aarch64; packaging/build_linux.sh).
 #
 # CI calls the SAME scripts developers run locally (packaging/build_dmg.sh and
 # build_windows.ps1); this file only provisions the toolchain (Node, Rust, a Python venv at
@@ -81,7 +82,10 @@ jobs:
           python -m venv .venv
           if [ "$RUNNER_OS" = "Windows" ]; then VPY=.venv/Scripts/python; else VPY=.venv/bin/python; fi
           "$VPY" -m pip install --upgrade pip
-          "$VPY" -m pip install -e ".[bedrock]" pyinstaller typer tzdata
+          # openshell: grpcio, without which the macOS sidecar cannot use OpenShell
+          # sandboxes (build_dmg.sh refuses to build without it). Not used on Windows.
+          if [ "$RUNNER_OS" = "Windows" ]; then EXTRAS=bedrock; else EXTRAS=bedrock,openshell; fi
+          "$VPY" -m pip install -e ".[$EXTRAS]" pyinstaller typer tzdata
           "$VPY" -c "import aisuite, coworker"  # fail fast if either import breaks
 
       - name: npm ci
@@ -152,9 +156,42 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds inside a Debian bullseye container (glibc 2.31), natively on each
+      # architecture: the program is a PyInstaller freeze, which cannot cross-compile.
+      - name: Build the Linux program
+        run: bash packaging/build_linux.sh
+
+      - name: Stage artifacts (versioned + stable names)
+        run: |
+          mkdir -p out
+          cp packaging/dist/openworker-*-linux-${{ matrix.arch }}.tar.gz* out/
+          cp packaging/dist/openworker-*-linux-${{ matrix.arch }}.tar.gz out/openworker-linux-${{ matrix.arch }}.tar.gz
+          # packaging/install.sh fetches the stable name for "latest" and checks it against this.
+          (cd out && sha256sum openworker-linux-${{ matrix.arch }}.tar.gz > openworker-linux-${{ matrix.arch }}.tar.gz.sha256)
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
