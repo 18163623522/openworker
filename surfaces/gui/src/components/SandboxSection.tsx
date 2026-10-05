@@ -485,7 +485,8 @@ export function SandboxSection({ machine, onProviderChanged }: { machine?: Machi
         <>
           <div className={FIELD_LABEL + " mb-2"}>{t("settingsx.sandbox.network")}</div>
           <div className={CARD + " mb-5 divide-y divide-line"} role="radiogroup" aria-label={t("settingsx.sandbox.network")}>
-            {(["allowlist", "open"] as const).map((name) => (
+            {/* The server lists the choices: with OpenShell there is no "Allow everything". */}
+            {(["allowlist", "open"] as const).filter((name) => cfg.network_profiles.some((p) => p.name === name)).map((name) => (
               <label key={name} className="flex items-start gap-3 px-4 py-2.5 cursor-pointer">
                 <input
                   type="radio"

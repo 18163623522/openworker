@@ -262,6 +262,26 @@ describe("Settings ▸ Sandbox", () => {
     expect(screen.getByTestId("sandbox-card-files")).toBeTruthy();
   });
 
+  it("OpenShell chosen: only the allow list is offered, no Allow everything", async () => {
+    snapshot = {
+      ...base,
+      platform: "linux",
+      provider: "openshell",
+      effective_provider: "openshell",
+      providers: [
+        { name: "direct", usable: true, why: "", state: "ready" },
+        { name: "openshell", usable: true, why: "", state: "ready" },
+      ],
+      network_profiles: [{ name: "allowlist" }], // what the server sends with OpenShell
+    };
+    render(<SettingsView initialTab="sandbox" />);
+    await screen.findByTestId("sandbox-section");
+    expect(document.querySelectorAll('input[name="sandbox-network"]').length).toBe(1);
+    expect((screen.getByTestId("sandbox-network-allowlist") as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByTestId("sandbox-network-open")).toBeNull();
+    expect(screen.queryByText("Allow everything")).toBeNull();
+  });
+
   it("a chosen type shows two network choices and two closed panels; off writes direct", async () => {
     snapshot = chosenSeatbelt();
     render(<SettingsView initialTab="sandbox" />);
