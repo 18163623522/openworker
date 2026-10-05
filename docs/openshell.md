@@ -60,6 +60,10 @@ crosses into the sandbox, and everything that comes back is treated as data.
 - A Linux machine, or a Mac with Docker Desktop.
 - Docker or Podman.
 - OpenShell 0.1.2, the release OpenWorker is tested against.
+- On a Mac: host networking turned on in Docker Desktop (**Settings ▸ Resources ▸
+  Network ▸ Enable host networking**, then Apply & restart). OpenShell's sandboxes reach
+  its gateway that way; with it off, no sandbox starts. The status check tells you when it
+  is off.
 
 ### Coming from OpenShell 0.0.x
 
