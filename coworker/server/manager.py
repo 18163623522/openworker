@@ -4151,6 +4151,8 @@ class SessionManager:
         topped up with the compat-vendor extras the matrix doesn't vouch for."""
         if name == "ollama":
             return [m.split(":", 1)[-1] for m in self._ollama_models()]
+        if name in ("llamacpp", "vllm"):
+            return [m.split(":", 1)[-1] for m in self._local_server_models(name)]
         from ..providers.matrix import models_for_provider
 
         return list(
@@ -4212,9 +4214,10 @@ class SessionManager:
         if rec and rec in suggested:
             # OpenAI models stay bare (the router's default); others carry their prefix.
             added = rec if name == "openai" else f"{name}:{rec}"
-        elif name == "ollama" and suggested:
-            # Ollama offers whatever the user pulled — the recommended model may not be one.
-            added = f"ollama:{suggested[0]}"
+        elif name in ("ollama", "llamacpp", "vllm") and suggested:
+            # A local server offers whatever the user loaded — the recommended model may
+            # not be one.
+            added = f"{name}:{suggested[0]}"
         if added:
             self.add_model(added)
         if added and not self.model_selectable(self.model):
@@ -4415,15 +4418,48 @@ class SessionManager:
 
     def local_model_facts(self, name: str) -> dict[str, Any]:
         """The models a local provider has, with size, tool support, thinking, context
-        and how each sits on this machine. Ollama today; llama.cpp and vLLM report
-        their own single model the same way once connected."""
-        from ..providers import local_machine, ollama_facts
+        and how each sits on this machine. Ollama lists what it pulled; llama.cpp and
+        vLLM report the model they serve."""
+        from ..providers import local_server, ollama_facts
 
         if name == "ollama":
             profile = self.secrets.get("provider:ollama") or {}
             rows = ollama_facts.model_facts(profile.get("base_url"), fresh=True)
             return {"provider": name, "models": rows, "alive": self._ollama_alive()}
+        if name in local_server.LOCAL_SERVERS:
+            profile = self.secrets.get(f"provider:{name}") or {}
+            rows = local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"), fresh=True)
+            return {"provider": name, "models": rows, "alive": self._local_server_alive(name)}
         return {"provider": name, "models": [], "error": "no local model list for this provider"}
+
+    def _local_server_alive(self, name: str) -> bool:
+        """Best-effort liveness of a llama.cpp or vLLM server, cached 30 s like Ollama's."""
+        import time
+
+        from ..providers import local_server
+
+        now = time.monotonic()
+        cache = getattr(self, "_local_alive_cache", None) or {}
+        hit = cache.get(name)
+        if hit and now - hit[0] < 30:
+            return hit[1]
+        profile = self.secrets.get(f"provider:{name}") or {}
+        alive = local_server.alive(name, profile.get("base_url"), profile.get("api_key"))
+        cache[name] = (now, alive)
+        self._local_alive_cache = cache
+        return alive
+
+    def _local_server_models(self, name: str) -> list[str]:
+        """The model ids a llama.cpp or vLLM server serves, as `<name>:<id>`; empty when
+        it does not answer or was started without tool calling."""
+        from ..providers import local_server
+
+        profile = self.secrets.get(f"provider:{name}") or {}
+        return [
+            row["model"]
+            for row in local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"))
+            if row.get("tools") is not False
+        ]
 
     def system_facts(self) -> dict[str, Any]:
         """This machine, for the "Your system" section: processor, graphics, memory,
@@ -4438,6 +4474,8 @@ class SessionManager:
         provider = self._model_provider(model)
         if provider == "ollama":
             return self._ollama_alive()
+        if provider in ("llamacpp", "vllm"):
+            return self._local_server_alive(provider)
         return self._provider_configured(provider)
 
     def persona_models(self, persona_id: str) -> list[str]:
@@ -4669,6 +4707,9 @@ class SessionManager:
         # Pulled Ollama models are offered live while Ollama answers — no need to add each one.
         if self._ollama_alive():
             selectable = list(dict.fromkeys([*selectable, *self._ollama_models()]))
+        for local in ("llamacpp", "vllm"):
+            if self.secrets.get(f"provider:{local}") and self._local_server_alive(local):
+                selectable = list(dict.fromkeys([*selectable, *self._local_server_models(local)]))
         if self.model not in selectable:
             selectable.insert(0, self.model)
         from ..providers.matrix import model_context_windows, model_labels
