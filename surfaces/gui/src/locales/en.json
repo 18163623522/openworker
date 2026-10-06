@@ -1376,7 +1376,11 @@
     "local_server_not_answering": "Nothing answers at this address.",
     "vllm_tools_off": "This server cannot use tools yet, so coworkers cannot work with it. Start vLLM with tool calling turned on, then check again.",
     "configure_model": "Settings for this model",
-    "remove_from_picker_btn": "Remove from the picker"
+    "remove_from_picker_btn": "Remove from the picker",
+    "local_models_loading": "Asking the server which models it has…",
+    "local_models_failed": "Couldn't reach the server to list its models.",
+    "local_models_failed_ollama": "Couldn't reach Ollama to list its models.",
+    "retry": "Retry"
   },
   "models": {
     "add_btn": "Add",
@@ -1598,7 +1602,11 @@
     "test_save_btn": "Test & save",
     "connected_count": "✓ Connected · {{count}} models",
     "running_count": "✓ Running · {{count}} models",
-    "not_connected": "Not connected"
+    "not_connected": "Not connected",
+    "llamacpp_desc": "No API key needed unless your llama-server was started with one.",
+    "install_llamacpp": "Install llama.cpp",
+    "vllm_desc": "vLLM runs on Linux with an NVIDIA GPU. A key is needed only if the server was started with one.",
+    "install_vllm": "Install vLLM"
   },
   "workspace_trust": {
     "title": "Trust this workspace’s commands?",

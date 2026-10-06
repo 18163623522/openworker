@@ -23,6 +23,13 @@ import { OpenRouterSignIn } from "./OpenRouterSignIn";
 // and passes a testid prefix so both stay independently addressable in e2e.
 
 // Where a non-developer gets an API key — deep link + one line of instructions.
+// Keyless local servers: one line on what the server is, and where to get it.
+const LOCAL_HELP: Record<string, { desc: string; link: string; url: string }> = {
+  ollama: { desc: "provider.no_key_needed_desc", link: "provider.install_ollama", url: "https://ollama.com/download" },
+  llamacpp: { desc: "provider.llamacpp_desc", link: "provider.install_llamacpp", url: "https://github.com/ggml-org/llama.cpp#quick-start" },
+  vllm: { desc: "provider.vllm_desc", link: "provider.install_vllm", url: "https://docs.vllm.ai/en/latest/getting_started/installation/" },
+};
+
 export const KEY_HELP: Record<string, { url: string; label: string; labelKey?: string }> = {
   anthropic: { url: "https://console.anthropic.com/settings/keys", label: "console.anthropic.com" },
   openai: { url: "https://platform.openai.com/api-keys", label: "platform.openai.com" },
@@ -625,14 +632,14 @@ export function ProviderForm({
           {t("provider.takes_a_minute")}
         </p>
       )}
-      {info && !info.needs_key && info.auth !== "oauth" && (
+      {info && !info.needs_key && info.auth !== "oauth" && LOCAL_HELP[info.name] && (
         <p className="text-meta text-faint mt-2">
-          {t("provider.no_key_needed_desc")}{" "}
+          {t(LOCAL_HELP[info.name].desc)}{" "}
           <button
             className="text-muted underline decoration-line underline-offset-2 hover:text-ink"
-            onClick={() => openExternal("https://ollama.com/download")}
+            onClick={() => openExternal(LOCAL_HELP[info.name].url)}
           >
-            {t("provider.install_ollama")} ↗
+            {t(LOCAL_HELP[info.name].link)} ↗
           </button>
         </p>
       )}
