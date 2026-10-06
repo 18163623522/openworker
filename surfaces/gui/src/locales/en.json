@@ -212,6 +212,7 @@
       "session_only_note": "Other sessions keep the model's own setting.",
       "change_defaults": "Change the model's defaults…"
     },
+    "placeholder_question": "Type your answer — or pick an option above",
     "placeholder_gate": "Reply to adjust the proposal — or use the buttons above",
     "attach_this_message": "This message",
     "attach_this_session": "This session",
