@@ -197,8 +197,12 @@ def _build_vertex(profile: dict[str, Any], secrets: Any) -> ProviderClient:
 def _build_ollama(profile: dict[str, Any], secrets: Any) -> ProviderClient:
     # Ollama's OpenAI-compatible endpoint ignores the key but the SDK requires a non-empty
     # string, so we pass a placeholder. `base_url` comes from the stored profile (or the default).
+    # Chat calls are rewritten onto the native API so we can set num_ctx — the /v1 handler
+    # cannot, and its 4,096-token default drops the Cowork prompt (see ollama_context.py).
+    from .ollama_context import ollama_http_client
+
     base_url = _normalize_ollama_url((profile or {}).get("base_url"))
-    return OpenAIProvider(api_key="ollama", base_url=base_url)
+    return OpenAIProvider(api_key="ollama", base_url=base_url, http_client=ollama_http_client())
 
 
 def _openai_compat(vendor: str, default_base_url: str, env_key: Optional[str] = None):
@@ -768,16 +772,10 @@ def _verify_bedrock(fields: dict[str, Any], timeout: float) -> dict[str, Any]:
     def get(key: str) -> Optional[str]:
         return (fields.get(key) or "").strip() or None
 
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError:
-        return {
-            "ok": False,
-            "error": "boto3 is not installed — `pip install 'openworker[bedrock]'`.",
-        }
     # Exactly one auth method is exercised — the one the form has selected. Per-method
-    # required fields are checked here so the Test button says what's missing.
+    # required fields are checked here so the Test button says what's missing. Do this
+    # before importing boto3 so the test suite (and users) get a helpful missing-field
+    # message even when the optional `bedrock` extra is not installed.
     method = get("auth_method") or "api_key"
     if method == "api_key" and not (
         get("bedrock_api_key") or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
@@ -787,6 +785,14 @@ def _verify_bedrock(fields: dict[str, Any], timeout: float) -> dict[str, Any]:
         get("aws_access_key_id") and get("aws_secret_access_key")
     ):
         return {"ok": False, "error": "Enter an access key ID and secret access key."}
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "boto3 is not installed — `pip install 'openworker[bedrock]'`.",
+        }
     try:
         if method == "api_key":
             # The key rides the env var (boto3's only bearer channel); bearer then wins
@@ -1012,6 +1018,24 @@ def verify_provider_key(
                 headers={"Authorization": f"Bearer {key}"},
                 timeout=timeout,
             )
+            # Reachability of /models isn't enough: a base URL that omits the /v1 path
+            # segment (e.g. LM Studio served at http://127.0.0.1:1234) can still answer
+            # /models while every completion 404s — the session then hangs silently on
+            # an endpoint that "tested" fine. Probe the real completions route too and
+            # fail fast with a path-specific message instead (issue #431).
+            if resp.status_code < 300:
+                route = httpx.get(
+                    base + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=timeout,
+                )
+                if route.status_code == 404:
+                    return {
+                        "ok": False,
+                        "error": "Server reachable, but the completions route 404s — the "
+                        "endpoint is usually missing a /v1 path segment (e.g. "
+                        "http://127.0.0.1:1234/v1).",
+                    }
     except Exception as exc:  # DNS/connection/timeout — never let it bubble to a 500
         return {
             "ok": False,
