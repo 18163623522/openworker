@@ -1357,7 +1357,11 @@
     "local_server_not_answering": "该地址没有响应。",
     "vllm_tools_off": "此服务器尚不能使用工具，因此同事无法使用它。请开启工具调用后重新启动 vLLM，然后再检查。",
     "configure_model": "此模型的设置",
-    "remove_from_picker_btn": "从选择器中移除"
+    "remove_from_picker_btn": "从选择器中移除",
+    "local_models_loading": "正在向服务器查询可用模型…",
+    "local_models_failed": "无法连接服务器以列出模型。",
+    "local_models_failed_ollama": "无法连接 Ollama 以列出模型。",
+    "retry": "重试"
   },
   "models": {
     "add_btn": "添加",

@@ -2601,7 +2601,11 @@ export interface LocalModelRow {
 export async function getLocalModels(
   provider: string,
 ): Promise<{ provider: string; models: LocalModelRow[]; alive?: boolean; error?: string }> {
-  const res = await fetch(`${httpBase()}/v1/providers/${encodeURIComponent(provider)}/models`);
+  // A stuck request must end in an error the page can show, never an endless blank.
+  const res = await fetch(`${httpBase()}/v1/providers/${encodeURIComponent(provider)}/models`, {
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 

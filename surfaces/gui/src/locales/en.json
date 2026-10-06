@@ -1374,7 +1374,11 @@
     "local_server_not_answering": "Nothing answers at this address.",
     "vllm_tools_off": "This server cannot use tools yet, so coworkers cannot work with it. Start vLLM with tool calling turned on, then check again.",
     "configure_model": "Settings for this model",
-    "remove_from_picker_btn": "Remove from the picker"
+    "remove_from_picker_btn": "Remove from the picker",
+    "local_models_loading": "Asking the server which models it has…",
+    "local_models_failed": "Couldn't reach the server to list its models.",
+    "local_models_failed_ollama": "Couldn't reach Ollama to list its models.",
+    "retry": "Retry"
   },
   "models": {
     "add_btn": "Add",
