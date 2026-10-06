@@ -20,6 +20,7 @@ import {
   type ProviderInfo,
 } from "../api";
 import { CloudSignInInline, CloudStatusPending } from "./connectors/CloudSignIn";
+import { Icon } from "./Icon";
 import { ModelChecklist } from "./ModelChecklist";
 import { LocalModelsTable, YourSystem } from "./models/LocalModels";
 import { PickModelDialog } from "./models/PickModelDialog";
@@ -224,6 +225,15 @@ function ComposerPickerCard({
     const p = providers.find((x) => x.name === provOf(id));
     return (p?.title || provOf(id)).split(" (")[0];
   };
+  // "ollama:qwen3-coder:30b" reads as "qwen3-coder:30b"; the provider sits beside it.
+  const shortId = (id: string) => (id.startsWith(provOf(id) + ":") ? id.slice(provOf(id).length + 1) : id);
+  // The card says the provider on its second line, so a label that ends in it
+  // ("GPT-5.6 Sol · OpenAI") loses that tail on the first.
+  const title = (id: string) => {
+    const label = settings.model_labels?.[id] || shortId(id);
+    const tail = ` · ${tag(id)}`;
+    return label.endsWith(tail) ? label.slice(0, -tail.length) : label;
+  };
   const detail = (id: string) => {
     const cfg = settings.model_config?.[id];
     const bits = [tag(id)];
@@ -234,48 +244,64 @@ function ComposerPickerCard({
   const q = query.trim().toLowerCase();
   const shown = settings.models.filter((id) => !q || id.toLowerCase().includes(q) || (settings.model_labels?.[id] || "").toLowerCase().includes(q));
   return (
-    <div className="mt-2" data-testid="composer-picker">
+    <div className="mt-10" data-testid="composer-picker">
       <div className="flex items-center mb-2">
         <div className={SEC_H + " uppercase tracking-wide"}>{t("manage.composer_picker_title")}</div>
         <label className="ml-auto flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1 w-[220px] text-meta">
-          <span className="text-faint">⌕</span>
+          <Icon name="search" size={12} className="text-faint shrink-0" />
           <input className="flex-1 bg-transparent outline-none" placeholder={t("manage.picker_search")} value={query} onChange={(e) => setQuery(e.target.value)} data-testid="picker-search" />
         </label>
+        <button
+          className="ml-2 grid place-items-center w-[30px] h-[30px] rounded-lg border border-line bg-panel text-muted hover:text-ink hover:border-lineStrong transition-colors"
+          title={t("manage.pick_model_btn")}
+          onClick={onPick}
+          data-testid="pick-model-btn"
+        >
+          <Icon name="plus" size={14} />
+        </button>
       </div>
-      <div className="rounded-xl border border-line bg-panel max-h-[214px] overflow-auto">
+      {/* Each model is a card like the provider cards above: name, then provider and any
+          saved settings; ✕ and "Make default" show on hover. No table, no dividers. */}
+      <div className={"grid grid-cols-2 xl:grid-cols-3 gap-3" + (shown.length > 9 ? " max-h-[262px] overflow-y-auto pr-1 -mr-1" : "")}>
         {shown.map((id) => {
           const isDefault = id === settings.model;
           return (
-            <div className="flex items-center gap-2.5 px-3.5 py-2 border-b border-line last:border-b-0 text-ui" key={id} data-testid={`picker-row-${id}`}>
-              <button className="truncate text-left hover:underline underline-offset-2" title={t("manage.configure_model")} onClick={() => onConfigure(id)}>
-                {settings.model_labels?.[id] || id}
-              </button>
-              <span className="text-meta text-faint truncate">· {detail(id)}</span>
-              {isDefault ? (
-                <span className="mlist-default">{t("models.default_badge")}</span>
-              ) : (
-                <button className="mlist-make" onClick={() => setDefaultModel(id).then(() => onChanged())}>
-                  {t("models.make_default")}
+            <div
+              className="mlist-row group relative flex items-center gap-3 rounded-xl border border-line bg-panel/50 px-5 py-4 min-h-[70px] text-ui hover:border-lineStrong transition-colors"
+              key={id}
+              data-testid={`picker-row-${id}`}
+            >
+              <span className="min-w-0 flex-1">
+                <button className="block w-full truncate text-left leading-tight hover:underline underline-offset-2" title={t("manage.configure_model")} onClick={() => onConfigure(id)}>
+                  {title(id)}
+                </button>
+                <span className="flex items-center gap-2 mt-1 text-meta text-faint">
+                  <span className="truncate">{detail(id)}</span>
+                  {isDefault ? (
+                    <span className="mlist-default">{t("models.default_badge")}</span>
+                  ) : (
+                    <button className="mlist-make" onClick={() => setDefaultModel(id).then(() => onChanged())}>
+                      {t("models.make_default")}
+                    </button>
+                  )}
+                </span>
+              </span>
+              {!isDefault && (
+                <button
+                  className="text-faint hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity"
+                  title={t("manage.remove_from_picker")}
+                  onClick={() => removeModel(id).then((r) => r.ok && onChanged())}
+                  data-testid={`picker-remove-${id}`}
+                >
+                  ✕
                 </button>
               )}
-              <button
-                className="ml-auto text-faint hover:text-ink disabled:opacity-40"
-                title={isDefault ? t("models.default_locked") : t("manage.remove_from_picker")}
-                disabled={isDefault}
-                onClick={() => removeModel(id).then((r) => r.ok && onChanged())}
-                data-testid={`picker-remove-${id}`}
-              >
-                ✕
-              </button>
             </div>
           );
         })}
-        {shown.length === 0 && <div className="px-3.5 py-3 text-meta text-faint">—</div>}
+        {shown.length === 0 && <div className="px-1 py-2 text-meta text-faint">—</div>}
       </div>
-      <p className="text-meta text-muted mt-2 leading-relaxed">{t("manage.composer_picker_help_v2")}</p>
-      <button className="mt-2.5 rounded-lg border border-lineStrong bg-panel px-3 py-1.5 text-ui font-medium" onClick={onPick} data-testid="pick-model-btn">
-        + {t("manage.pick_model_btn")}
-      </button>
+      <p className="text-meta text-muted mt-3 leading-relaxed">{t("manage.composer_picker_help_v3")}</p>
     </div>
   );
 }
