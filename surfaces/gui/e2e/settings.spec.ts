@@ -53,11 +53,16 @@ test("Models: provider gallery states; vendor form previews models", async ({ pa
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Models & Keys" }).click();
 
-  // Card states from the fixtures: openai configured+used, anthropic configured, zai not.
-  await expect(page.getByTestId("set-provider-openai")).toContainText("✓ Connected · used 2h ago");
+  // Card states from the fixtures: openai configured with models in the picker, anthropic
+  // configured, zai not. UX-055: a connected card counts its picker models; connected
+  // cards come first in their group, then a "not set up" rule; local servers group apart.
+  await expect(page.getByTestId("set-provider-openai")).toContainText("✓ Connected · 4 models");
   await expect(page.getByTestId("set-provider-anthropic")).toContainText("✓ Connected");
   await expect(page.getByTestId("set-provider-zai")).toContainText("Not set up");
   await expect(page.getByTestId("set-provider-ollama")).toContainText("No key needed");
+  await expect(page.getByTestId("provider-group-local")).toContainText("Ollama");
+  await expect(page.getByTestId("provider-rule-api_key")).toContainText("not set up");
+  await expect(page.getByTestId("provider-search")).toBeVisible();
 
   // The composer-picker card lists the curated models with provider tags.
   const picker = page.getByTestId("composer-picker");
