@@ -1,7 +1,6 @@
 {
   "openrouter": {
-    "title": "Or connect your OpenRouter account",
-    "note": "Uses your OpenRouter credits. Signing in selects account billing; testing and saving an API key selects that key instead.",
+    "title": "OpenRouter account",
     "signin": "Sign in with OpenRouter",
     "manual": "Use a manual code",
     "waiting": "Complete sign-in in your browser.",
@@ -9,8 +8,7 @@
     "cancel": "Cancel",
     "code": "Authorization code",
     "connect": "Connect",
-    "active": "Connected · account credentials active",
-    "saved": "Account saved · API key active",
+    "connected": "Connected to your OpenRouter account",
     "disconnect": "Disconnect account",
     "manage": "Manage or revoke keys on OpenRouter",
     "unreachable": "Could not complete the request. Check the connection and try again."
@@ -1283,6 +1281,7 @@
     "could_not_start_managed": "could not start the connect",
     "id_title": "ID: {{id}}",
     "included_models": "Included models",
+    "included_models_help_signin": "Curated, agent-capable models this provider serves — sign in above to enable them.",
     "included_models_help": "Curated, agent-capable models this provider serves — add your key above to enable them.",
     "listening_empty": "None yet — open a session's Sources ▸ Channels to subscribe it to a channel.",
     "listening_title": "Sessions listening to {{title}} channels · {{n}}",

@@ -175,7 +175,7 @@ export function ModelsTab() {
           <div className="mt-6" data-testid="model-preview">
             <div className={SEC_H + " mb-1.5"}>{t("manage.included_models")}</div>
             <p className="text-meta text-muted mb-2.5 leading-relaxed">
-              {t("manage.included_models_help")}
+              {t(info?.auth === "oauth" ? "manage.included_models_help_signin" : "manage.included_models_help")}
             </p>
             <div className="space-y-1">
               {(info?.suggested_models || []).map((m) => {

@@ -1,7 +1,6 @@
 {
   "openrouter": {
-    "title": "或连接您的 OpenRouter 账户",
-    "note": "使用您的 OpenRouter 额度。登录后使用账户凭据；测试并保存 API 密钥后改用该密钥。",
+    "title": "OpenRouter 账户",
     "signin": "使用 OpenRouter 登录",
     "manual": "手动输入授权码",
     "waiting": "请在浏览器中完成登录。",
@@ -9,8 +8,7 @@
     "cancel": "取消",
     "code": "授权码",
     "connect": "连接",
-    "active": "已连接 · 正在使用账户凭据",
-    "saved": "账户已保存 · 正在使用 API 密钥",
+    "connected": "已连接到你的 OpenRouter 账户",
     "disconnect": "断开账户连接",
     "manage": "在 OpenRouter 管理或撤销密钥",
     "unreachable": "无法完成请求。请检查连接后重试。"
@@ -1266,6 +1264,7 @@
     "could_not_start_managed": "无法启动连接",
     "id_title": "ID：{{id}}",
     "included_models": "内置模型",
+    "included_models_help_signin": "此提供方精选的 agent 模型 —— 在上方登录即可启用。",
     "included_models_help": "此提供方精选的 agent 模型 —— 在上方添加密钥即可启用。",
     "listening_empty": "暂无 —— 打开会话的「来源 ▸ 频道」即可订阅频道。",
     "listening_title": "正在监听 {{title}} 频道的会话 · {{n}}",
