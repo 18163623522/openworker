@@ -4065,6 +4065,10 @@ class SessionManager:
                     d.name
                 ),
             }
+            if d.kind == "local":
+                # A keyless server is "connected" when it answers (cached probes), not
+                # when a form was saved; the page groups connected providers first.
+                row["alive"] = self._ollama_alive() if d.name == "ollama" else self._local_server_alive(d.name)
             if d.auth == "oauth":
                 # Sign-in state instead of key state; the token values themselves
                 # never leave the SecretStore.

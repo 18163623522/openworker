@@ -693,7 +693,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
     ),
     ProviderDescriptor(
         name="ollama",
-        title="Ollama (local models)",
+        title="Ollama",
         needs_key=False,
         fields=[
             ProviderField(
