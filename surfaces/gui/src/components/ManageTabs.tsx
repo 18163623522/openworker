@@ -70,6 +70,13 @@ export function ModelsTab() {
   const ps = useProviderSetup({ onSaved: refreshSettings });
   useEffect(() => {
     refreshSettings();
+    // The composer's "Pick or configure a model…" lands here with the dialog up.
+    try {
+      if (sessionStorage.getItem("ow:pick-model") === "1") {
+        sessionStorage.removeItem("ow:pick-model");
+        setDialog("+");
+      }
+    } catch { /* private window */ }
   }, []);
 
   if (!settings) return <div className="text-ui text-muted">{t("manage.loading")}</div>;

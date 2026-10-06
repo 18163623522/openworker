@@ -6145,6 +6145,59 @@ class SessionManager:
         except Exception:
             pass
 
+    def set_session_model_settings(self, session_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        """This session's thinking switch or effort level (UX-055: the ⚙ beside the model
+        in the composer). Overrides the model's saved setting for this session only;
+        None puts the model's setting back. Other sessions are untouched."""
+        engine = self._engines.get(session_id)
+        if engine is None:
+            return {"ok": False, "error": "session not running"}
+        settings = dict(engine.model_settings)
+        if "reasoning_effort" in values:
+            effort = values["reasoning_effort"]
+            if effort is None:
+                settings.pop("reasoning_effort", None)
+            elif isinstance(effort, str) and effort.strip():
+                settings["reasoning_effort"] = effort.strip()
+            else:
+                return {"ok": False, "error": "reasoning_effort must be text"}
+        if "thinking" in values:
+            think = values["thinking"]
+            extra = dict(settings.get("extra_body") or {})
+            if think is None:
+                extra.pop("think", None)
+            elif isinstance(think, bool):
+                extra["think"] = think
+            else:
+                return {"ok": False, "error": "thinking must be true or false"}
+            if extra:
+                settings["extra_body"] = extra
+            else:
+                settings.pop("extra_body", None)
+        if "thinking" in values or "reasoning_effort" in values:
+            session_model = _model_config.model_settings_for(engine.model)
+            # Nothing overridden any more → back to the model's own settings.
+            if "reasoning_effort" not in settings and not (settings.get("extra_body") or {}).get("think") in (True, False):
+                for key in ("reasoning_effort",):
+                    if key in session_model:
+                        settings[key] = session_model[key]
+                if "extra_body" in session_model and "extra_body" not in settings:
+                    settings["extra_body"] = session_model["extra_body"]
+        engine.model_settings = settings
+        return {"ok": True, "session_id": session_id, **self.session_model_settings(session_id)}
+
+    def session_model_settings(self, session_id: str) -> dict[str, Any]:
+        """What this session sends for thinking and effort right now."""
+        engine = self._engines.get(session_id)
+        if engine is None:
+            return {"thinking": None, "reasoning_effort": None}
+        settings = engine.model_settings or {}
+        think = (settings.get("extra_body") or {}).get("think")
+        return {
+            "thinking": think if isinstance(think, bool) else None,
+            "reasoning_effort": settings.get("reasoning_effort"),
+        }
+
     def set_unattended(self, session_id: str, value: Any) -> dict[str, Any]:
         """Set the session's attendance (attended / inbox / auto, or the legacy boolean),
         with an audit row. Note this changes only WHO ANSWERS when the agent asks, never

@@ -2525,6 +2525,24 @@ export async function removeModelConfig(model: string): Promise<{ ok: boolean }>
   return res.json();
 }
 
+/** This session's thinking switch and effort level (UX-055, the ⚙ beside the model). */
+export async function getSessionModelSettings(sessionId: string): Promise<{ thinking: boolean | null; reasoning_effort: string | null }> {
+  const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings`);
+  return res.json();
+}
+
+export async function setSessionModelSettings(
+  sessionId: string,
+  values: { thinking?: boolean | null; reasoning_effort?: string | null },
+): Promise<{ ok: boolean; error?: string; thinking?: boolean | null; reasoning_effort?: string | null }> {
+  const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  });
+  return res.json();
+}
+
 /** This machine, for the "Your system" section. */
 export interface SystemFacts {
   processor: string;

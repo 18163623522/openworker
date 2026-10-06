@@ -459,6 +459,14 @@ def create_app(manager: SessionManager) -> FastAPI:
         value = body["attendance"] if "attendance" in body else bool(body.get("unattended"))
         return manager.set_unattended(session_id, value)
 
+    @app.get("/v1/sessions/{session_id}/model-settings")
+    def session_model_settings(session_id: str) -> dict[str, Any]:
+        return manager.session_model_settings(session_id)
+
+    @app.post("/v1/sessions/{session_id}/model-settings")
+    def set_session_model_settings(session_id: str, body: dict) -> dict[str, Any]:
+        return manager.set_session_model_settings(session_id, body or {})
+
     @app.get("/v1/sessions/{session_id}/skills")
     def session_skills(session_id: str, workspace: str = "") -> dict[str, Any]:
         # The rail's Skills group + the composer popup both read this (SKILLS-SPEC §4.1).
