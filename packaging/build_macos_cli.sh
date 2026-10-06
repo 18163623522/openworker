@@ -41,15 +41,22 @@ rm -rf "$PROGRAM" "$OUT/$NAME.tar.gz" "$OUT/$NAME.tar.gz.sha256" "$OUT/$NAME.zip
 echo "==> [1/3] PyInstaller: $NAME"
 OPENWORKER_BUNDLE=cli "$VENV/bin/pyinstaller" --noconfirm --clean --log-level WARN \
   --distpath "$OUT" --workpath "$HERE/build" "$HERE/openworker-server.spec"
-# No *.framework may ship: codesign and the notary service treat it as a bundle, which this
-# flattened layout can never satisfy (the sidecar learned this; see build_dmg.sh). The
-# interpreter PyInstaller loads is _internal/Python, so the framework copy is a duplicate.
+# Resolve every link into a real file first. With a framework Python (python.org, Homebrew,
+# the CI runner's) PyInstaller's _internal/Python is a link INTO Python.framework, and the
+# framework must then go: codesign and the notary service treat it as a bundle, which this
+# flattened layout can never satisfy (the sidecar learned this; see build_dmg.sh). Once the
+# links are resolved the framework is only a duplicate of _internal/Python.
+cp -RL "$PROGRAM" "$PROGRAM.flat"
+rm -rf "$PROGRAM"
+mv "$PROGRAM.flat" "$PROGRAM"
 rm -rf "$PROGRAM/_internal/Python.framework"
 if [ -n "$(find "$PROGRAM" -type d -name "*.framework" | head -1)" ]; then
   echo "ERROR: a .framework is in the program folder; it cannot pass notarization" >&2
   exit 1
 fi
 chmod +x "$PROGRAM/openworker"
+# The program must start before anything is signed or submitted.
+"$PROGRAM/openworker" version
 
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   echo "==> [2/3] signing"
