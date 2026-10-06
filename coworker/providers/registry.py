@@ -223,6 +223,19 @@ def _local_server(name: str):
     return build
 
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _build_openrouter_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    """The `openrouter-account` provider: the key OpenRouter issued at sign-in
+    (providers/openrouter_auth.py), always against OpenRouter's own endpoint — a
+    browser credential is never sent to a custom gateway."""
+    api_key = ((profile or {}).get("api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("OpenRouter account not signed in — sign in under Models & Keys.")
+    return OpenAIProvider(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+
+
 def _openai_compat(vendor: str, default_base_url: str, env_key: Optional[str] = None):
     """Builder factory for vendors reached through their OpenAI-compatible API (Z AI, DeepSeek,
     Kimi, MiniMax, Qwen, xAI, Mistral). The key is resolved from the vendor's OWN profile (or its
@@ -232,16 +245,6 @@ def _openai_compat(vendor: str, default_base_url: str, env_key: Optional[str] = 
     """
 
     def build(profile: dict[str, Any], secrets: Any) -> ProviderClient:
-        if vendor == "OpenRouter" and profile.get("auth_method") == "account":
-            account = (secrets.get("provider:openrouter-account") or {}) if secrets else {}
-            if not profile.get("account_connected") or not account.get("api_key"):
-                raise RuntimeError(
-                    "OpenRouter account disconnected — sign in or explicitly save an API key."
-                )
-            # Browser credentials must never be sent to a custom gateway.
-            return OpenAIProvider(
-                api_key=account["api_key"], base_url="https://openrouter.ai/api/v1"
-            )
         base_url = ((profile or {}).get("base_url") or "").strip() or default_base_url
         api_key = ((profile or {}).get("api_key") or "").strip() or (
             os.environ.get(env_key, "").strip() if env_key else ""
@@ -702,6 +705,18 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         env_key="OPENROUTER_API_KEY",
     ),
     ProviderDescriptor(
+        name="openrouter-account",
+        kind="subscription",
+        title="OpenRouter account",
+        needs_key=False,
+        fields=[],
+        build=_build_openrouter_account,
+        recommended_model="z-ai/glm-5.2",
+        blurb="Sign in with your OpenRouter account and use its credits — nothing to "
+        "paste. The key OpenRouter issues stays on this machine.",
+        auth="oauth",
+    ),
+    ProviderDescriptor(
         name="ollama",
         title="Ollama",
         needs_key=False,
@@ -799,11 +814,10 @@ def descriptor_configured(d: ProviderDescriptor, profile: dict[str, Any]) -> boo
     a stored or env key. Multi-field cloud providers (no `api_key` field, e.g. Bedrock):
     every required field present — their actual credentials may be ambient (~/.aws, ADC).
     """
-    if d.name == "openrouter" and profile.get("auth_method") == "account":
-        return bool(profile.get("account_connected"))
     if d.auth == "oauth":
-        # A stored token set = signed in (the tokens live in the same profile).
-        return bool((profile or {}).get("tokens"))
+        # Signed in = a stored token set, or the key a sign-in issued (OpenRouter).
+        profile = profile or {}
+        return bool(profile.get("tokens") or profile.get("api_key"))
     if not d.needs_key:
         return True  # keyless (Ollama) — usable out of the box
     profile = profile or {}
