@@ -160,3 +160,71 @@ def test_manager_saves_reads_and_removes_model_settings(tmp_path, monkeypatch):
     assert mgr.set_model_config("x", {"temperature": 9}) == {"ok": False, "error": "temperature must be between 0 and 2"}
     assert mgr.remove_model_config("ollama:qwen3-coder:30b") == {"ok": True}
     assert mgr.get_model_config()["models"] == {}
+
+
+# -- the machine and the models on it -------------------------------------------------------
+
+
+def test_fit_and_system_facts(monkeypatch):
+    GB = local_machine.GB
+    assert local_machine.fit_for(25 * GB, 96 * GB) == "runs_well"
+    assert local_machine.fit_for(70 * GB, 96 * GB) == "tight"
+    assert local_machine.fit_for(87 * GB, 96 * GB) == "too_large"
+    assert local_machine.fit_for(None, 96 * GB) == "unknown"
+    facts = local_machine.system_facts()
+    for key in ("processor", "graphics", "kind", "memory_bytes", "storage_free_bytes", "runs_well_up_to_bytes"):
+        assert key in facts
+    assert facts["kind"] in ("apple_silicon", "nvidia", "dgx_spark", "jetson", "cpu")
+
+
+def test_ollama_model_facts_read_tools_thinking_and_context(monkeypatch):
+    from coworker.providers import ollama_facts
+
+    tags = {"models": [
+        {"name": "nemotron-3.5-lightning:30b", "size": 25 * local_machine.GB, "details": {"parameter_size": "30.5B", "quantization_level": "Q4_K_M"}},
+        {"name": "gemma3:12b", "size": 8 * local_machine.GB, "details": {}},
+        {"name": "nemotron-3-super:cloud", "size": 0, "remote_model": "nemotron-3-super:cloud", "remote_host": "https://ollama.com"},
+    ]}
+    shows = {
+        "nemotron-3.5-lightning:30b": {"capabilities": ["completion", "tools", "thinking"], "model_info": {"general.architecture": "nemotron", "nemotron.context_length": 1048576}},
+        "gemma3:12b": {"capabilities": ["completion", "vision"], "model_info": {"general.architecture": "gemma3", "gemma3.context_length": 131072}},
+        "nemotron-3-super:cloud": {"capabilities": ["completion", "tools", "thinking"], "model_info": {}},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=tags)
+        name = json.loads(request.content)["model"]
+        return httpx.Response(200, json=shows[name])
+
+    fake = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "get", lambda url, timeout=None: fake.get(url))
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: fake.post(url, json=json))
+    monkeypatch.setattr(local_machine, "model_memory_bytes", lambda: 32 * local_machine.GB)
+    ollama_facts.forget_all()
+    rows = {r["name"]: r for r in ollama_facts.model_facts("http://localhost:11434/v1", fresh=True)}
+    lightning = rows["nemotron-3.5-lightning:30b"]
+    assert lightning["tools"] and lightning["thinking"] and not lightning["vision"]
+    assert lightning["context_max"] == 1048576 and lightning["context"] == 65536  # the 32 GB tier
+    assert lightning["fit"] == "tight" and lightning["recommendation"] == "NVIDIA Nemotron 3.5 Lightning"  # 25 of 32 GB
+    gemma = rows["gemma3:12b"]
+    assert not gemma["tools"] and gemma["vision"] and gemma["fit"] == "runs_well"
+    cloud = rows["nemotron-3-super:cloud"]
+    assert cloud["remote"] and cloud["fit"] == "cloud"
+    # A saved context size shows as the user's.
+    model_config.set("ollama:nemotron-3.5-lightning:30b", {"context_size": 32768})
+    row = {r["name"]: r for r in ollama_facts.model_facts("http://localhost:11434/v1", fresh=True)}["nemotron-3.5-lightning:30b"]
+    assert row["context"] == 32768 and row["context_from"] == "user"
+
+
+def test_only_tool_capable_ollama_models_join_the_picker(tmp_path, monkeypatch):
+    from coworker.providers import ollama_facts
+    from coworker.server.manager import SessionManager
+
+    monkeypatch.setattr(ollama_facts, "model_facts", lambda base=None, fresh=False: [
+        {"model": "ollama:qwen3-coder:30b", "tools": True},
+        {"model": "ollama:gemma3:12b", "tools": False},
+        {"model": "ollama:old-server-model", "tools": None},  # an older Ollama does not say
+    ])
+    mgr = SessionManager(data_dir=tmp_path)
+    assert mgr._ollama_models() == ["ollama:qwen3-coder:30b", "ollama:old-server-model"]

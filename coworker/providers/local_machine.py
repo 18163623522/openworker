@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shutil
 import subprocess
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 GB = 1024**3
 
@@ -118,3 +119,111 @@ def recommended_context(
     if model_max:
         tier = min(tier, model_max)
     return max(tier, min(MIN_AGENT_CONTEXT, model_max or MIN_AGENT_CONTEXT))
+
+
+# -- what this machine is -----------------------------------------------------------------
+# For the "Your system" section and the fit advice next to each model. Read on request
+# and cached: none of it changes while OpenWorker runs except free storage, which is
+# re-read each time.
+
+# A model "runs well" when its file leaves this much of the memory for context and the
+# rest of the system; "tight" up to the second share; beyond that it is too large.
+RUNS_WELL_SHARE = 0.65
+TIGHT_SHARE = 0.85
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip().strip("\x00")
+    except OSError:
+        return ""
+
+
+def _run(args: list[str]) -> str:
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=5, check=False).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _nvidia_gpu_name() -> str:
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return ""
+    out = _run([exe, "--query-gpu=name", "--format=csv,noheader"])
+    return out.splitlines()[0].strip() if out else ""
+
+
+@functools.lru_cache(maxsize=1)
+def _static_facts() -> dict[str, Any]:
+    """Processor, graphics, memory and the machine's kind. Cached for the process."""
+    import platform
+
+    processor = ""
+    graphics = ""
+    kind = "cpu"
+    if sys.platform == "darwin":
+        processor = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
+        if processor.startswith("Apple"):
+            kind = "apple_silicon"
+            graphics = "Built into the chip, shares the memory"
+    elif sys.platform.startswith("linux"):
+        for line in _read("/proc/cpuinfo").splitlines():
+            if line.lower().startswith("model name"):
+                processor = line.split(":", 1)[1].strip()
+                break
+        product = " ".join(
+            _read(p) for p in ("/sys/class/dmi/id/product_name", "/sys/firmware/devicetree/base/model")
+        )
+        if re.search(r"DGX[ _-]*Spark", product, re.IGNORECASE):
+            kind = "dgx_spark"
+            graphics = "NVIDIA GB10, shares the memory"
+        elif re.search(r"Jetson|Tegra|Orin|Thor", product, re.IGNORECASE):
+            kind = "jetson"
+            graphics = product.strip() + ", shares the memory"
+    else:
+        processor = platform.processor() or ""
+    if kind == "cpu":
+        name = _nvidia_gpu_name()
+        vram = nvidia_gpu_memory_bytes()
+        if name:
+            kind = "nvidia"
+            graphics = f"{name} · {round(vram / GB)} GB" if vram else name
+    return {
+        "processor": processor or platform.machine() or "Unknown",
+        "graphics": graphics or "None found",
+        "kind": kind,
+        "memory_bytes": system_memory_bytes(),
+        "gpu_memory_bytes": nvidia_gpu_memory_bytes() if kind == "nvidia" else None,
+        "platform": sys.platform,
+    }
+
+
+def system_facts() -> dict[str, Any]:
+    """Facts for the "Your system" section, with the memory models load into and the
+    largest model file that runs well here."""
+    facts = dict(_static_facts())
+    try:
+        usage = shutil.disk_usage(os.path.expanduser("~"))
+        facts["storage_free_bytes"] = int(usage.free)
+        facts["storage_total_bytes"] = int(usage.total)
+    except OSError:
+        facts["storage_free_bytes"] = facts["storage_total_bytes"] = None
+    memory = model_memory_bytes()
+    facts["model_memory_bytes"] = memory
+    facts["runs_well_up_to_bytes"] = int(memory * RUNS_WELL_SHARE) if memory else None
+    return facts
+
+
+def fit_for(model_bytes: Optional[int], memory_bytes: Optional[int] = None) -> str:
+    """How a model file of this size sits on this machine: `runs_well`, `tight`,
+    `too_large`, or `unknown`."""
+    memory = memory_bytes if memory_bytes is not None else model_memory_bytes()
+    if not model_bytes or not memory:
+        return "unknown"
+    if model_bytes <= memory * RUNS_WELL_SHARE:
+        return "runs_well"
+    if model_bytes <= memory * TIGHT_SHARE:
+        return "tight"
+    return "too_large"

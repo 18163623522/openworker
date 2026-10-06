@@ -2318,6 +2318,14 @@ def create_app(manager: SessionManager) -> FastAPI:
     def providers_remove(name: str) -> dict[str, Any]:
         return manager.remove_provider(name)
 
+    @app.get("/v1/providers/{name}/models")
+    def providers_local_models(name: str) -> dict[str, Any]:
+        return manager.local_model_facts(name)
+
+    @app.get("/v1/system")
+    def system_get() -> dict[str, Any]:
+        return manager.system_facts()
+
     @app.post("/v1/providers/verify")
     async def providers_verify(body: dict) -> dict[str, Any]:
         # Live read-only credential check (sync httpx) — run off the event loop.

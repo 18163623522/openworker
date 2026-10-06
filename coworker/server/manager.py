@@ -4401,19 +4401,36 @@ class SessionManager:
         `/api/tags`), as `ollama:<name>` so they're directly selectable. Empty if Ollama is
         unreachable — best-effort, never raises. No stored profile → the default localhost
         endpoint, same as `_ollama_alive` (keyless Ollama needs no saved form)."""
-        profile = self.secrets.get("provider:ollama") or {}
-        base = (profile.get("base_url") or "http://localhost:11434").strip().rstrip("/")
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
-        try:
-            import httpx
+        from ..providers import ollama_facts
 
-            data = httpx.get(base + "/api/tags", timeout=2.0).json()
-            return [
-                f"ollama:{m['name']}" for m in data.get("models", []) if m.get("name")
-            ]
-        except Exception:
-            return []
+        profile = self.secrets.get("provider:ollama") or {}
+        # Only models that can use tools: a coworker cannot work with the others, so
+        # they stay off the picker (the settings page still lists them, greyed). A
+        # server that does not say (an older Ollama) keeps every model in.
+        return [
+            row["model"]
+            for row in ollama_facts.model_facts(profile.get("base_url"))
+            if row.get("tools") is not False
+        ]
+
+    def local_model_facts(self, name: str) -> dict[str, Any]:
+        """The models a local provider has, with size, tool support, thinking, context
+        and how each sits on this machine. Ollama today; llama.cpp and vLLM report
+        their own single model the same way once connected."""
+        from ..providers import local_machine, ollama_facts
+
+        if name == "ollama":
+            profile = self.secrets.get("provider:ollama") or {}
+            rows = ollama_facts.model_facts(profile.get("base_url"), fresh=True)
+            return {"provider": name, "models": rows, "alive": self._ollama_alive()}
+        return {"provider": name, "models": [], "error": "no local model list for this provider"}
+
+    def system_facts(self) -> dict[str, Any]:
+        """This machine, for the "Your system" section: processor, graphics, memory,
+        storage, and the largest model file that runs well here."""
+        from ..providers import local_machine
+
+        return local_machine.system_facts()
 
     def model_selectable(self, model: str) -> bool:
         """Can this machine run `model` right now? Its provider has a key — or, for the
