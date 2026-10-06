@@ -878,11 +878,19 @@ class TurnEngine:
 
     # -- auto-compaction (OPE-27) ------------------------------------------------
     def _compaction_config(self) -> dict[str, Any]:
+        from . import model_config
+
         cfg = dict(self.compaction_settings() or {}) if self.compaction_settings else {}
+        # The user's per-model settings (model_config.py): a saved window stands in for
+        # a model the matrix does not list; a saved threshold overrides the machine's.
+        saved_window = model_config.context_size_for(self.model)
+        saved_pct = model_config.compaction_threshold_for(self.model)
+        if saved_pct:
+            cfg["threshold_pct"] = saved_pct
         if not cfg.get("context_window"):
             from .providers.matrix import model_context_windows
 
-            cfg["context_window"] = model_context_windows().get(self.model)
+            cfg["context_window"] = model_context_windows().get(self.model) or saved_window
             if not cfg["context_window"]:
                 # Ollama's window is the num_ctx we send (providers/ollama_context.py),
                 # not the 128k guess — compact before that window context-shifts.

@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import model_config as _model_config
 from ..agent import build_engine
 from ..agents import get_agent
 from ..connections import (
@@ -893,6 +894,9 @@ class SessionManager:
             model=model,
             mode=mode,
             provider=self.provider,
+            # The model's saved settings (or its maker's recommendation): longest reply,
+            # sampling, thinking. Read at build time.
+            model_settings=_model_config.model_settings_for(model),
             # Memory off (§4.3) = stop LEARNING, not amnesia: saved facts still inject
             # and stay usable, only the write tools go. Read at build time; running
             # sessions finish under the mode they started with.
@@ -4690,6 +4694,8 @@ class SessionManager:
             "secrets_path": str(self.secrets.path),
             **self.pdf_settings(),
             **self.compaction_settings_payload(),
+            # Per-model settings the user saved (model_config.py), keyed by model id.
+            "model_config": _model_config.load(),
         }
 
     def _surfaces(self) -> dict[str, bool]:
@@ -4937,7 +4943,37 @@ class SessionManager:
         self.model = model
         self._prefs["default_model"] = model
         self._save_prefs()
+        _model_config.set(model, {"default": True})
         return {"ok": True, **self.get_settings()}
+
+    # -- per-model settings (model_config.py) ---------------------------------------
+
+    def get_model_config(self, model: str = "") -> dict[str, Any]:
+        """One model's settings in force, with where each came from; or every saved
+        record when no model is named."""
+        if model:
+            return {"model": model, **_model_config.effective(model)}
+        return {"models": _model_config.load()}
+
+    def set_model_config(self, model: str, values: dict[str, Any]) -> dict[str, Any]:
+        """Save settings for one model. `default: true` also makes it the model new
+        sessions start with, like the Make default button."""
+        model = (model or "").strip()
+        if not model:
+            return {"ok": False, "error": "empty model"}
+        record, error = _model_config.set(model, values or {})
+        if error:
+            return {"ok": False, "error": error}
+        if record.get("default") and self.model != model:
+            self.model = model
+            self._prefs["default_model"] = model
+            self._save_prefs()
+        self.provider.invalidate() if hasattr(self.provider, "invalidate") else None
+        return {"ok": True, "model": model, **_model_config.effective(model)}
+
+    def remove_model_config(self, model: str) -> dict[str, Any]:
+        _model_config.remove((model or "").strip())
+        return {"ok": True}
 
     def set_onboarded(self, value: bool = True) -> dict[str, Any]:
         """Record that first-run setup is complete (so it isn't shown again)."""
@@ -6125,11 +6161,13 @@ class SessionManager:
     def _build_task_engine(self, task, *, session_id: str) -> TurnEngine:
         ag = get_agent(task.agent)
         Path(task.workspace).mkdir(parents=True, exist_ok=True)
+        task_model = self.resolve_persona_model(task.agent, task.model)
         engine = build_engine(
             agent=ag,
             workspace=task.workspace,
-            model=self.resolve_persona_model(task.agent, task.model),
+            model=task_model,
             mode=Mode.INTERACTIVE,
+            model_settings=_model_config.model_settings_for(task_model),
             approver=self._scheduled_approver(task, session_id),
             provider=self.provider,
             memory_store=self.memory_store,

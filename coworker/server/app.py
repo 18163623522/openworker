@@ -2365,6 +2365,20 @@ def create_app(manager: SessionManager) -> FastAPI:
     def settings_models_remove(body: dict) -> dict[str, Any]:
         return manager.remove_model((body or {}).get("model", ""))
 
+    # Per-model settings (model_config.py). Model ids carry colons and slashes, so the
+    # id travels in the body or the query, never the path.
+    @app.get("/v1/settings/model-config")
+    def settings_model_config_get(model: str = "") -> dict[str, Any]:
+        return manager.get_model_config(model)
+
+    @app.post("/v1/settings/model-config")
+    def settings_model_config_set(body: dict) -> dict[str, Any]:
+        return manager.set_model_config((body or {}).get("model", ""), (body or {}).get("values") or {})
+
+    @app.post("/v1/settings/model-config/remove")
+    def settings_model_config_remove(body: dict) -> dict[str, Any]:
+        return manager.remove_model_config((body or {}).get("model", ""))
+
     @app.post("/v1/settings/onboarded")
     def settings_set_onboarded(body: dict) -> dict[str, Any]:
         return manager.set_onboarded(bool((body or {}).get("value", True)))

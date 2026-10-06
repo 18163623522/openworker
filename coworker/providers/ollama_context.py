@@ -223,6 +223,13 @@ class OllamaContextTransport(httpx.BaseTransport):
     def _num_ctx_for(self, model: str, request: httpx.Request) -> int:
         if self.num_ctx is not None:
             return self.num_ctx
+        # A context size the user saved for this model wins over every rule.
+        from .. import model_config
+
+        chosen = model_config.context_size_for(f"ollama:{model}")
+        if chosen:
+            _resolved[model] = chosen
+            return chosen
         cached = self._by_model.get(model)
         if cached:
             return cached
@@ -308,6 +315,10 @@ def to_native_chat(body: dict[str, Any], num_ctx: int) -> dict[str, Any]:
         native["think"] = False
     elif isinstance(effort, str) and effort:
         native["think"] = effort
+    # The per-model thinking switch (model_config.py) rides the body as `think`, which
+    # the OpenAI SDK passes through from `extra_body`. An explicit switch wins.
+    if isinstance(body.get("think"), bool):
+        native["think"] = body["think"]
     return native
 
 

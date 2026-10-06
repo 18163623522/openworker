@@ -255,6 +255,31 @@ def test_the_first_waits_are_short_and_the_waits_grow(monkeypatch: pytest.Monkey
     assert 15 * 60 <= sum(delays) <= 20 * 60  # an outage of minutes is still waited out
 
 
+def test_a_models_saved_settings_reach_the_run_unless_isolated(tmp_path: Path) -> None:
+    import tempfile
+
+    state = Path(tempfile.mkdtemp(prefix="ow-run-machine-"))
+    (state / "model_config.json").write_text(
+        json.dumps({"anthropic:claude-sonnet-5": {"max_output_tokens": 777}}), encoding="utf-8"
+    )
+    env = {"COWORKER_STATE_DIR": str(state)}
+    # This computer's settings for the model, keyed by OpenWorker's `provider:model`
+    # form (the run accepts `provider/model` too): the reply ceiling the run sends.
+    proc, _ws, out = _run(tmp_path, "bypass-approvals", [{"text": "Done."}], env=env, isolated=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    calls = [json.loads(line) for line in (out / "model_calls.jsonl").read_text().splitlines()]
+    assert calls[-1]["max_output_tokens"] == 777
+    # A flag on the run wins over the saved setting.
+    proc, _ws, out = _run(tmp_path, "bypass-approvals", [{"text": "Done."}], env=env, isolated=False,
+                          extra=["--max-output-tokens", "555"])
+    calls = [json.loads(line) for line in (out / "model_calls.jsonl").read_text().splitlines()]
+    assert calls[-1]["max_output_tokens"] == 555
+    # An isolated run reads nothing from the computer.
+    proc, _ws, out = _run(tmp_path, "bypass-approvals", [{"text": "Done."}], env=env, isolated=True)
+    calls = [json.loads(line) for line in (out / "model_calls.jsonl").read_text().splitlines()]
+    assert calls[-1]["max_output_tokens"] != 777
+
+
 def test_a_finished_answer_with_a_stray_tool_tag_is_kept(tmp_path: Path) -> None:
     # Seen live: the answer was complete, ended in `<tool_call>`, and was retried as a
     # failed call; the second answer was worse. The tag goes, the answer stays.
