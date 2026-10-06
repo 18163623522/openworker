@@ -62,7 +62,7 @@ _REVIEWER_PAUSED_TEXT = (
 from .permissions import CLEARED_BY_MODE, Mode, PermissionEngine
 from .providers import AssistantTurn, ProviderClient, ToolCall
 from .providers.errors import friendly_model_error
-from .providers.openai_provider import looks_like_unparsed_tool_call
+from .providers.openai_provider import looks_like_unparsed_tool_call, strip_dangling_tool_tag
 from .tools import ToolRegistry
 
 
@@ -735,6 +735,14 @@ class TurnEngine:
             if not self._turn_truncated:
                 self._continuations = 0
             _sanitize_mangled_calls(turn)
+            if not turn.tool_calls:
+                # One stray `<tool_call>` at the very end of an otherwise finished
+                # answer is noise, not a call: drop it and keep the answer.
+                cleaned, dangling = strip_dangling_tool_tag(turn.text)
+                if dangling and not looks_like_unparsed_tool_call(
+                    cleaned, self.registry.schemas() or None
+                ):
+                    turn.text = cleaned
             self.messages.append(
                 _assistant_message(
                     turn,

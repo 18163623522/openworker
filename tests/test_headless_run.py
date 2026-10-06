@@ -255,6 +255,19 @@ def test_the_first_waits_are_short_and_the_waits_grow(monkeypatch: pytest.Monkey
     assert 15 * 60 <= sum(delays) <= 20 * 60  # an outage of minutes is still waited out
 
 
+def test_a_finished_answer_with_a_stray_tool_tag_is_kept(tmp_path: Path) -> None:
+    # Seen live: the answer was complete, ended in `<tool_call>`, and was retried as a
+    # failed call; the second answer was worse. The tag goes, the answer stays.
+    proc, _ws, out = _run(
+        tmp_path, "bypass-approvals", [{"text": "The output is 100.<tool_call>"}],
+        prompt="Square ten.", env={"OPENWORKER_RUN_RETRY_DELAYS": "0"},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "The output is 100."
+    assert _summary(out)["provider_retries"] == 0
+    assert "provider_retry" not in [e["type"] for e in _events(out)]
+
+
 def test_transient_provider_error_is_waited_out_and_the_run_completes(tmp_path: Path) -> None:
     fail = {"error": "Service unavailable", "error_type": "APIError"}
     write = {"text": "ok", "tool_calls": [{"name": "write_file", "arguments": {"path": "hello.txt", "content": "hello"}}]}
