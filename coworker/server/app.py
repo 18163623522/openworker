@@ -459,6 +459,14 @@ def create_app(manager: SessionManager) -> FastAPI:
         value = body["attendance"] if "attendance" in body else bool(body.get("unattended"))
         return manager.set_unattended(session_id, value)
 
+    @app.get("/v1/sessions/{session_id}/model-settings")
+    def session_model_settings(session_id: str) -> dict[str, Any]:
+        return manager.session_model_settings(session_id)
+
+    @app.post("/v1/sessions/{session_id}/model-settings")
+    def set_session_model_settings(session_id: str, body: dict) -> dict[str, Any]:
+        return manager.set_session_model_settings(session_id, body or {})
+
     @app.get("/v1/sessions/{session_id}/skills")
     def session_skills(session_id: str, workspace: str = "") -> dict[str, Any]:
         # The rail's Skills group + the composer popup both read this (SKILLS-SPEC §4.1).
@@ -2318,6 +2326,14 @@ def create_app(manager: SessionManager) -> FastAPI:
     def providers_remove(name: str) -> dict[str, Any]:
         return manager.remove_provider(name)
 
+    @app.get("/v1/providers/{name}/models")
+    def providers_local_models(name: str) -> dict[str, Any]:
+        return manager.local_model_facts(name)
+
+    @app.get("/v1/system")
+    def system_get() -> dict[str, Any]:
+        return manager.system_facts()
+
     @app.post("/v1/providers/verify")
     async def providers_verify(body: dict) -> dict[str, Any]:
         # Live read-only credential check (sync httpx) — run off the event loop.
@@ -2364,6 +2380,20 @@ def create_app(manager: SessionManager) -> FastAPI:
     @app.post("/v1/settings/models/remove")
     def settings_models_remove(body: dict) -> dict[str, Any]:
         return manager.remove_model((body or {}).get("model", ""))
+
+    # Per-model settings (model_config.py). Model ids carry colons and slashes, so the
+    # id travels in the body or the query, never the path.
+    @app.get("/v1/settings/model-config")
+    def settings_model_config_get(model: str = "") -> dict[str, Any]:
+        return manager.get_model_config(model)
+
+    @app.post("/v1/settings/model-config")
+    def settings_model_config_set(body: dict) -> dict[str, Any]:
+        return manager.set_model_config((body or {}).get("model", ""), (body or {}).get("values") or {})
+
+    @app.post("/v1/settings/model-config/remove")
+    def settings_model_config_remove(body: dict) -> dict[str, Any]:
+        return manager.remove_model_config((body or {}).get("model", ""))
 
     @app.post("/v1/settings/onboarded")
     def settings_set_onboarded(body: dict) -> dict[str, Any]:

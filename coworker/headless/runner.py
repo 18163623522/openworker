@@ -864,8 +864,9 @@ def _run(args: argparse.Namespace) -> int:
         provider=provider,
         audit_sink=audit_sink,
         max_iterations=args.max_iterations,
-        # An explicit ceiling rides model_settings into every provider call.
-        model_settings=_model_settings(args),
+        # The model's saved settings (model_config.py) first; the run's own flags win.
+        # An isolated run reads nothing from the computer.
+        model_settings=_merged_model_settings(args, model),
         # Bounded tool results; the full texts stay with the record under tool-output/.
         tool_result_max_bytes=args.tool_result_max_bytes,
         tool_result_spill_dir=out / "tool-output",
@@ -1222,6 +1223,14 @@ def _final_answer(engine: Any) -> str:
         if isinstance(content, str) and content.strip():
             return content.strip()
     return ""
+
+
+def _merged_model_settings(args: argparse.Namespace, model: str) -> Optional[dict[str, Any]]:
+    from .. import model_config
+
+    saved = {} if getattr(args, "isolated", False) else model_config.model_settings_for(model)
+    merged = {**saved, **(_model_settings(args) or {})}
+    return merged or None
 
 
 def _model_settings(args: argparse.Namespace) -> Optional[dict[str, Any]]:
