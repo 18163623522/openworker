@@ -1134,6 +1134,7 @@ function SessionModelControls({
   const [thinking, setThinking] = useState<boolean | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const [drag, setDrag] = useState<number | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
     setControls(null);
@@ -1177,6 +1178,10 @@ function SessionModelControls({
     const lvl = levels[Math.max(0, Math.min(levels.length - 1, i))];
     if (lvl && lvl !== level) apply({ reasoning_effort: lvl === reason?.default ? null : lvl });
   };
+  // More than three levels crowd the row: name the ends, the current level and the
+  // default; the rest show when the pointer is over their stop.
+  const named = (i: number) =>
+    levels.length <= 3 || i === 0 || i === levels.length - 1 || i === shown || levels[i] === reason?.default;
   const nearest = (clientX: number, el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     const f = (clientX - r.left - 18) / Math.max(1, r.width - 36);
@@ -1228,8 +1233,11 @@ function SessionModelControls({
                     setDrag(nearest(e.clientX, e.currentTarget));
                   }}
                   onPointerMove={(e) => {
-                    if (drag !== null) setDrag(nearest(e.clientX, e.currentTarget));
+                    const i = nearest(e.clientX, e.currentTarget);
+                    if (drag !== null) setDrag(i);
+                    setHover(i);
                   }}
+                  onPointerLeave={() => setHover(null)}
                   onPointerUp={(e) => {
                     const i = nearest(e.clientX, e.currentTarget);
                     setDrag(null);
@@ -1262,20 +1270,27 @@ function SessionModelControls({
                 </div>
                 <div className="relative h-[34px] text-[12px] text-faint">
                   {levels.map((lvl, i) => (
-                    <span key={lvl} className={"absolute top-1.5 -translate-x-1/2 whitespace-nowrap text-center " + (i === shown ? "text-ink font-semibold" : "")} style={{ left: centre(i) }}>
+                    <span
+                      key={lvl}
+                      className={
+                        "absolute top-1.5 -translate-x-1/2 whitespace-nowrap text-center transition-opacity " +
+                        (i === shown ? "text-ink font-semibold " : "") +
+                        (named(i) || i === hover ? "opacity-100" : "opacity-0")
+                      }
+                      style={{ left: centre(i) }}
+                    >
                       {label(lvl)}
                       {lvl === reason.default && <small className="block text-[10.5px] font-normal text-muted">{t("composer.model.default")}</small>}
                     </span>
                   ))}
                 </div>
-                <div className="flex justify-between border-t border-line mt-1.5 pt-2.5 text-meta">
-                  <span className="text-faint">{t("composer.model.this_session_only")}</span>
-                  {onPickModel && (
+                {onPickModel && (
+                  <div className="flex justify-end mt-2.5 text-meta">
                     <button className="text-muted hover:text-ink" onClick={() => { setOpen(false); onPickModel(); }}>
                       {t("composer.model.model_defaults")}
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             </>
           )}

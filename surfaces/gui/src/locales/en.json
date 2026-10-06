@@ -210,7 +210,6 @@
       "smarter": "Smarter",
       "default": "Default",
       "reset_to": "Reset to {{level}}",
-      "this_session_only": "This session only",
       "model_defaults": "Model defaults…",
       "thinking_on": "Thinking on",
       "thinking_off": "Thinking off"

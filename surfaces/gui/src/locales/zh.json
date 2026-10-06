@@ -208,7 +208,6 @@
       "smarter": "更聪明",
       "default": "默认",
       "reset_to": "恢复为{{level}}",
-      "this_session_only": "仅此会话",
       "model_defaults": "模型默认设置…",
       "thinking_on": "思考：开",
       "thinking_off": "思考：关"
