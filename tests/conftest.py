@@ -48,3 +48,14 @@ async def fake_slack(monkeypatch):
         yield fake
     finally:
         await fake.stop()
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_ollama_facts():
+    """Model facts are cached per Ollama server for a minute (providers/ollama_facts.py);
+    a test must never see another test's fake server."""
+    from coworker.providers import ollama_facts
+
+    ollama_facts.forget_all()
+    yield
+    ollama_facts.forget_all()

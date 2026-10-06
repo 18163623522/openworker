@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import model_config as _model_config
 from ..agent import build_engine
 from ..agents import get_agent
 from ..connections import (
@@ -893,6 +894,9 @@ class SessionManager:
             model=model,
             mode=mode,
             provider=self.provider,
+            # The model's saved settings (or its maker's recommendation): longest reply,
+            # sampling, thinking. Read at build time.
+            model_settings=_model_config.model_settings_for(model),
             # Memory off (§4.3) = stop LEARNING, not amnesia: saved facts still inject
             # and stay usable, only the write tools go. Read at build time; running
             # sessions finish under the mode they started with.
@@ -4065,6 +4069,10 @@ class SessionManager:
                 row["api_key_configured"] = bool(
                     profile.get("api_key") or os.environ.get("OPENROUTER_API_KEY")
                 )
+            if d.kind == "local":
+                # A keyless server is "connected" when it answers (cached probes), not
+                # when a form was saved; the page groups connected providers first.
+                row["alive"] = self._ollama_alive() if d.name == "ollama" else self._local_server_alive(d.name)
             if d.auth == "oauth":
                 # Sign-in state instead of key state; the token values themselves
                 # never leave the SecretStore.
@@ -4151,6 +4159,8 @@ class SessionManager:
         topped up with the compat-vendor extras the matrix doesn't vouch for."""
         if name == "ollama":
             return [m.split(":", 1)[-1] for m in self._ollama_models()]
+        if name in ("llamacpp", "vllm"):
+            return [m.split(":", 1)[-1] for m in self._local_server_models(name)]
         from ..providers.matrix import models_for_provider
 
         return list(
@@ -4217,9 +4227,10 @@ class SessionManager:
         if rec and rec in suggested:
             # OpenAI models stay bare (the router's default); others carry their prefix.
             added = rec if name == "openai" else f"{name}:{rec}"
-        elif name == "ollama" and suggested:
-            # Ollama offers whatever the user pulled — the recommended model may not be one.
-            added = f"ollama:{suggested[0]}"
+        elif name in ("ollama", "llamacpp", "vllm") and suggested:
+            # A local server offers whatever the user loaded — the recommended model may
+            # not be one.
+            added = f"{name}:{suggested[0]}"
         if added:
             self.add_model(added)
         if added and not self.model_selectable(self.model):
@@ -4413,19 +4424,69 @@ class SessionManager:
         `/api/tags`), as `ollama:<name>` so they're directly selectable. Empty if Ollama is
         unreachable — best-effort, never raises. No stored profile → the default localhost
         endpoint, same as `_ollama_alive` (keyless Ollama needs no saved form)."""
-        profile = self.secrets.get("provider:ollama") or {}
-        base = (profile.get("base_url") or "http://localhost:11434").strip().rstrip("/")
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
-        try:
-            import httpx
+        from ..providers import ollama_facts
 
-            data = httpx.get(base + "/api/tags", timeout=2.0).json()
-            return [
-                f"ollama:{m['name']}" for m in data.get("models", []) if m.get("name")
-            ]
-        except Exception:
-            return []
+        profile = self.secrets.get("provider:ollama") or {}
+        # Only models that can use tools: a coworker cannot work with the others, so
+        # they stay off the picker (the settings page still lists them, greyed). A
+        # server that does not say (an older Ollama) keeps every model in.
+        return [
+            row["model"]
+            for row in ollama_facts.model_facts(profile.get("base_url"))
+            if row.get("tools") is not False
+        ]
+
+    def local_model_facts(self, name: str) -> dict[str, Any]:
+        """The models a local provider has, with size, tool support, thinking, context
+        and how each sits on this machine. Ollama lists what it pulled; llama.cpp and
+        vLLM report the model they serve."""
+        from ..providers import local_server, ollama_facts
+
+        if name == "ollama":
+            profile = self.secrets.get("provider:ollama") or {}
+            rows = ollama_facts.model_facts(profile.get("base_url"), fresh=True)
+            return {"provider": name, "models": rows, "alive": self._ollama_alive()}
+        if name in local_server.LOCAL_SERVERS:
+            profile = self.secrets.get(f"provider:{name}") or {}
+            rows = local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"), fresh=True)
+            return {"provider": name, "models": rows, "alive": self._local_server_alive(name)}
+        return {"provider": name, "models": [], "error": "no local model list for this provider"}
+
+    def _local_server_alive(self, name: str) -> bool:
+        """Best-effort liveness of a llama.cpp or vLLM server, cached 30 s like Ollama's."""
+        import time
+
+        from ..providers import local_server
+
+        now = time.monotonic()
+        cache = getattr(self, "_local_alive_cache", None) or {}
+        hit = cache.get(name)
+        if hit and now - hit[0] < 30:
+            return hit[1]
+        profile = self.secrets.get(f"provider:{name}") or {}
+        alive = local_server.alive(name, profile.get("base_url"), profile.get("api_key"))
+        cache[name] = (now, alive)
+        self._local_alive_cache = cache
+        return alive
+
+    def _local_server_models(self, name: str) -> list[str]:
+        """The model ids a llama.cpp or vLLM server serves, as `<name>:<id>`; empty when
+        it does not answer or was started without tool calling."""
+        from ..providers import local_server
+
+        profile = self.secrets.get(f"provider:{name}") or {}
+        return [
+            row["model"]
+            for row in local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"))
+            if row.get("tools") is not False
+        ]
+
+    def system_facts(self) -> dict[str, Any]:
+        """This machine, for the "Your system" section: processor, graphics, memory,
+        storage, and the largest model file that runs well here."""
+        from ..providers import local_machine
+
+        return local_machine.system_facts()
 
     def model_selectable(self, model: str) -> bool:
         """Can this machine run `model` right now? Its provider has a key — or, for the
@@ -4433,6 +4494,8 @@ class SessionManager:
         provider = self._model_provider(model)
         if provider == "ollama":
             return self._ollama_alive()
+        if provider in ("llamacpp", "vllm"):
+            return self._local_server_alive(provider)
         return self._provider_configured(provider)
 
     def persona_models(self, persona_id: str) -> list[str]:
@@ -4664,6 +4727,9 @@ class SessionManager:
         # Pulled Ollama models are offered live while Ollama answers — no need to add each one.
         if self._ollama_alive():
             selectable = list(dict.fromkeys([*selectable, *self._ollama_models()]))
+        for local in ("llamacpp", "vllm"):
+            if self.secrets.get(f"provider:{local}") and self._local_server_alive(local):
+                selectable = list(dict.fromkeys([*selectable, *self._local_server_models(local)]))
         if self.model not in selectable:
             selectable.insert(0, self.model)
         from ..providers.matrix import model_context_windows, model_labels
@@ -4706,6 +4772,8 @@ class SessionManager:
             "secrets_path": str(self.secrets.path),
             **self.pdf_settings(),
             **self.compaction_settings_payload(),
+            # Per-model settings the user saved (model_config.py), keyed by model id.
+            "model_config": _model_config.load(),
         }
 
     def _surfaces(self) -> dict[str, bool]:
@@ -4953,7 +5021,37 @@ class SessionManager:
         self.model = model
         self._prefs["default_model"] = model
         self._save_prefs()
+        _model_config.set(model, {"default": True})
         return {"ok": True, **self.get_settings()}
+
+    # -- per-model settings (model_config.py) ---------------------------------------
+
+    def get_model_config(self, model: str = "") -> dict[str, Any]:
+        """One model's settings in force, with where each came from; or every saved
+        record when no model is named."""
+        if model:
+            return {"model": model, **_model_config.effective(model)}
+        return {"models": _model_config.load()}
+
+    def set_model_config(self, model: str, values: dict[str, Any]) -> dict[str, Any]:
+        """Save settings for one model. `default: true` also makes it the model new
+        sessions start with, like the Make default button."""
+        model = (model or "").strip()
+        if not model:
+            return {"ok": False, "error": "empty model"}
+        record, error = _model_config.set(model, values or {})
+        if error:
+            return {"ok": False, "error": error}
+        if record.get("default") and self.model != model:
+            self.model = model
+            self._prefs["default_model"] = model
+            self._save_prefs()
+        self.provider.invalidate() if hasattr(self.provider, "invalidate") else None
+        return {"ok": True, "model": model, **_model_config.effective(model)}
+
+    def remove_model_config(self, model: str) -> dict[str, Any]:
+        _model_config.remove((model or "").strip())
+        return {"ok": True}
 
     def set_onboarded(self, value: bool = True) -> dict[str, Any]:
         """Record that first-run setup is complete (so it isn't shown again)."""
@@ -6063,6 +6161,59 @@ class SessionManager:
         except Exception:
             pass
 
+    def set_session_model_settings(self, session_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        """This session's thinking switch or effort level (UX-055: the ⚙ beside the model
+        in the composer). Overrides the model's saved setting for this session only;
+        None puts the model's setting back. Other sessions are untouched."""
+        engine = self._engines.get(session_id)
+        if engine is None:
+            return {"ok": False, "error": "session not running"}
+        settings = dict(engine.model_settings)
+        if "reasoning_effort" in values:
+            effort = values["reasoning_effort"]
+            if effort is None:
+                settings.pop("reasoning_effort", None)
+            elif isinstance(effort, str) and effort.strip():
+                settings["reasoning_effort"] = effort.strip()
+            else:
+                return {"ok": False, "error": "reasoning_effort must be text"}
+        if "thinking" in values:
+            think = values["thinking"]
+            extra = dict(settings.get("extra_body") or {})
+            if think is None:
+                extra.pop("think", None)
+            elif isinstance(think, bool):
+                extra["think"] = think
+            else:
+                return {"ok": False, "error": "thinking must be true or false"}
+            if extra:
+                settings["extra_body"] = extra
+            else:
+                settings.pop("extra_body", None)
+        if "thinking" in values or "reasoning_effort" in values:
+            session_model = _model_config.model_settings_for(engine.model)
+            # Nothing overridden any more → back to the model's own settings.
+            if "reasoning_effort" not in settings and not (settings.get("extra_body") or {}).get("think") in (True, False):
+                for key in ("reasoning_effort",):
+                    if key in session_model:
+                        settings[key] = session_model[key]
+                if "extra_body" in session_model and "extra_body" not in settings:
+                    settings["extra_body"] = session_model["extra_body"]
+        engine.model_settings = settings
+        return {"ok": True, "session_id": session_id, **self.session_model_settings(session_id)}
+
+    def session_model_settings(self, session_id: str) -> dict[str, Any]:
+        """What this session sends for thinking and effort right now."""
+        engine = self._engines.get(session_id)
+        if engine is None:
+            return {"thinking": None, "reasoning_effort": None}
+        settings = engine.model_settings or {}
+        think = (settings.get("extra_body") or {}).get("think")
+        return {
+            "thinking": think if isinstance(think, bool) else None,
+            "reasoning_effort": settings.get("reasoning_effort"),
+        }
+
     def set_unattended(self, session_id: str, value: Any) -> dict[str, Any]:
         """Set the session's attendance (attended / inbox / auto, or the legacy boolean),
         with an audit row. Note this changes only WHO ANSWERS when the agent asks, never
@@ -6141,11 +6292,13 @@ class SessionManager:
     def _build_task_engine(self, task, *, session_id: str) -> TurnEngine:
         ag = get_agent(task.agent)
         Path(task.workspace).mkdir(parents=True, exist_ok=True)
+        task_model = self.resolve_persona_model(task.agent, task.model)
         engine = build_engine(
             agent=ag,
             workspace=task.workspace,
-            model=self.resolve_persona_model(task.agent, task.model),
+            model=task_model,
             mode=Mode.INTERACTIVE,
+            model_settings=_model_config.model_settings_for(task_model),
             approver=self._scheduled_approver(task, session_id),
             provider=self.provider,
             memory_store=self.memory_store,

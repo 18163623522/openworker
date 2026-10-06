@@ -239,6 +239,8 @@ export function App() {
   const [model, setModel] = useState("gpt-5.6-sol");
   const [models, setModels] = useState<string[]>([]);
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({});
+  // Per-model settings the user saved (UX-055): the picker shows context and thinking.
+  const [modelConfig, setModelConfig] = useState<Record<string, import("./api").ModelConfigRecord>>({});
   // {full model id → context window in tokens} from the curated matrix (verified only);
   // drives the composer usage chip's context-fill meter.
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>({});
@@ -786,6 +788,7 @@ export function App() {
       .then((s) => {
         setModels(s.models || []);
         setModelLabels(s.model_labels || {});
+        setModelConfig(s.model_config || {});
         setModelContextWindows(s.model_context_windows || {});
         setContextBar(s.context_bar === true);
         setModelReady(s.model_ready);
@@ -2434,6 +2437,12 @@ export function App() {
               unavailableModels={unavailableModels}
               wantedModels={personaModels}
               modelLabels={machine ? machineSettings?.model_labels || {} : modelLabels}
+              modelConfig={machine ? machineSettings?.model_config || {} : modelConfig}
+              // "Pick or configure a model…" opens Models & Keys with the dialog up.
+              onPickModel={() => {
+                try { sessionStorage.setItem("ow:pick-model", "1"); } catch { /* private window */ }
+                openSettings("models");
+              }}
               running={running}
               gateOpen={!unattended && (!!pendingTeam || !!pendingItemsReq)}
               // An offline machine's cached transcript is read-only: the send

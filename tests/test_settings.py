@@ -187,13 +187,23 @@ def _ollama_manager(tmp_path, monkeypatch, pulled=("qwen2.5:7b-instruct",)):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path / "state"))
 
+    from coworker.providers import ollama_facts
+
     class _Tags:
         status_code = 200
 
         def json(self):
             return {"models": [{"name": n} for n in pulled]}
 
+    class _Show:
+        status_code = 200
+
+        def json(self):
+            return {"capabilities": ["completion", "tools"]}
+
     monkeypatch.setattr(httpx, "get", lambda url, timeout=None: _Tags())
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: _Show())
+    ollama_facts.forget_all()  # answers are cached per server; never across tests
     return SessionManager(data_dir=tmp_path / "data")
 
 

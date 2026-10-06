@@ -62,7 +62,7 @@ _REVIEWER_PAUSED_TEXT = (
 from .permissions import CLEARED_BY_MODE, Mode, PermissionEngine
 from .providers import AssistantTurn, ProviderClient, ToolCall
 from .providers.errors import friendly_model_error
-from .providers.openai_provider import looks_like_unparsed_tool_call
+from .providers.openai_provider import looks_like_unparsed_tool_call, strip_dangling_tool_tag
 from .tools import ToolRegistry
 
 
@@ -735,6 +735,14 @@ class TurnEngine:
             if not self._turn_truncated:
                 self._continuations = 0
             _sanitize_mangled_calls(turn)
+            if not turn.tool_calls:
+                # One stray `<tool_call>` at the very end of an otherwise finished
+                # answer is noise, not a call: drop it and keep the answer.
+                cleaned, dangling = strip_dangling_tool_tag(turn.text)
+                if dangling and not looks_like_unparsed_tool_call(
+                    cleaned, self.registry.schemas() or None
+                ):
+                    turn.text = cleaned
             self.messages.append(
                 _assistant_message(
                     turn,
@@ -870,17 +878,26 @@ class TurnEngine:
 
     # -- auto-compaction (OPE-27) ------------------------------------------------
     def _compaction_config(self) -> dict[str, Any]:
+        from . import model_config
+
         cfg = dict(self.compaction_settings() or {}) if self.compaction_settings else {}
+        # The user's per-model settings (model_config.py): a saved window stands in for
+        # a model the matrix does not list; a saved threshold overrides the machine's.
+        saved_window = model_config.context_size_for(self.model)
+        saved_pct = model_config.compaction_threshold_for(self.model)
+        if saved_pct:
+            cfg["threshold_pct"] = saved_pct
         if not cfg.get("context_window"):
             from .providers.matrix import model_context_windows
 
-            cfg["context_window"] = model_context_windows().get(self.model)
+            cfg["context_window"] = model_context_windows().get(self.model) or saved_window
             if not cfg["context_window"]:
                 # Ollama's window is the num_ctx we send (providers/ollama_context.py),
                 # not the 128k guess — compact before that window context-shifts.
+                from .providers.local_server import context_window_for as _server_window
                 from .providers.ollama_context import context_window_for
 
-                cfg["context_window"] = context_window_for(self.model)
+                cfg["context_window"] = context_window_for(self.model) or _server_window(self.model)
             if not cfg["context_window"] and not self._warned_context_fallback:
                 # OPE-170: an unlisted model compacts on the 128k guess, which for a
                 # 1M-window model means compacting at a tenth of the window and
