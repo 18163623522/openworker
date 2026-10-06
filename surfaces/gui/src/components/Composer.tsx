@@ -1176,7 +1176,12 @@ function SessionModelControls({
   const centre = (i: number) => `calc(18px + (100% - 36px) * ${frac(i)})`;
   const choose = (i: number) => {
     const lvl = levels[Math.max(0, Math.min(levels.length - 1, i))];
-    if (lvl && lvl !== level) apply({ reasoning_effort: lvl === reason?.default ? null : lvl });
+    if (!lvl || lvl === level) return;
+    const value = lvl === reason?.default ? null : lvl;
+    // Show the new level at once, so the thumb stays where it was let go of instead of
+    // sliding back to the old level until the server answers.
+    setEffort(value);
+    apply({ reasoning_effort: value });
   };
   // More than three levels crowd the row: name the ends, the current level and the
   // default; the rest show when the pointer is over their stop.

@@ -50,8 +50,8 @@ test("reasoning effort: the pill shows the level; the slider marks the default a
   const track = (await slider.boundingBox())!;
   await page.mouse.click(track.x + 4, track.y + track.height / 2);
   await expect(pill).toHaveText("Low");
-  const thumb = (await page.getByTestId("effort-thumb").boundingBox())!;
-  expect(thumb.x - track.x).toBeLessThanOrEqual(4);
+  // The thumb slides into place; wait for it to settle at the left end.
+  await expect.poll(async () => (await page.getByTestId("effort-thumb").boundingBox())!.x - track.x).toBeLessThanOrEqual(4);
   await expect(page.getByTestId("effort-reset")).toHaveText("Reset to High");
   await page.getByTestId("effort-reset").click();
   await expect(pill).toHaveText("High");
@@ -71,8 +71,12 @@ test("reasoning effort: drag to the far right end, and the keys step and jump", 
   await page.mouse.move(track.x + track.width + 40, y, { steps: 5 });
   await page.mouse.up();
   await expect(page.getByTestId("effort-pill")).toHaveText("Max");
-  const thumb = (await page.getByTestId("effort-thumb").boundingBox())!;
-  expect(track.x + track.width - (thumb.x + thumb.width)).toBeLessThanOrEqual(4);
+  await expect
+    .poll(async () => {
+      const thumb = (await page.getByTestId("effort-thumb").boundingBox())!;
+      return track.x + track.width - (thumb.x + thumb.width);
+    })
+    .toBeLessThanOrEqual(4);
   await slider.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(page.getByTestId("effort-pill")).toHaveText("Extra high");
