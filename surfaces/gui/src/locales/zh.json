@@ -212,6 +212,7 @@
       "session_only_note": "其他会话保持模型自身的设置。",
       "change_defaults": "更改模型的默认设置…"
     },
+    "placeholder_question": "输入你的回答 —— 或选择上方的选项",
     "placeholder_gate": "回复以调整提案 —— 或使用上方按钮",
     "attach_this_message": "本条消息",
     "attach_this_session": "本次会话",
