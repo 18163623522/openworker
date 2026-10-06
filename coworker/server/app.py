@@ -481,8 +481,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         return manager.set_unattended(session_id, value)
 
     @app.get("/v1/sessions/{session_id}/model-settings")
-    def session_model_settings(session_id: str) -> dict[str, Any]:
-        return manager.session_model_settings(session_id)
+    def session_model_settings(session_id: str, model: str = "") -> dict[str, Any]:
+        return manager.session_model_settings(session_id, model)
 
     @app.post("/v1/sessions/{session_id}/model-settings")
     def set_session_model_settings(session_id: str, body: dict) -> dict[str, Any]:

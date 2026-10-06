@@ -213,12 +213,20 @@ def _local_server(name: str):
     """Builder for llama.cpp and vLLM (providers/local_server.py): the user's own server,
     reached through its `/v1`, with an optional key. Without a key the server takes any
     value, so a placeholder goes out."""
-    from .local_server import PLACEHOLDER_KEY, remember_server, v1_base
+    from .local_server import PLACEHOLDER_KEY, remember_server, thinking_as_template_kwargs, v1_base
+
+    class _LocalServerProvider(OpenAIProvider):
+        # The thinking switch, in the form these servers read.
+        def complete(self, **kwargs: Any):
+            return super().complete(**thinking_as_template_kwargs(kwargs))
+
+        def stream(self, **kwargs: Any):
+            return super().stream(**thinking_as_template_kwargs(kwargs))
 
     def build(profile: dict[str, Any], secrets: Any) -> ProviderClient:
         key = ((profile or {}).get("api_key") or "").strip() or PLACEHOLDER_KEY
         remember_server(name, (profile or {}).get("base_url"), key if key != PLACEHOLDER_KEY else None)
-        return OpenAIProvider(api_key=key, base_url=v1_base(name, (profile or {}).get("base_url")))
+        return _LocalServerProvider(api_key=key, base_url=v1_base(name, (profile or {}).get("base_url")))
 
     return build
 

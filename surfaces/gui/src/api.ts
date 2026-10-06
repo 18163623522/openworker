@@ -2545,15 +2545,29 @@ export async function removeModelConfig(model: string): Promise<{ ok: boolean }>
 }
 
 /** This session's thinking switch and effort level (UX-055, the ⚙ beside the model). */
-export async function getSessionModelSettings(sessionId: string): Promise<{ thinking: boolean | null; reasoning_effort: string | null }> {
-  const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings`);
+// UX-056: what a model lets the user set per session (providers/model_controls.py).
+export interface ModelControls {
+  thinking: { support: "supported" | "not_supported"; default?: boolean | null };
+  reasoning: { support: "supported" | "not_supported"; levels?: string[]; default?: string | null };
+}
+
+export interface SessionModelControls {
+  // What this session changed; null = the model's default.
+  thinking: boolean | null;
+  reasoning_effort: string | null;
+  controls: ModelControls;
+}
+
+export async function getSessionModelSettings(sessionId: string, model = ""): Promise<SessionModelControls> {
+  const q = model ? `?model=${encodeURIComponent(model)}` : "";
+  const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings${q}`);
   return res.json();
 }
 
 export async function setSessionModelSettings(
   sessionId: string,
   values: { thinking?: boolean | null; reasoning_effort?: string | null },
-): Promise<{ ok: boolean; error?: string; thinking?: boolean | null; reasoning_effort?: string | null }> {
+): Promise<{ ok: boolean; error?: string } & Partial<SessionModelControls>> {
   const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

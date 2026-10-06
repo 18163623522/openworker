@@ -6146,57 +6146,102 @@ class SessionManager:
             pass
 
     def set_session_model_settings(self, session_id: str, values: dict[str, Any]) -> dict[str, Any]:
-        """This session's thinking switch or effort level (UX-055: the ⚙ beside the model
-        in the composer). Overrides the model's saved setting for this session only;
-        None puts the model's setting back. Other sessions are untouched."""
+        """This session's thinking switch or reasoning effort (UX-056: the brain and the
+        effort pill in the composer). Overrides the model's setting for this session only;
+        None puts the model's setting back. Other sessions are untouched. A value the model
+        does not take is refused."""
         engine = self._engines.get(session_id)
         if engine is None:
             return {"ok": False, "error": "session not running"}
+        controls = self.model_controls(engine.model)
+        defaults = _model_config.model_settings_for(engine.model)
         settings = dict(engine.model_settings)
         if "reasoning_effort" in values:
             effort = values["reasoning_effort"]
             if effort is None:
-                settings.pop("reasoning_effort", None)
-            elif isinstance(effort, str) and effort.strip():
-                settings["reasoning_effort"] = effort.strip()
+                if defaults.get("reasoning_effort"):
+                    settings["reasoning_effort"] = defaults["reasoning_effort"]
+                else:
+                    settings.pop("reasoning_effort", None)
+            elif controls["reasoning"]["support"] == "supported" and effort in controls["reasoning"]["levels"]:
+                settings["reasoning_effort"] = effort
             else:
-                return {"ok": False, "error": "reasoning_effort must be text"}
+                return {"ok": False, "error": f"{engine.model} does not take reasoning effort {effort!r}"}
         if "thinking" in values:
             think = values["thinking"]
             extra = dict(settings.get("extra_body") or {})
             if think is None:
-                extra.pop("think", None)
-            elif isinstance(think, bool):
+                default_think = (defaults.get("extra_body") or {}).get("think")
+                if isinstance(default_think, bool):
+                    extra["think"] = default_think
+                else:
+                    extra.pop("think", None)
+            elif isinstance(think, bool) and controls["thinking"]["support"] == "supported":
                 extra["think"] = think
             else:
-                return {"ok": False, "error": "thinking must be true or false"}
+                return {"ok": False, "error": f"{engine.model} has no thinking switch"}
             if extra:
                 settings["extra_body"] = extra
             else:
                 settings.pop("extra_body", None)
-        if "thinking" in values or "reasoning_effort" in values:
-            session_model = _model_config.model_settings_for(engine.model)
-            # Nothing overridden any more → back to the model's own settings.
-            if "reasoning_effort" not in settings and not (settings.get("extra_body") or {}).get("think") in (True, False):
-                for key in ("reasoning_effort",):
-                    if key in session_model:
-                        settings[key] = session_model[key]
-                if "extra_body" in session_model and "extra_body" not in settings:
-                    settings["extra_body"] = session_model["extra_body"]
         engine.model_settings = settings
         return {"ok": True, "session_id": session_id, **self.session_model_settings(session_id)}
 
-    def session_model_settings(self, session_id: str) -> dict[str, Any]:
-        """What this session sends for thinking and effort right now."""
+    def session_model_settings(self, session_id: str, model: str = "") -> dict[str, Any]:
+        """What this session sends for thinking and reasoning effort right now (None = the
+        model's default), and which of the two controls the model has (UX-056). `model`
+        is asked about when the session has not started yet."""
         engine = self._engines.get(session_id)
-        if engine is None:
-            return {"thinking": None, "reasoning_effort": None}
-        settings = engine.model_settings or {}
+        settings = (engine.model_settings if engine else None) or {}
         think = (settings.get("extra_body") or {}).get("think")
+        controls = self.model_controls((engine.model if engine else "") or model)
+        session_model = _model_config.model_settings_for(engine.model) if engine else {}
+        default_think = (session_model.get("extra_body") or {}).get("think")
         return {
-            "thinking": think if isinstance(think, bool) else None,
-            "reasoning_effort": settings.get("reasoning_effort"),
+            # Only what this session changed; the model's own setting reads as None.
+            "thinking": think if isinstance(think, bool) and think != default_think else None,
+            "reasoning_effort": (
+                settings.get("reasoning_effort")
+                if settings.get("reasoning_effort") != session_model.get("reasoning_effort")
+                else None
+            ),
+            "controls": controls,
         }
+
+    def model_controls(self, model: str) -> dict[str, Any]:
+        """The thinking switch and reasoning-effort levels a model has, with its defaults
+        (providers/model_controls.py). Local models: from what their server reports."""
+        from ..providers import local_server, model_controls, ollama_facts
+        from ..providers.recommended import recommendation_for
+
+        if not model:
+            return model_controls.NONE.as_dict()
+        provider = self._model_provider(model)
+        bare = model.split(":", 1)[1] if (provider != "openai" or model.startswith("openai:")) else model
+        d = get_descriptor(provider)
+        local = d is not None and d.kind == "local"
+        server_thinking = None
+        if local:
+            try:
+                profile = self.secrets.get(f"provider:{provider}") or {}
+                rows = (
+                    ollama_facts.model_facts(profile.get("base_url"))
+                    if provider == "ollama"
+                    else local_server.model_facts(provider, profile.get("base_url"), profile.get("api_key"))
+                )
+                server_thinking = next((r.get("thinking") for r in rows if r.get("model") == model), None)
+            except Exception:
+                server_thinking = None
+        rec = recommendation_for(model)
+        controls = model_controls.controls_for(
+            provider,
+            bare,
+            local=local,
+            server_thinking=server_thinking,
+            recommended_thinking=(rec.thinking_available, rec.thinking_default) if rec else None,
+            saved=_model_config.get(model),
+        )
+        return controls.as_dict()
 
     def set_unattended(self, session_id: str, value: Any) -> dict[str, Any]:
         """Set the session's attendance (attended / inbox / auto, or the legacy boolean),
