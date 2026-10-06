@@ -1596,7 +1596,11 @@
     "test_save_btn": "Test & save",
     "connected_count": "✓ Connected · {{count}} models",
     "running_count": "✓ Running · {{count}} models",
-    "not_connected": "Not connected"
+    "not_connected": "Not connected",
+    "llamacpp_desc": "No API key needed unless your llama-server was started with one.",
+    "install_llamacpp": "Install llama.cpp",
+    "vllm_desc": "vLLM runs on Linux with an NVIDIA GPU. A key is needed only if the server was started with one.",
+    "install_vllm": "Install vLLM"
   },
   "workspace_trust": {
     "title": "Trust this workspace’s commands?",
