@@ -72,7 +72,7 @@ for (const surface of ["settings", "onboarding"] as const) {
     await page.getByTestId("account-row").click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     if (surface === "settings") {
-      await page.getByRole("button", { name: "Models", exact: true }).click();
+      await page.getByRole("button", { name: "Models & Keys" }).click();
     } else {
       await page.getByRole("button", { name: "Run setup again" }).click();
     }
